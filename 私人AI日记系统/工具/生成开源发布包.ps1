@@ -334,10 +334,25 @@ if (Test-Path -LiteralPath $privateDefaultsPath) {
     throw "Private default persona module must not be included in the public package."
 }
 $publicText = Get-Content -LiteralPath $publicDefaultsPath -Raw -Encoding UTF8
-foreach ($privatePhrase in @("17岁高中女生", "自然表达喜欢、想念、轻微吃醋", "彼此熟悉的长期伙伴")) {
-    if ($publicText.Contains($privatePhrase)) {
-        throw "Private persona phrase remains in public defaults: $privatePhrase"
+$privatePhraseHashes = @(
+    '6459E34C87545AB0D468831D516B94DA57C7ABC01A9121919250EFB39D0E1DEA',
+    '9D211CE2893BDE9DC7045425D38BDE7100BC46D9937E28D2A713BCC78D7E50BF',
+    '2EC53AFFFF6701707E394524DCE07C5F06299D2E058503F1C329636A76AE860D'
+)
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $publicStringCandidates = [regex]::Matches($publicText, '["'']([^"'']{4,})["'']') |
+        ForEach-Object { $_.Groups[1].Value }
+    foreach ($candidate in $publicStringCandidates) {
+        $candidateBytes = [System.Text.Encoding]::UTF8.GetBytes($candidate)
+        $candidateHash = [System.BitConverter]::ToString($sha256.ComputeHash($candidateBytes)).Replace('-', '')
+        if ($privatePhraseHashes -contains $candidateHash) {
+            throw "A private persona phrase remains in public defaults."
+        }
     }
+}
+finally {
+    $sha256.Dispose()
 }
 
 Invoke-CheckedCommand -Name "Open-source package checks" -WorkingDirectory $BackendDestination -Command {

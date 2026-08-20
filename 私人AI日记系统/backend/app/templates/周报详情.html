@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ week_start }} 周复盘</title>
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
+    {% set custom_css = optional_local_css() %}
+    {% if custom_css %}
+      <link rel="stylesheet" href="{{ custom_css }}" />
+    {% endif %}
+  </head>
+  <body>
+    <main class="shell document-shell">
+      <header class="topbar">
+        <div>
+          <h1>{{ week_start }} ~ {{ week_end }} 周复盘</h1>
+          <p>澪的一周视角</p>
+        </div>
+        <nav>
+          <a href="/diaries">日记</a>
+          <a href="/stats">统计</a>
+          <a href="/reviews">回顾</a>
+          <a href="/weekly" aria-current="page">周报</a>
+          <a href="/memory">记忆</a>
+          <a href="/settings">设置</a>
+          <button id="dark-mode-toggle" class="theme-toggle" aria-label="切换深色模式">🌙</button>
+        </nav>
+      </header>
+
+      {% if review %}
+        <div class="content-with-visual">
+          <article class="diary-body">
+            {{ body_html | safe }}
+          </article>
+          <aside class="mio-side-visual detail-visual" aria-hidden="true">
+            <img src="{{ local_asset_url('mio_reading.png', 'assets/mio_reading.png') }}" alt="" />
+          </aside>
+        </div>
+        <p class="meta-line">上次生成：{{ review.updated_at }}</p>
+      {% else %}
+        <section class="empty-panel">
+          <h2>这一周还没有复盘</h2>
+          <p>点击下面的按钮，澪会根据这一周的日记、状态板和每日回顾整理出周复盘。</p>
+        </section>
+      {% endif %}
+
+      <div class="detail-actions">
+        <button type="button" id="generate-weekly-button">生成 / 重新生成周复盘</button>
+        <a href="/weekly/{{ prev_week }}">上一周</a>
+        <a href="/weekly/{{ next_week }}">下一周</a>
+        <a href="/weekly">返回列表</a>
+      </div>
+
+      <p id="notice" class="notice" role="status"></p>
+
+      <footer class="mio-footer">
+        <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
+        <span>—— 澪</span>
+      </footer>
+    </main>
+
+    <script src="{{ asset_url('site.js') }}"></script>
+    <script>
+      const generateWeeklyButton = document.querySelector("#generate-weekly-button");
+      const notice = document.querySelector("#notice");
+
+      generateWeeklyButton.addEventListener("click", async () => {
+        notice.textContent = "澪正在复盘这一周...";
+        try {
+          const response = await fetch("/api/weekly/{{ week_start }}/generate", { method: "POST" });
+          if (!response.ok) throw new Error(await window.MioSite.readError(response));
+          window.location.reload();
+        } catch (error) {
+          notice.textContent = error.message;
+        }
+      });
+    </script>
+  </body>
+</html>

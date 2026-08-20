@@ -1,0 +1,313 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>数据看板</title>
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
+    {% set custom_css = optional_local_css() %}
+    {% if custom_css %}
+      <link rel="stylesheet" href="{{ custom_css }}" />
+    {% endif %}
+  </head>
+  <body>
+    <main class="shell stats-shell">
+      <header class="topbar">
+        <div>
+          <h1>数据看板</h1>
+          <p>{{ year }} 年 {{ month }} 月 · 今日成长完成情况</p>
+        </div>
+        <nav>
+          <a href="/diaries">日记</a>
+          <a href="/stats" aria-current="page">统计</a>
+          <a href="/reviews">回顾</a>
+          <a href="/weekly">周报</a>
+          <a href="/memory">记忆</a>
+          <a href="/settings">设置</a>
+          <button id="dark-mode-toggle" class="theme-toggle" aria-label="切换深色模式">🌙</button>
+        </nav>
+      </header>
+
+      <!-- 统计卡片 -->
+      <div class="stat-cards">
+        <div class="stat-card">
+          <div class="label">日记总数</div>
+          <div class="value">{{ stats.total }}<span>篇</span></div>
+        </div>
+        <div class="stat-card accent-done">
+          <div class="label">完成率</div>
+          <div class="value">{{ (stats.completion_rate * 100) | round(1) }}<span>%</span></div>
+        </div>
+        <div class="stat-card accent-accent">
+          <div class="label">当前连续</div>
+          <div class="value">{{ stats.current_streak }}<span>天</span></div>
+        </div>
+        <div class="stat-card accent-warm">
+          <div class="label">最长连续</div>
+          <div class="value">{{ stats.longest_streak }}<span>天</span></div>
+        </div>
+      </div>
+
+      <div class="content-with-visual">
+        <div>
+          <!-- 图表区 -->
+          <div class="charts-row">
+            <!-- 日历热力图 -->
+            <div class="chart-panel">
+              <div class="heatmap-header">
+                <h2>本月日历</h2>
+                <div class="heatmap-nav">
+                  {% set prev_month = month - 1 %}
+                  {% set prev_year  = year %}
+                  {% if prev_month < 1 %}{% set prev_month = 12 %}{% set prev_year = year - 1 %}{% endif %}
+                  {% set next_month = month + 1 %}
+                  {% set next_year  = year %}
+                  {% if next_month > 12 %}{% set next_month = 1 %}{% set next_year = year + 1 %}{% endif %}
+                  <a href="/stats?year={{ prev_year }}&amp;month={{ prev_month }}" title="上个月">&#8592;</a>
+                  <a href="/stats?year={{ next_year }}&amp;month={{ next_month }}" title="下个月">&#8594;</a>
+                </div>
+              </div>
+
+              <div class="heatmap-weekdays">
+                <span>一</span><span>二</span><span>三</span>
+                <span>四</span><span>五</span><span>六</span><span>日</span>
+              </div>
+
+              <div class="heatmap-grid" id="heatmap-grid"></div>
+
+              <div class="heatmap-legend">
+                <div class="legend-item"><div class="legend-dot done"></div>完成</div>
+                <div class="legend-item"><div class="legend-dot partial"></div>部分</div>
+                <div class="legend-item"><div class="legend-dot missed"></div>未完成</div>
+                <div class="legend-item"><div class="legend-dot unknown"></div>未记录</div>
+              </div>
+            </div>
+
+            <!-- 饼图 -->
+            <div class="chart-panel">
+              <h2>状态分布</h2>
+              <div class="pie-container">
+                <div class="pie-chart" id="pie-chart" role="img" aria-label="日记状态分布">
+                  <span id="pie-center">0 篇</span>
+                </div>
+              </div>
+              <div class="pie-legend" id="pie-legend"></div>
+            </div>
+          </div>
+
+          <!-- 情绪趋势 -->
+          <div class="chart-panel mood-trend-panel">
+            <h2>近 30 天情绪</h2>
+            <div id="mood-trend" class="mood-trend"></div>
+            <p class="mood-trend-hint">1 = 很低落 · 3 = 平稳 · 5 = 很好。分数由澪在每天的状态判定里给出，旧日记没有评分是正常的。</p>
+          </div>
+        </div>
+
+        <!-- 侧边栏 -->
+        <aside class="mio-side-visual" aria-hidden="true">
+          <img src="{{ local_asset_url('mio_scene_1.png', 'assets/mio_scene_1.png') }}" alt="" />
+        </aside>
+      </div>
+
+      <footer class="mio-footer">
+        <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
+        <span>—— 澪</span>
+      </footer>
+    </main>
+
+    <!-- Tooltip DOM -->
+    <div class="hm-tooltip" id="hm-tooltip" role="tooltip" aria-hidden="true"></div>
+
+    <script>
+    (function () {
+      // ── 数据 ──────────────────────────────────────────────────────────────
+      const calendarData = {{ calendar | tojson }};
+      const byStatus = {{ stats.by_status | tojson }};
+      const year  = {{ year }};
+      const month = {{ month }};   // 1-based
+
+      // 按日期索引 calendar_data
+      const dayMap = {};
+      calendarData.forEach(function (item) {
+        const day = parseInt(item.date.split('-')[2], 10);
+        dayMap[day] = item;
+      });
+
+      // 今天
+      const todayStr = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
+
+      // ── 日历热力图 ─────────────────────────────────────────────────────────
+      const grid = document.getElementById('heatmap-grid');
+
+      // 当月第一天是星期几（JS: 0=日, 1=一 … 6=六）
+      // 我们的表头是：一二三四五六日 → 索引 0-6
+      const firstDow = new Date(year, month - 1, 1).getDay(); // 0=Sun
+      // 转换为 Mon-first: Sun → 6, Mon → 0 … Sat → 5
+      const offset = (firstDow + 6) % 7;
+
+      // 当月天数
+      const daysInMonth = new Date(year, month, 0).getDate();
+
+      // 补齐前置空格
+      for (let i = 0; i < offset; i++) {
+        const blank = document.createElement('div');
+        blank.className = 'heatmap-cell empty';
+        grid.appendChild(blank);
+      }
+
+      // 渲染每一天
+      for (let d = 1; d <= daysInMonth; d++) {
+        const cell = document.createElement('div');
+        const iso = year + '-'
+          + String(month).padStart(2, '0') + '-'
+          + String(d).padStart(2, '0');
+
+        const entry  = dayMap[d];
+        const status = entry ? entry.daily_thirty_status : null;
+
+        cell.className = 'heatmap-cell';
+        // 没写日记的日子显示为灰色“未记录”，不按红色“未完成”处理。
+        cell.dataset.status = status || 'unknown';
+
+        if (iso === todayStr) {
+          cell.classList.add('today');
+        }
+
+        const num = document.createElement('span');
+        num.className = 'day-num';
+        num.textContent = d;
+        cell.appendChild(num);
+
+        // 存储 tooltip 数据
+        cell._iso   = iso;
+        cell._title = entry ? entry.title : null;
+        cell._status = cell.dataset.status;
+
+        grid.appendChild(cell);
+      }
+
+      // ── Tooltip ────────────────────────────────────────────────────────────
+      const STATUS_LABEL = {
+        done:    '已完成',
+        partial: '部分完成',
+        missed:  '未完成',
+        unknown: '未记录',
+      };
+
+      const tooltip = document.getElementById('hm-tooltip');
+
+      grid.addEventListener('mouseover', function (e) {
+        const cell = e.target.closest('.heatmap-cell:not(.empty)');
+        if (!cell) return;
+
+        const label  = STATUS_LABEL[cell._status] || cell._status;
+        const title  = cell._title ? ' · ' + cell._title : '';
+        tooltip.textContent = cell._iso + '  ' + label + title;
+        tooltip.classList.add('visible');
+      });
+
+      grid.addEventListener('mousemove', function (e) {
+        tooltip.style.left = (e.clientX + 14) + 'px';
+        tooltip.style.top  = (e.clientY - 32) + 'px';
+      });
+
+      grid.addEventListener('mouseleave', function () {
+        tooltip.classList.remove('visible');
+      });
+
+      // ── 饼图 ───────────────────────────────────────────────────────────────
+      const PIE_CONFIG = [
+        { key: 'done',    label: '完成',   color: '#2a9e68' },
+        { key: 'partial', label: '部分完成', color: '#bf7e18' },
+        { key: 'missed',  label: '未完成',  color: '#b83c3c' },
+        { key: 'unknown', label: '未记录',  color: '#8aa2b0' },
+      ];
+
+      const data   = PIE_CONFIG.map(c => byStatus[c.key] || 0);
+      const total = data.reduce(function (a, b) { return a + b; }, 0);
+      const pieChart = document.getElementById('pie-chart');
+      const pieCenter = document.getElementById('pie-center');
+      pieCenter.textContent = total + ' 篇';
+
+      if (total > 0) {
+        let start = 0;
+        const segments = PIE_CONFIG.map(function (cfg, index) {
+          const value = data[index];
+          const end = start + (value / total) * 100;
+          const segment = cfg.color + ' ' + start.toFixed(2) + '% ' + end.toFixed(2) + '%';
+          start = end;
+          return segment;
+        });
+        pieChart.style.background = 'conic-gradient(' + segments.join(', ') + ')';
+      }
+
+      // ── 情绪趋势（纯 SVG 折线） ───────────────────────────────────────────
+      (function renderMoodTrend() {
+        const trend = {{ mood_trend | tojson }};
+        const container = document.getElementById('mood-trend');
+        const scored = trend.filter(function (item) { return item.mood_score > 0; });
+        if (!scored.length) {
+          container.innerHTML = '<p class="empty">还没有情绪评分。澪会在日常对话和日终状态判定时开始记录。</p>';
+          return;
+        }
+
+        const W = 640, H = 180, PAD_L = 26, PAD_R = 10, PAD_T = 12, PAD_B = 26;
+        const innerW = W - PAD_L - PAD_R, innerH = H - PAD_T - PAD_B;
+        const n = trend.length;
+        const x = function (i) { return PAD_L + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW); };
+        const y = function (score) { return PAD_T + (1 - (score - 1) / 4) * innerH; };
+
+        let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="近30天情绪趋势">';
+        for (let s = 1; s <= 5; s++) {
+          svg += '<line x1="' + PAD_L + '" y1="' + y(s) + '" x2="' + (W - PAD_R) + '" y2="' + y(s) + '" class="mood-grid" />';
+          svg += '<text x="' + (PAD_L - 8) + '" y="' + (y(s) + 3.5) + '" class="mood-axis" text-anchor="end">' + s + '</text>';
+        }
+
+        const points = [];
+        trend.forEach(function (item, i) {
+          if (item.mood_score > 0) points.push({ i: i, item: item });
+        });
+        if (points.length > 1) {
+          const path = points.map(function (p, idx) {
+            return (idx === 0 ? 'M' : 'L') + x(p.i).toFixed(1) + ' ' + y(p.item.mood_score).toFixed(1);
+          }).join(' ');
+          svg += '<path d="' + path + '" class="mood-line" />';
+        }
+        points.forEach(function (p) {
+          const title = p.item.date + ' · ' + p.item.mood_score + ' 分' + (p.item.mood ? ' · ' + p.item.mood : '');
+          svg += '<circle cx="' + x(p.i).toFixed(1) + '" cy="' + y(p.item.mood_score).toFixed(1) + '" r="4" class="mood-dot"><title>' + title.replace(/</g, '&lt;') + '</title></circle>';
+        });
+
+        // 横轴：首尾和中间的日期
+        [0, Math.floor((n - 1) / 2), n - 1].forEach(function (i) {
+          if (i < 0 || i >= n) return;
+          svg += '<text x="' + x(i).toFixed(1) + '" y="' + (H - 8) + '" class="mood-axis" text-anchor="middle">' + trend[i].date.slice(5) + '</text>';
+        });
+
+        svg += '</svg>';
+        container.innerHTML = svg;
+      })();
+
+      // 自定义图例
+      const legend = document.getElementById('pie-legend');
+      PIE_CONFIG.forEach(function (cfg, i) {
+        const cnt = byStatus[cfg.key] || 0;
+        const item = document.createElement('div');
+        const dot = document.createElement('div');
+        const label = document.createElement('span');
+        const count = document.createElement('span');
+        item.className = 'pie-legend-item';
+        dot.className = 'pie-legend-dot';
+        dot.style.backgroundColor = cfg.color;
+        label.textContent = cfg.label;
+        count.className = 'pie-count';
+        count.textContent = cnt + ' 篇';
+        item.append(dot, label, count);
+        legend.appendChild(item);
+      });
+    })();
+    </script>
+
+    <script src="{{ asset_url('site.js') }}"></script>
+  </body>
+</html>

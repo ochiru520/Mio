@@ -1,0 +1,56 @@
+{
+  "name": "mio-live2d-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "author": "Mio Project",
+  "description": "Mio 的独立 Live2D 桌宠渲染进程",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:dir": "electron-builder --win --dir",
+    "test:model": "node scripts/test-model-discovery.js && node scripts/test-lock-control.js && node scripts/test-context-menu.js",
+    "verify:runtime": "node scripts/verify-runtime.js",
+    "verify:speech-queue": "node scripts/verify-speech-queue.js",
+    "verify:speech-interrupt": "node scripts/verify-speech-interrupt.js"
+  },
+  "devDependencies": {
+    "electron": "43.3.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "io.github.mio-agent.live2d",
+    "productName": "MioLive2D桌宠",
+    "electronDist": "node_modules/electron/dist",
+    "asar": true,
+    "files": [
+      "main.js",
+      "lock-control.html",
+      "lock-control-preload.js",
+      "pet-chat-preload.js",
+      "model-discovery.js",
+      "preload.js",
+      "scripts/verify-runtime.js",
+      "scripts/verify-speech-queue.js",
+      "scripts/verify-speech-interrupt.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../desktop/mio.ico",
+        "to": "desktop/mio.ico"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "dir",
+      "icon": "../desktop/mio.ico",
+      "artifactName": "MioLive2D桌宠-${version}-${arch}.${ext}"
+    }
+  },
+  "allowScripts": {}
+}

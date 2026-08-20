@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 每日回顾 — 澪的日记站</title>
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
+    {% set custom_css = optional_local_css() %}
+    {% if custom_css %}
+      <link rel="stylesheet" href="{{ custom_css }}" />
+    {% endif %}
+  </head>
+  <body>
+    <main class="shell reviews-shell">
+      <header class="topbar">
+        <div>
+          <h1>AI 每日回顾</h1>
+          <p>澪的复盘记录</p>
+        </div>
+        <nav>
+          <a href="/diaries">日记</a>
+          <a href="/stats">统计</a>
+          <a href="/reviews" aria-current="page">回顾</a>
+          <a href="/weekly">周报</a>
+          <a href="/memory">记忆</a>
+          <a href="/settings">设置</a>
+          <button id="dark-mode-toggle" class="theme-toggle" aria-label="切换深色模式">🌙</button>
+        </nav>
+      </header>
+
+      <section class="hero-panel" aria-label="AI回顾入口">
+        <div class="hero-copy">
+          <h2>每日复盘</h2>
+          <p>这里汇集了澪对每一天的深度回顾——事件梳理、状态判断、做得不错的地方，以及明天的最小行动。</p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <img src="{{ local_asset_url('mio_scene_2.png', 'assets/mio_scene_2.png') }}" alt="" />
+        </div>
+      </section>
+
+      <div class="content-with-visual">
+        <section class="review-list">
+          {% if reviews %}
+            {% for review in reviews %}
+              {% set parts = review.date | date_parts %}
+              {% set excerpt = review.markdown_content | diary_excerpt %}
+              <article class="review-row">
+                <div class="diary-date-block warm" aria-hidden="true">
+                  <span class="date-day">{{ parts.day }}</span>
+                  <span class="date-sub">{{ parts.month }}<br />{{ parts.weekday }}</span>
+                </div>
+                <div class="diary-main">
+                  <h2><a href="/reviews/{{ review.date }}">{{ parts.display }}的回顾</a></h2>
+                  <p class="review-excerpt">{{ excerpt or ('生成于 ' ~ review.updated_at) }}</p>
+                </div>
+                <div class="review-actions">
+                  <a class="button-link" href="/reviews/{{ review.date }}">查看</a>
+                </div>
+              </article>
+            {% endfor %}
+          {% else %}
+            <p class="empty">还没有 AI 回顾。打开任意一篇日记，点击「AI 回顾」生成。</p>
+          {% endif %}
+        </section>
+        <aside class="mio-side-visual" aria-hidden="true">
+          <img src="{{ local_asset_url('mio_thinking.png', 'assets/mio_thinking.png') }}" alt="" />
+        </aside>
+      </div>
+
+      <footer class="mio-footer">
+        <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
+        <span>—— 澪</span>
+      </footer>
+    </main>
+
+    <script src="{{ asset_url('site.js') }}"></script>
+  </body>
+</html>

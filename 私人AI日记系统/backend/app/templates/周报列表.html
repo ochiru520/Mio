@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>每周复盘 — 澪的日记站</title>
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
+    {% set custom_css = optional_local_css() %}
+    {% if custom_css %}
+      <link rel="stylesheet" href="{{ custom_css }}" />
+    {% endif %}
+  </head>
+  <body>
+    <main class="shell reviews-shell">
+      <header class="topbar">
+        <div>
+          <h1>每周复盘</h1>
+          <p>澪的一周视角</p>
+        </div>
+        <nav>
+          <a href="/diaries">日记</a>
+          <a href="/stats">统计</a>
+          <a href="/reviews">回顾</a>
+          <a href="/weekly" aria-current="page">周报</a>
+          <a href="/memory">记忆</a>
+          <a href="/settings">设置</a>
+          <button id="dark-mode-toggle" class="theme-toggle" aria-label="切换深色模式">🌙</button>
+        </nav>
+      </header>
+
+      <div class="content-with-visual">
+        <section class="review-list">
+          {% if reviews %}
+            {% for review in reviews %}
+              {% set parts = review.week_start | date_parts %}
+              {% set excerpt = review.markdown_content | diary_excerpt %}
+              <article class="review-row">
+                <div class="diary-date-block warm" aria-hidden="true">
+                  <span class="date-day">{{ parts.day }}</span>
+                  <span class="date-sub">{{ parts.month }}<br />起</span>
+                </div>
+                <div class="diary-main">
+                  <h2>
+                    <a href="/weekly/{{ review.week_start }}">
+                      {{ review.week_start }} ~ {{ review.week_end }} 的一周
+                    </a>
+                  </h2>
+                  <p class="review-excerpt">{{ excerpt or ('生成于 ' ~ review.updated_at) }}</p>
+                </div>
+                <div class="review-actions">
+                  <a class="button-link" href="/weekly/{{ review.week_start }}">查看</a>
+                </div>
+              </article>
+            {% endfor %}
+          {% else %}
+            <p class="empty">还没有周复盘。每周一早上澪会自动整理上一周；也可以打开某一周的页面手动生成。</p>
+          {% endif %}
+        </section>
+        <aside class="mio-side-visual" aria-hidden="true">
+          <img src="{{ local_asset_url('mio_reading.png', 'assets/mio_reading.png') }}" alt="" />
+        </aside>
+      </div>
+
+      <footer class="mio-footer">
+        <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
+        <span>—— 澪</span>
+      </footer>
+    </main>
+
+    <script src="{{ asset_url('site.js') }}"></script>
+  </body>
+</html>

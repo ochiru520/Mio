@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mio Live2D 桌宠</title>
+    <link rel="stylesheet" href="./live2d-pet.css?v=20260810-runtime-v5" />
+  </head>
+  <body>
+    <main id="pet-root" aria-label="Mio Live2D 桌宠">
+      <canvas id="live2d-canvas"></canvas>
+      <div id="loading" class="loading-state"><span></span><b>正在唤醒 Mio</b></div>
+      <div id="error" class="error-state" hidden>
+        <strong>形象加载失败</strong>
+        <span id="error-message">请在 Agent 设置中切换形象</span>
+      </div>
+      <div id="activity-indicator" class="activity-indicator" title="Mio 当前状态"></div>
+      <section id="speech-bubble" class="speech-bubble" aria-live="polite" hidden>
+        <span id="speech-bubble-text"></span>
+      </section>
+      <nav id="context-menu" class="context-menu" hidden>
+        <button type="button" data-action="chat">打开/关闭对话窗口</button>
+        <button type="button" data-action="size">调整大小</button>
+        <button type="button" data-action="speech-language">语音语言：中文</button>
+        <button type="button" data-action="speech-bubble">隐藏说话气泡</button>
+        <button type="button" data-action="agent">打开 Mio</button>
+        <hr />
+        <button type="button" data-action="close">关闭桌宠</button>
+      </nav>
+      <section id="size-panel" class="size-panel" hidden>
+        <header><strong>桌宠大小</strong><output id="size-value">150%</output></header>
+        <input id="size-slider" type="range" min="80" max="240" step="1" value="150" aria-label="桌宠大小" />
+      </section>
+    </main>
+    <script src="./libs/live2dcubismcore.min.js"></script>
+    <script src="./libs/pixi.min.js"></script>
+    <script src="./libs/cubism4.min.js"></script>
+    <script src="./expression-utils.js?v=20260812-expression-v1"></script>
+    <script src="./live2d-pet.js?v=20260810-runtime-v5"></script>
+  </body>
+</html>

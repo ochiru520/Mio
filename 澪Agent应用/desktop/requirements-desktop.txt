@@ -1,0 +1,7 @@
+pywebview==6.2.1
+pyinstaller==6.15.0
+pillow==11.3.0
+qrcode==8.2
+dxcam==0.0.5
+mss==10.2.0
+pystray==0.19.5

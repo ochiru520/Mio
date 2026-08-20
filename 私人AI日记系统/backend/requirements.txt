@@ -1,0 +1,16 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+jinja2==3.1.5
+python-dotenv==1.0.1
+httpx==0.28.1
+markdown==3.7
+tzdata==2026.1
+pypdfium2==4.30.0
+python-docx==1.2.0
+openpyxl==3.1.5
+pillow==11.3.0
+qrcode==8.2
+dxcam==0.0.5
+mss==10.2.0
+websockets==16.0
+PyYAML==6.0.3

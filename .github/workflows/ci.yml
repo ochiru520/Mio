@@ -1,0 +1,111 @@
+name: Mio CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: 私人AI日记系统/backend/requirements.txt
+      - name: 安装后端依赖
+        run: python -m pip install -r "私人AI日记系统/backend/requirements.txt"
+      - name: 扫描高置信度密钥
+        shell: pwsh
+        run: |
+          $hits = @(git grep -I -n -E 'sk-[A-Za-z0-9_-]{24,}' -- .)
+          if ($LASTEXITCODE -eq 0 -and $hits.Count) {
+            $hits | Write-Host
+            throw '发现疑似 API Key'
+          }
+          if ($LASTEXITCODE -notin @(0, 1)) { throw '密钥扫描执行失败' }
+      - name: 编译检查
+        working-directory: 私人AI日记系统/backend
+        run: python -m compileall app
+      - name: 后端测试
+        working-directory: 私人AI日记系统/backend
+        run: python -m unittest discover -s tests
+
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: |
+            私人AI日记系统/backend/requirements.txt
+            澪Agent应用/desktop/requirements-desktop.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: |
+            澪Agent应用/package-lock.json
+            澪Agent应用/live2d-desktop/package-lock.json
+      - name: 安装后端构建依赖
+        run: python -m pip install -r "私人AI日记系统/backend/requirements.txt"
+      - name: 安装桌面依赖
+        working-directory: 澪Agent应用
+        run: npm ci
+      - name: Vue 测试
+        working-directory: 澪Agent应用
+        run: npm test
+      - name: Vue 构建
+        working-directory: 澪Agent应用
+        run: npm run build
+      - name: Windows 启动器与本地 Worker 测试
+        working-directory: 澪Agent应用
+        shell: pwsh
+        run: |
+          python -m unittest discover -s desktop -p "test_*.py"
+          if ($LASTEXITCODE -ne 0) { throw "桌面启动器测试失败" }
+          python -m unittest discover -s scripts -p "test_*.py"
+          if ($LASTEXITCODE -ne 0) { throw "本地 Worker 测试失败" }
+          python -m unittest discover -s scripts/deps -p "test_*.py"
+          if ($LASTEXITCODE -ne 0) { throw "依赖下载测试失败" }
+      - name: 安装 Live2D 依赖
+        working-directory: 澪Agent应用/live2d-desktop
+        run: npm ci
+      - name: Live2D 测试
+        working-directory: 澪Agent应用/live2d-desktop
+        run: npm run test:model
+      - name: 完整 Windows 目录构建
+        working-directory: 澪Agent应用
+        shell: pwsh
+        run: |
+          $env:MIO_BACKEND_PYTHON = (Get-Command python).Source
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\构建Windows应用.ps1 -SkipInstaller
+      - name: 验证构建清单与制品哈希
+        working-directory: 澪Agent应用
+        shell: pwsh
+        run: |
+          $releaseRoot = Join-Path $PWD "release\Mio"
+          $manifestPath = Join-Path $releaseRoot "构建清单.json"
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            throw "缺少构建清单：$manifestPath"
+          }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if (-not $manifest.build_id -or @($manifest.artifacts).Count -lt 7) {
+            throw "构建清单缺少 build_id 或必要制品"
+          }
+          foreach ($artifact in @($manifest.artifacts)) {
+            $target = Join-Path $releaseRoot ($artifact.path -replace '/', '\')
+            if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
+              throw "清单制品不存在：$($artifact.path)"
+            }
+            $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+            if ($actual -ne $artifact.sha256) {
+              throw "清单制品哈希不一致：$($artifact.path)"
+            }
+          }

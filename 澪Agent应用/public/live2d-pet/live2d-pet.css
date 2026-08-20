@@ -1,0 +1,266 @@
+:root {
+  color-scheme: light;
+  font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#pet-root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+#pet-root {
+  position: relative;
+  cursor: grab;
+}
+
+#pet-root.dragging {
+  cursor: grabbing;
+}
+
+#pet-root.click-through-locked {
+  cursor: default;
+}
+
+#live2d-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.loading-state,
+.error-state {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: min(220px, 76%);
+  padding: 13px 15px;
+  color: #31444b;
+  background: rgb(248 251 252 / 92%);
+  border: 1px solid rgb(124 153 162 / 28%);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgb(32 53 60 / 15%);
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  text-align: center;
+}
+
+.loading-state[hidden],
+.error-state[hidden] {
+  display: none;
+}
+
+.loading-state > span {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #d2e0e4;
+  border-top-color: #4f7d89;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.error-state span {
+  color: #71838a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.activity-indicator {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 8px;
+  height: 8px;
+  background: rgb(94 130 140 / 72%);
+  border: 2px solid rgb(255 255 255 / 84%);
+  border-radius: 50%;
+  box-shadow: 0 1px 5px rgb(35 55 62 / 28%);
+  opacity: 0;
+  transition: opacity 0.16s ease, background 0.16s ease;
+}
+
+#pet-root:hover .activity-indicator,
+.activity-indicator.active {
+  opacity: 1;
+}
+
+.activity-indicator.speaking,
+.activity-indicator.responding {
+  background: #da8c92;
+}
+
+.activity-indicator.thinking,
+.activity-indicator.working,
+.activity-indicator.observing {
+  background: #d6a95e;
+}
+
+.activity-indicator.offline {
+  background: #d86161;
+  box-shadow: 0 0 0 3px rgba(216, 97, 97, 0.2);
+}
+
+.speech-bubble {
+  position: absolute;
+  z-index: 12;
+  width: max-content;
+  max-width: min(260px, calc(100vw - 16px));
+  padding: 9px 12px;
+  color: #2d4148;
+  background: rgb(255 255 255 / 94%);
+  border: 1px solid rgb(105 132 140 / 26%);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgb(24 43 50 / 16%);
+  pointer-events: none;
+}
+
+.speech-bubble[hidden] {
+  display: none;
+}
+
+.speech-bubble span {
+  display: block;
+  max-height: 6.2em;
+  overflow-x: hidden;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+}
+
+.speech-bubble::after {
+  position: absolute;
+  right: 18px;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  background: inherit;
+  border-right: 1px solid rgb(105 132 140 / 26%);
+  border-bottom: 1px solid rgb(105 132 140 / 26%);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.speech-bubble.align-left::after {
+  right: auto;
+  left: 18px;
+}
+
+.context-menu {
+  position: absolute;
+  z-index: 20;
+  display: grid;
+  min-width: 148px;
+  padding: 5px;
+  overflow: hidden;
+  background: rgb(249 251 252 / 97%);
+  border: 1px solid rgb(105 132 140 / 28%);
+  border-radius: 7px;
+  box-shadow: 0 10px 28px rgb(24 43 50 / 20%);
+  cursor: default;
+}
+
+.context-menu[hidden] {
+  display: none;
+}
+
+.context-menu button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: #283b42;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-picker {
+  display: grid;
+  gap: 5px;
+  padding: 7px 9px 8px;
+  color: #6a7d84;
+  font-size: 11px;
+}
+
+.model-picker select {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 7px;
+  color: #283b42;
+  background: #fff;
+  border: 1px solid #d5e0e3;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.context-menu button:hover {
+  background: #e7f0f2;
+}
+
+.context-menu hr {
+  width: 100%;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid #dbe5e8;
+}
+
+.size-panel {
+  position: absolute;
+  z-index: 21;
+  right: 10px;
+  bottom: 10px;
+  width: min(240px, calc(100% - 20px));
+  padding: 12px 13px 10px;
+  color: #283b42;
+  background: rgb(249 251 252 / 97%);
+  border: 1px solid rgb(105 132 140 / 28%);
+  border-radius: 7px;
+  box-shadow: 0 10px 28px rgb(24 43 50 / 20%);
+  cursor: default;
+}
+
+.size-panel[hidden] {
+  display: none;
+}
+
+.size-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.size-panel output {
+  color: #3b7181;
+  font-weight: 700;
+}
+
+.size-panel input {
+  width: 100%;
+  accent-color: #4f8392;
+  cursor: pointer;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

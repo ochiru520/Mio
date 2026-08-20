@@ -1,0 +1,119 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>澪的日记站</title>
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
+    {% set custom_css = optional_local_css() %}
+    {% if custom_css %}
+      <link rel="stylesheet" href="{{ custom_css }}" />
+    {% endif %}
+  </head>
+  <body>
+    <main class="shell diary-list-shell">
+      <header class="topbar">
+        <div>
+          <h1>澪的日记站</h1>
+          <p>按日期保存的本地 Markdown 日记</p>
+        </div>
+        <nav>
+          <a href="/diaries" aria-current="page">日记</a>
+          <a href="/stats">统计</a>
+          <a href="/reviews">回顾</a>
+          <a href="/weekly">周报</a>
+          <a href="/memory">记忆</a>
+          <a href="/settings">设置</a>
+          <button id="dark-mode-toggle" class="theme-toggle" aria-label="切换深色模式">🌙</button>
+        </nav>
+      </header>
+
+      <section class="hero-panel" aria-label="日记站入口">
+        <div class="hero-copy">
+          <h2>把今天留下来</h2>
+          <p>这里保留已经整理好的日记和 AI 回顾。和澪聊天继续放在 QQ，网站只负责回看、编辑、搜索和导出。</p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <img src="{{ local_asset_url('mio_home_hero_dress.png', 'assets/mio_home_hero_dress.png') }}" alt="" />
+        </div>
+      </section>
+
+      <div class="page-actions">
+        <a class="button-link" href="/diaries/export/all.zip">导出全部日记 ZIP</a>
+      </div>
+
+      <form class="search-form" method="get" action="/diaries">
+        <input
+          type="search"
+          name="q"
+          value="{{ query }}"
+          placeholder="搜索标题、正文、情绪或今日成长状态"
+        />
+        <button type="submit">搜索</button>
+        {% if query %}
+          <a class="clear-link" href="/diaries">清空</a>
+        {% endif %}
+      </form>
+
+      <div class="content-with-visual">
+        <section class="diary-list">
+          {% if diaries %}
+            {% for diary in diaries %}
+              {% set parts = diary.date | date_parts %}
+              {% set excerpt = diary.markdown_content | diary_excerpt %}
+              <article class="diary-row">
+                <div class="diary-date-block" aria-hidden="true">
+                  <span class="date-day">{{ parts.day }}</span>
+                  <span class="date-sub">{{ parts.month }}<br />{{ parts.weekday }}</span>
+                </div>
+                <div class="diary-main">
+                  <h2>
+                    <a href="/diaries/{{ diary.date }}">
+                      {%- if diary.title == diary.date or diary.title == diary.date ~ ' 日记' -%}
+                        {{ parts.display }}的日记
+                      {%- else -%}
+                        {{ diary.title }}
+                      {%- endif -%}
+                    </a>
+                  </h2>
+                  {% if excerpt %}
+                    <p class="diary-excerpt">{{ excerpt }}</p>
+                  {% endif %}
+                  {% if diary.mood_tags %}
+                    <div class="diary-tags">
+                      {% for tag in diary.mood_tags.replace('，', '、').replace(',', '、').split('、') %}
+                        {% if tag.strip() %}
+                          <a class="diary-tag" href="/diaries?q={{ tag.strip() }}">{{ tag.strip() }}</a>
+                        {% endif %}
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                </div>
+                <div class="diary-badges">
+                  <span class="confirm-badge" data-confirmed="{{ 'true' if diary.confirmed_at else 'false' }}">
+                    {{ '已确认' if diary.confirmed_at else '待确认' }}
+                  </span>
+                  <span data-status="{{ diary.daily_thirty_status }}">
+                    今日成长：{{ diary.daily_thirty_status | status_label }}
+                  </span>
+                </div>
+              </article>
+            {% endfor %}
+          {% else %}
+            <p class="empty">{{ '没有找到匹配的日记。' if query else '还没有日记。你可以在 QQ 里让澪生成今天的日记。' }}</p>
+          {% endif %}
+        </section>
+        <aside class="mio-side-visual" aria-hidden="true">
+          <img src="{{ local_asset_url('mio_writing_idle_dress.png', 'assets/mio_writing_idle_dress.png') }}" alt="" />
+        </aside>
+      </div>
+
+      <footer class="mio-footer">
+        <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
+        <span>—— 澪</span>
+      </footer>
+    </main>
+
+    <script src="{{ asset_url('site.js') }}"></script>
+  </body>
+</html>

@@ -1,0 +1,134 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ diary.title }}</title>
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
+    {% set custom_css = optional_local_css() %}
+    {% if custom_css %}
+      <link rel="stylesheet" href="{{ custom_css }}" />
+    {% endif %}
+  </head>
+  <body>
+    <main class="shell document-shell">
+      <header class="topbar">
+        <div>
+          <h1>{{ diary.title }}</h1>
+          <p>{{ diary.date }}</p>
+        </div>
+        <nav>
+          <a href="/diaries" aria-current="page">日记</a>
+          <a href="/stats">统计</a>
+          <a href="/reviews">回顾</a>
+          <a href="/weekly">周报</a>
+          <a href="/memory">记忆</a>
+          <a href="/settings">设置</a>
+          <button id="dark-mode-toggle" class="theme-toggle" aria-label="切换深色模式">🌙</button>
+        </nav>
+      </header>
+
+      <div class="content-with-visual">
+        <article class="diary-body">
+          {{ body_html | safe }}
+        </article>
+        <aside class="mio-side-visual detail-visual" aria-hidden="true">
+          <img src="{{ local_asset_url('mio_writing_idle_dress.png', 'assets/mio_writing_idle_dress.png') }}" alt="" />
+        </aside>
+      </div>
+
+      {% if photos %}
+        <section class="version-panel photo-panel">
+          <h2>这一天的照片</h2>
+          <div class="photo-grid">
+            {% for photo in photos %}
+              <a href="/photos/{{ diary.date }}/{{ photo }}" target="_blank" rel="noopener">
+                <img src="/photos/{{ diary.date }}/{{ photo }}" alt="{{ diary.date }} 的照片" loading="lazy" />
+              </a>
+            {% endfor %}
+          </div>
+        </section>
+      {% endif %}
+
+      <section class="version-panel diary-status-panel">
+        <h2>日记状态</h2>
+        <div class="status-row">
+          <span class="confirm-badge" data-confirmed="{{ 'true' if diary.confirmed_at else 'false' }}">
+            {{ '已确认' if diary.confirmed_at else '待确认' }}
+          </span>
+          <span data-status="{{ diary.daily_thirty_status }}">
+            今日成长：{{ diary.daily_thirty_status | status_label }}
+          </span>
+          {% if diary.confirmed_at %}
+            <small>确认于 {{ diary.confirmed_at }}</small>
+          {% endif %}
+        </div>
+        {% if diary.mood_tags %}
+          <div class="status-row diary-tags">
+            {% for tag in diary.mood_tags.replace('，', '、').replace(',', '、').split('、') %}
+              {% if tag.strip() %}
+                <a class="diary-tag" href="/diaries?q={{ tag.strip() }}">{{ tag.strip() }}</a>
+              {% endif %}
+            {% endfor %}
+          </div>
+        {% endif %}
+      </section>
+
+      <div class="detail-actions">
+        <button
+          type="button"
+          id="confirm-diary-btn"
+          data-confirmed="{{ 'true' if diary.confirmed_at else 'false' }}"
+        >
+          {{ '取消确认' if diary.confirmed_at else '确认这篇日记' }}
+        </button>
+        <a href="/diaries/{{ diary.date }}/edit">编辑日记</a>
+        <a href="/diaries/{{ diary.date }}/download">下载 Markdown</a>
+        <a href="/reviews/{{ diary.date }}">AI 回顾</a>
+        <a href="/diaries">返回列表</a>
+        <button type="button" id="delete-diary-btn" class="danger">删除日记</button>
+      </div>
+      <p id="notice" class="notice" role="status"></p>
+
+      <footer class="mio-footer">
+        <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
+        <span>—— 澪</span>
+      </footer>
+    </main>
+
+    <script src="{{ asset_url('site.js') }}"></script>
+    <script>
+    const confirmDiaryBtn = document.getElementById('confirm-diary-btn');
+    const deleteDiaryBtn = document.getElementById('delete-diary-btn');
+    const notice = document.getElementById('notice');
+
+    confirmDiaryBtn.addEventListener('click', async () => {
+      const confirmed = confirmDiaryBtn.dataset.confirmed !== 'true';
+      notice.textContent = confirmed ? '确认中...' : '取消确认中...';
+      try {
+        const response = await fetch('/api/diaries/{{ diary.date }}/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed }),
+        });
+        if (!response.ok) throw new Error(await window.MioSite.readError(response));
+        window.location.reload();
+      } catch (error) {
+        notice.textContent = '操作失败：' + error.message;
+      }
+    });
+
+    deleteDiaryBtn.addEventListener('click', async () => {
+      if (!window.confirm('确定要删除这篇日记吗？此操作不可恢复。')) return;
+      try {
+        const response = await fetch('/api/diaries/{{ diary.date }}', { method: 'DELETE' });
+        if (!response.ok) throw new Error(await window.MioSite.readError(response));
+        window.location.href = '/diaries';
+      } catch (error) {
+        alert('删除失败：' + error.message);
+      }
+    });
+    </script>
+
+  </body>
+</html>

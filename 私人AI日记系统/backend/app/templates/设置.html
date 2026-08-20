@@ -1,0 +1,222 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>设置</title>
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
+    {% set custom_css = optional_local_css() %}
+    {% if custom_css %}
+      <link rel="stylesheet" href="{{ custom_css }}" />
+    {% endif %}
+  </head>
+  <body>
+    <main class="shell settings-shell">
+      <header class="topbar">
+        <div>
+          <h1>设置</h1>
+          <p>只读配置状态，不在网页里修改 .env。</p>
+        </div>
+        <nav>
+          <a href="/diaries">日记</a>
+          <a href="/stats">统计</a>
+          <a href="/reviews">回顾</a>
+          <a href="/weekly">周报</a>
+          <a href="/memory">记忆</a>
+          <a href="/settings" aria-current="page">设置</a>
+          <button id="dark-mode-toggle" class="theme-toggle" aria-label="切换深色模式">🌙</button>
+        </nav>
+      </header>
+
+      <div class="content-with-visual">
+        <div>
+          <section class="settings-section">
+            <h2>AI 接口</h2>
+            <dl class="settings-list">
+              <div>
+                <dt>模型</dt>
+                <dd>{{ llm_status.model if llm_status.model else '未配置' }}</dd>
+              </div>
+              <div>
+                <dt>接口地址</dt>
+                <dd>{{ '已配置' if llm_status.base_url_set else '未配置' }}{% if llm_status.base_url_count %} · {{ llm_status.base_url_count }} 条路线{% endif %}</dd>
+              </div>
+              <div>
+                <dt>API key</dt>
+                <dd>{{ '已配置（不显示）' if llm_status.api_key_set else '未配置' }}</dd>
+              </div>
+              <div>
+                <dt>代理</dt>
+                <dd>{{ '已配置' if llm_status.proxy_set else '未配置' }} · {{ llm_status.proxy_mode }}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="settings-section">
+            <h2>联网查询</h2>
+            <dl class="settings-list">
+              <div>
+                <dt>状态</dt>
+                <dd>{{ '已启用' if web_search_status.enabled else '未启用' }}</dd>
+              </div>
+              <div>
+                <dt>参数</dt>
+                <dd>{{ web_search_status.max_results }} 条结果 · 超时 {{ web_search_status.timeout_seconds }} 秒</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="settings-section">
+            <h2>自动日记</h2>
+            <dl class="settings-list">
+              <div>
+                <dt>状态</dt>
+                <dd>{{ '已启用' if daily_diary_status.enabled else '未启用' }}</dd>
+              </div>
+              <div>
+                <dt>执行方式</dt>
+                <dd>每天 {{ '%02d'|format(daily_diary_status.day_boundary_hour) }}:00 后检查刚结束的记录日；已有日记时跳过 · 每 {{ daily_diary_status.check_seconds }} 秒检查</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="settings-section">
+            <h2>自动回顾</h2>
+            <dl class="settings-list">
+              <div>
+                <dt>状态</dt>
+                <dd>{{ '已启用' if daily_review_status.enabled else '未启用' }}</dd>
+              </div>
+              <div>
+                <dt>时间</dt>
+                <dd>每天 {{ '%02d'|format(daily_review_status.hour) }}:{{ '%02d'|format(daily_review_status.minute) }} 后检查昨天日记 · 每 {{ daily_review_status.check_seconds // 60 }} 分钟检查</dd>
+              </div>
+              <div>
+                <dt>QQ 通知</dt>
+                <dd>{{ '生成后通知' if daily_review_status.notify_qq else '只生成不通知' }}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="settings-section">
+            <h2>上下文记忆</h2>
+            <dl class="settings-list">
+              <div>
+                <dt>原始聊天</dt>
+                <dd>最多读取 {{ memory_status.chat_raw_history_limit }} 条，正常带入 {{ memory_status.chat_history_limit }} 条</dd>
+              </div>
+              <div>
+                <dt>压缩阈值</dt>
+                <dd>约 {{ memory_status.chat_context_max_chars }} 字；压缩后仍保留最近 {{ memory_status.chat_recent_keep_messages }} 条原文</dd>
+              </div>
+              <div>
+                <dt>周期记忆</dt>
+                <dd>最近 {{ memory_status.memory_context_days }} 天 · 最多 {{ memory_status.memory_context_max_chars }} 字 · 每天 {{ memory_status.memory_context_messages_per_day }} 条用户线索</dd>
+              </div>
+              <div>
+                <dt>记录日界线</dt>
+                <dd>凌晨 {{ '%02d'|format(memory_status.day_boundary_hour) }}:00；此前的聊天、状态和日记归入前一天</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="settings-section">
+            <h2>澪属性</h2>
+            <dl class="settings-list">
+              <div>
+                <dt>文件</dt>
+                <dd>{{ mio_profile.path }}</dd>
+              </div>
+              <div>
+                <dt>状态</dt>
+                <dd>{{ '已读取' if mio_profile.exists else '未创建' }} · {{ mio_profile.name }}{% if mio_profile.updated_at %} · 更新于 {{ mio_profile.updated_at }}{% endif %}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="settings-section">
+            <h2>QQ 接入</h2>
+            <dl class="settings-list">
+              <div>
+                <dt>状态</dt>
+                <dd>{{ '已启用' if qq_status.enabled else '未启用' }}</dd>
+              </div>
+              <div>
+                <dt>OneBot WebSocket</dt>
+                <dd>{{ qq_status.websocket_url }}</dd>
+              </div>
+              <div>
+                <dt>Token</dt>
+                <dd>{{ '已配置（不显示）' if qq_status.token_set else '未配置' }}</dd>
+              </div>
+              <div>
+                <dt>私聊白名单</dt>
+                <dd>{{ qq_status.allowed_user_count }} 个 QQ 号</dd>
+              </div>
+              <div>
+                <dt>QQ 连接</dt>
+                <dd>{{ qq_status.websocket_connections }} 个 WebSocket 连接</dd>
+              </div>
+              <div>
+                <dt>图片读取</dt>
+                <dd>{{ '已启用' if qq_status.image_enabled else '未启用' }} · {{ '发送给模型' if qq_status.image_send_to_model else '只接收不发给模型' }} · 最多 {{ qq_status.image_max_count }} 张 · 单张 {{ (qq_status.image_max_bytes // 1024 // 1024) }} MB</dd>
+              </div>
+              <div>
+                <dt>主动消息</dt>
+                <dd>{{ '已启用' if qq_status.proactive_enabled else '未启用' }} · {{ qq_status.proactive_day_start_hour }}:00-{{ qq_status.proactive_day_end_hour }}:00 · 闲置 {{ qq_status.proactive_min_idle_minutes // 60 }}-{{ qq_status.proactive_max_idle_minutes // 60 }} 小时</dd>
+              </div>
+              <div>
+                <dt>回复节奏</dt>
+                <dd>首条前停顿 {{ qq_status.reply_initial_delay_seconds }} 秒 · 气泡间隔 {{ qq_status.reply_delay_seconds }} 秒</dd>
+              </div>
+              <div>
+                <dt>连续消息合并</dt>
+                <dd>普通消息静默 {{ qq_status.message_debounce_seconds }} 秒 · 未说完时 {{ qq_status.message_incomplete_debounce_seconds }} 秒</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="settings-section">
+            <h2>说明书</h2>
+            <dl class="settings-list">
+              {% for manual in manuals %}
+                <div>
+                  <dt>{{ manual.name }}</dt>
+                  <dd>
+                    {{ manual.path }} ·
+                    {{ '已读取' if manual.exists and not manual.error else manual.error or '不存在' }} ·
+                    {{ manual.used_chars }} / {{ manual.total_chars }} 字
+                    {% if manual.truncated %} · 已截断{% endif %}
+                  </dd>
+                </div>
+              {% endfor %}
+            </dl>
+          </section>
+
+          <section class="settings-section">
+            <h2>本地数据</h2>
+            <dl class="settings-list">
+              {% for item in data_paths %}
+                <div>
+                  <dt>{{ item.name }}</dt>
+                  <dd>{{ item.path }}</dd>
+                </div>
+              {% endfor %}
+            </dl>
+          </section>
+        </div>
+
+        <aside class="mio-side-visual" aria-hidden="true">
+          <img src="{{ local_asset_url('mio_writing_idle_dress.png', 'assets/mio_writing_idle_dress.png') }}" alt="" />
+        </aside>
+      </div>
+
+      <footer class="mio-footer">
+        <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
+        <span>—— 澪</span>
+      </footer>
+    </main>
+
+    <script src="{{ asset_url('site.js') }}"></script>
+  </body>
+</html>

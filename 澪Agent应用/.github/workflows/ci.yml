@@ -1,0 +1,39 @@
+name: 桌面应用检查
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: 安装前端依赖
+        run: npm ci
+      - name: 扫描高置信度密钥
+        shell: pwsh
+        run: |
+          $hits = @(git grep -I -n -E 'sk-[A-Za-z0-9_-]{24,}' -- .)
+          if ($LASTEXITCODE -eq 0 -and $hits.Count) {
+            $hits | Write-Host
+            throw '发现疑似 API Key'
+          }
+          if ($LASTEXITCODE -notin @(0, 1)) { throw '密钥扫描执行失败' }
+      - name: 前端依赖审计
+        run: npm audit --audit-level=high
+      - name: 构建前端
+        run: npm run build
+      - name: 安装桌宠依赖
+        working-directory: live2d-desktop
+        run: npm ci
+      - name: 桌宠测试
+        working-directory: live2d-desktop
+        run: npm run test:model
+      - name: 桌宠依赖审计
+        working-directory: live2d-desktop
+        run: npm audit --audit-level=high

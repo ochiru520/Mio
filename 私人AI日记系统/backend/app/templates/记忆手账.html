@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>澪的记忆手账</title>
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
+    {% set custom_css = optional_local_css() %}
+    {% if custom_css %}
+      <link rel="stylesheet" href="{{ custom_css }}" />
+    {% endif %}
+  </head>
+  <body>
+    <main class="shell settings-shell">
+      <header class="topbar">
+        <div>
+          <h1>澪的记忆手账</h1>
+          <p>她记着的话题、约定和你的偏好</p>
+        </div>
+        <nav>
+          <a href="/diaries">日记</a>
+          <a href="/stats">统计</a>
+          <a href="/reviews">回顾</a>
+          <a href="/weekly">周报</a>
+          <a href="/memory" aria-current="page">记忆</a>
+          <a href="/settings">设置</a>
+          <button id="dark-mode-toggle" class="theme-toggle" aria-label="切换深色模式">🌙</button>
+        </nav>
+      </header>
+
+      <div class="content-with-visual">
+        <div>
+          <section class="settings-section">
+            <h2>还没结束的话题和约定</h2>
+            {% if threads %}
+              <div class="thread-list">
+                {% for thread in threads %}
+                  <div class="thread-row" id="thread-{{ thread.id }}">
+                    <div class="thread-main">
+                      <p class="thread-content">{{ thread.content }}</p>
+                      <p class="thread-meta">
+                        {{ thread.conversation_label }} · 记于 {{ thread.created_at[:16] | replace('T', ' ') }}
+                        {% if thread.follow_up_after %} · 适合跟进：{{ thread.follow_up_after[:16] | replace('T', ' ') }}{% endif %}
+                      </p>
+                    </div>
+                    <button type="button" class="secondary resolve-thread-btn" data-thread-id="{{ thread.id }}">
+                      标记完成
+                    </button>
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              <p class="empty">现在没有挂着的话题。聊天里提到的计划和约定会自动出现在这里。</p>
+            {% endif %}
+          </section>
+
+          <section class="settings-section">
+            <h2>澪对你的长期印象</h2>
+            {% if summaries %}
+              {% for summary in summaries %}
+                <div class="memory-summary">
+                  <p class="thread-meta">{{ summary.conversation_label }} · 更新于 {{ summary.updated_at[:16] | replace('T', ' ') }}</p>
+                  <p class="memory-summary-content">{{ summary.content }}</p>
+                </div>
+              {% endfor %}
+            {% else %}
+              <p class="empty">聊天积累多了以后，澪会在这里保留她对你的长期印象。</p>
+            {% endif %}
+          </section>
+
+          <section class="settings-section">
+            <h2>澪属性</h2>
+            <dl class="settings-list">
+              <div>
+                <dt>人格核心</dt>
+                <dd>{{ profile.identity.core }}</dd>
+              </div>
+              <div>
+                <dt>说话方式</dt>
+                <dd>{{ profile.speaking_style.tone }}</dd>
+              </div>
+              <div>
+                <dt>气泡习惯</dt>
+                <dd>{{ profile.speaking_style.bubble_style }}</dd>
+              </div>
+              {% if profile.preferences.user_address %}
+                <div>
+                  <dt>对你的称呼</dt>
+                  <dd>{{ profile.preferences.user_address }}</dd>
+                </div>
+              {% endif %}
+              <div>
+                <dt>相处距离</dt>
+                <dd>{{ profile.preferences.relationship_distance }}</dd>
+              </div>
+              {% if profile.preferences.custom_notes %}
+                <div>
+                  <dt>你让她记住的事（{{ profile.preferences.custom_notes | length }} 条）</dt>
+                  <dd>
+                    <ul class="custom-notes">
+                      {% for note in profile.preferences.custom_notes %}
+                        <li>{{ note }}</li>
+                      {% endfor %}
+                    </ul>
+                  </dd>
+                </div>
+              {% endif %}
+              <div>
+                <dt>最近更新</dt>
+                <dd>{{ profile.updated_at or '未记录' }} · 在 QQ 里说“把这个加入你的属性”就能更新</dd>
+              </div>
+            </dl>
+          </section>
+        </div>
+
+        <aside class="mio-side-visual" aria-hidden="true">
+          <img src="{{ local_asset_url('mio_thinking.png', 'assets/mio_thinking.png') }}" alt="" />
+        </aside>
+      </div>
+
+      <p id="notice" class="notice" role="status"></p>
+
+      <footer class="mio-footer">
+        <p>「我不会替你决定人生，但是我会一直记得你走过的路。」</p>
+        <span>—— 澪</span>
+      </footer>
+    </main>
+
+    <script src="{{ asset_url('site.js') }}"></script>
+    <script>
+      const noticeEl = document.querySelector("#notice");
+      document.querySelectorAll(".resolve-thread-btn").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const threadId = button.dataset.threadId;
+          button.disabled = true;
+          try {
+            const response = await fetch(`/api/threads/${threadId}/resolve`, { method: "POST" });
+            if (!response.ok) throw new Error(await window.MioSite.readError(response));
+            const row = document.getElementById(`thread-${threadId}`);
+            if (row) row.remove();
+          } catch (error) {
+            button.disabled = false;
+            noticeEl.textContent = "操作失败：" + error.message;
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

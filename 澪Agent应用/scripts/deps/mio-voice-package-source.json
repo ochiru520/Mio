@@ -1,0 +1,10 @@
+{
+  "format": "mio-native-voice-source",
+  "component": "voice",
+  "file_name": "Mio-本地原声音色-mio-v1.zip",
+  "size_bytes": 227255871,
+  "sha256": "a46d4c4b38219aef4942063949231b35f77a19bc6d0c3bba79a8664a8e74857c",
+  "version": "mio-v1-genie-2.0.2",
+  "file_count": 27,
+  "urls": []
+}

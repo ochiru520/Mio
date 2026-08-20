@@ -1,0 +1,13 @@
+node_modules/
+pnpm-lock.yaml
+dist/
+__pycache__/
+*.pyc
+*.log
+.vite/
+预览/
+release/
+desktop/build/
+desktop/generated/
+desktop/mio.ico
+.desktop-cache/

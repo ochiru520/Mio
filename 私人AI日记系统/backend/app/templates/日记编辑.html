@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>编辑 {{ diary.title }}</title>
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
+    {% set custom_css = optional_local_css() %}
+    {% if custom_css %}
+      <link rel="stylesheet" href="{{ custom_css }}" />
+    {% endif %}
+  </head>
+  <body>
+    <main class="shell editor-shell">
+      <header class="topbar">
+        <div>
+          <h1>编辑日记</h1>
+          <p>{{ diary.date }}</p>
+        </div>
+        <nav>
+          <a href="/diaries" aria-current="page">日记</a>
+          <a href="/stats">统计</a>
+          <a href="/reviews">回顾</a>
+          <a href="/weekly">周报</a>
+          <a href="/memory">记忆</a>
+          <a href="/settings">设置</a>
+          <button id="dark-mode-toggle" class="theme-toggle" aria-label="切换深色模式">🌙</button>
+        </nav>
+      </header>
+
+      <form id="diary-edit-form" class="diary-editor">
+        <label>
+          今日成长
+          <select id="daily-thirty-status">
+            {% for value, label in status_options %}
+              <option value="{{ value }}" {% if diary.daily_thirty_status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label>
+          情绪标签
+          <input id="mood-tags" type="text" value="{{ diary.mood_tags }}" placeholder="例如：稳定、试探、耗电" />
+        </label>
+
+        <div class="editor-preview-layout">
+          <div class="editor-pane">
+            <label class="editor-pane-label" for="markdown-content">Markdown 内容</label>
+            <textarea id="markdown-content" rows="24">{{ diary.markdown_content }}</textarea>
+          </div>
+          <div class="preview-pane">
+            <span class="markdown-preview-label">实时预览</span>
+            <div id="markdown-preview" class="markdown-preview"></div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="submit">保存</button>
+          <a class="button-link" href="/diaries/{{ diary.date }}">取消</a>
+        </div>
+      </form>
+
+      <p id="notice" class="notice" role="status"></p>
+    </main>
+
+    <script src="{{ asset_url('site.js') }}"></script>
+    <script>
+      const form = document.querySelector("#diary-edit-form");
+      const notice = document.querySelector("#notice");
+      const markdownContent = document.querySelector("#markdown-content");
+      const moodTags = document.querySelector("#mood-tags");
+      const dailyThirtyStatus = document.querySelector("#daily-thirty-status");
+      const markdownPreview = document.querySelector("#markdown-preview");
+
+      function renderPreview() {
+        markdownPreview.innerHTML = window.MioSite.renderMarkdown(markdownContent.value || '');
+      }
+      renderPreview();
+      markdownContent.addEventListener('input', renderPreview);
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        notice.textContent = "保存中...";
+        try {
+          const response = await fetch("/api/diaries/{{ diary.date }}", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              markdown_content: markdownContent.value,
+              mood_tags: moodTags.value,
+              daily_thirty_status: dailyThirtyStatus.value,
+            }),
+          });
+          if (!response.ok) throw new Error(await window.MioSite.readError(response));
+          const data = await response.json();
+          window.location.href = `/diaries/${data.date}`;
+        } catch (error) {
+          notice.textContent = error.message;
+        }
+      });
+    </script>
+
+  </body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "name": "mio-agent-app",
+  "private": true,
+  "version": "0.7.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --test src/*.test.js"
+  },
+  "dependencies": {
+    "@lucide/vue": "1.28.0",
+    "@vitejs/plugin-vue": "6.0.8",
+    "dompurify": "3.4.13",
+    "marked": "18.0.7",
+    "vite": "8.2.0",
+    "vue": "3.5.40"
+  },
+  "devDependencies": {},
+  "overrides": {
+    "nanoid": "3.3.18"
+  }
+}

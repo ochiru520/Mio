@@ -86,7 +86,10 @@ class WebViewRecoveryTests(unittest.TestCase):
                 patch.object(launcher, "_installed_state_dir", return_value=None),
                 patch.dict(os.environ, {"MIO_DESKTOP_STATE_DIR": ""}, clear=False),
             ):
-                self.assertEqual(launcher._desktop_state_dir(), executable.parent / "Data")
+                self.assertEqual(
+                    launcher._desktop_state_dir().resolve(),
+                    (executable.parent / "Data").resolve(),
+                )
 
     def test_bundled_default_voice_seeds_only_empty_runtime(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

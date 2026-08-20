@@ -76,9 +76,20 @@ def _running_processes() -> list[tuple[int, int, str, str]]:
     return processes
 
 
+def _normalized_process_path(value: str | Path) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        raw = str(Path(raw).resolve(strict=False))
+    except (OSError, RuntimeError):
+        pass
+    return os.path.normcase(raw).rstrip("\\/")
+
+
 def _process_status() -> dict[str, object]:
     supported = os.name == "nt"
-    root = str(settings.napcat_dir.resolve()).rstrip("\\/").casefold()
+    root = _normalized_process_path(settings.napcat_dir)
     napcat_ids: list[int] = []
     qq_ids: list[int] = []
     ordinary_qq_ids: list[int] = []
@@ -86,7 +97,7 @@ def _process_status() -> dict[str, object]:
     parents = {pid: parent_pid for pid, parent_pid, _name, _path in processes}
     for pid, _parent_pid, name, path in processes:
         normalized_name = name.casefold()
-        normalized_path = path.casefold()
+        normalized_path = _normalized_process_path(path)
         managed = bool(root and normalized_path.startswith(root + "\\"))
         if normalized_name == "napcatwinbootmain.exe" and (managed or not path):
             napcat_ids.append(pid)
@@ -94,7 +105,7 @@ def _process_status() -> dict[str, object]:
     for pid, _parent_pid, name, path in processes:
         if name.casefold() != "qq.exe":
             continue
-        normalized_path = path.casefold()
+        normalized_path = _normalized_process_path(path)
         managed = bool(root and normalized_path.startswith(root + "\\"))
         ancestor = parents.get(pid, 0)
         visited: set[int] = set()

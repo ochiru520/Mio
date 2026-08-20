@@ -303,7 +303,10 @@ class NapCatSetupTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertLess(elapsed, 5.0)
         self.assertTrue(marker.is_file(), completed.stdout + completed.stderr)
-        self.assertEqual(marker.read_text(encoding="utf-8").strip().casefold(), str(nested).casefold())
+        self.assertEqual(
+            Path(marker.read_text(encoding="utf-8").strip()).resolve(),
+            nested.resolve(),
+        )
 
     @unittest.skipUnless(os.name == "nt", "只在 Windows 验证旧版 BootMain 启动门禁")
     def test_control_script_rejects_incomplete_legacy_bootmain(self) -> None:

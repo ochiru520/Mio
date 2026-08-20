@@ -1,5 +1,9 @@
 ﻿# Mio
 
+<p align="center">
+  <img src="澪Agent应用/desktop/mio-icon.png" width="180" alt="Mio 项目图标" />
+</p>
+
 > Windows 本地优先的个人 AI Agent：让对话、长期记忆、日记、主动联系、QQ、语音、Live2D 与屏幕观察共享同一个角色和数据闭环。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-2f7475.svg)](LICENSE)
@@ -68,6 +72,7 @@ Mio/
 ├─ 私人AI日记系统/       # FastAPI、SQLite、日记、记忆、QQ、语音、观察
 ├─ 澪Agent应用/          # Vue 主界面、Windows 启动器、Electron Live2D
 ├─ README.md
+├─ THIRD_PARTY_NOTICES.md
 ├─ CONTRIBUTING.md
 ├─ SECURITY.md
 └─ LICENSE
@@ -171,6 +176,10 @@ npm run test:model
 ## 许可证
 
 原创源代码与文档使用 [MIT License](LICENSE)。Live2D Cubism、示例模型、第三方库、角色图片、音色、训练数据和用户自行导入的资产遵循各自许可证，不因本仓库采用 MIT 而自动获得重新分发权。
+
+## 开源组件与致谢
+
+Mio 建立在 FastAPI、Vue、Electron、pywebview、faster-whisper、NapCat、Genie-TTS、GPT-SoVITS、PixiJS、pixi-live2d-display 等项目之上。主要项目、用途、源码链接和许可边界见 [第三方组件与致谢](THIRD_PARTY_NOTICES.md)；随安装包分发的 Live2D 组件许可原文保存在 `澪Agent应用/public/live2d-pet/licenses/`。
 
 ## 贡献
 

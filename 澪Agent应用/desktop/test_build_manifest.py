@@ -84,7 +84,7 @@ class BuildManifestTests(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "build_id": "mio-public-build",
-                        "app_version": "0.7.0.0",
+                        "app_version": "0.1.0.0",
                         "built_at_utc": "2026-08-20T00:00:00Z",
                         "sources": {},
                     }

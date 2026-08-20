@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'Mio Project'),
           StringStruct(u'FileDescription', u'Mio'),
-          StringStruct(u'FileVersion', u'0.7.0.0'),
+          StringStruct(u'FileVersion', u'0.1.0.0'),
           StringStruct(u'InternalName', u'MioAgent'),
           StringStruct(u'LegalCopyright', u'Copyright (c) Mio Project contributors'),
           StringStruct(u'OriginalFilename', u'Mio.exe'),
           StringStruct(u'ProductName', u'Mio'),
-          StringStruct(u'ProductVersion', u'0.7.0.0')
+          StringStruct(u'ProductVersion', u'0.1.0.0')
         ]
       )
     ]),

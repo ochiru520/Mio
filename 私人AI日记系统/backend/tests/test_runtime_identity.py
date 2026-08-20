@@ -73,7 +73,7 @@ class RuntimeIdentityTests(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "build_id": "mio-program-data",
-                        "app_version": "0.7.0.0",
+                        "app_version": "0.1.0.0",
                         "artifacts": [],
                     },
                     ensure_ascii=False,

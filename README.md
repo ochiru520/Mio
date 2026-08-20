@@ -4,6 +4,10 @@
   <img src="澪Agent应用/desktop/mio-icon.png" width="180" alt="Mio 项目图标" />
 </p>
 
+<p align="center">
+  中文 | <a href="README_EN.md">English</a>
+</p>
+
 > Windows 本地优先的个人 AI Agent：让对话、长期记忆、日记、主动联系、QQ、语音、Live2D 与屏幕观察共享同一个角色和数据闭环。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-2f7475.svg)](LICENSE)
@@ -72,6 +76,7 @@ Mio/
 ├─ 私人AI日记系统/       # FastAPI、SQLite、日记、记忆、QQ、语音、观察
 ├─ 澪Agent应用/          # Vue 主界面、Windows 启动器、Electron Live2D
 ├─ README.md
+├─ README_EN.md
 ├─ THIRD_PARTY_NOTICES.md
 ├─ CONTRIBUTING.md
 ├─ SECURITY.md

@@ -29,11 +29,13 @@ jobs:
         shell: pwsh
         run: |
           $hits = @(git grep -I -n -E 'sk-[A-Za-z0-9_-]{24,}' -- .)
-          if ($LASTEXITCODE -eq 0 -and $hits.Count) {
+          $grepExitCode = $LASTEXITCODE
+          if ($grepExitCode -eq 0 -and $hits.Count) {
             $hits | Write-Host
             throw '发现疑似 API Key'
           }
-          if ($LASTEXITCODE -notin @(0, 1)) { throw '密钥扫描执行失败' }
+          if ($grepExitCode -notin @(0, 1)) { throw '密钥扫描执行失败' }
+          exit 0
       - name: 编译检查
         working-directory: 私人AI日记系统/backend
         run: python -m compileall app

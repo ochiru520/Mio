@@ -944,7 +944,7 @@ class WebViewRecoveryTests(unittest.TestCase):
             backend_root = Path(__file__).resolve().parents[2] / "私人AI日记系统" / "backend"
 
             def import_package(path, *, progress):
-                self.assertEqual(path, source_path)
+                self.assertEqual(path.resolve(), source_path.resolve())
                 progress({"phase": "extracting", "message": "正在复制音色模型", "percent": 55})
                 return {"id": "voice-1", "name": "测试音色"}
 
@@ -988,7 +988,7 @@ class WebViewRecoveryTests(unittest.TestCase):
                 return real_write(path, payload, **kwargs)
 
             def import_package(path, *, progress):
-                self.assertEqual(path, source_path)
+                self.assertEqual(path.resolve(), source_path.resolve())
                 for percent in range(1, 100):
                     progress({"phase": "extracting", "message": "正在复制音色模型", "percent": percent})
                 return {"id": "voice-1", "name": "测试音色"}

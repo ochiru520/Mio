@@ -11,7 +11,7 @@
 > A local-first personal AI Agent for Windows that connects conversations, long-term memory, diaries, proactive contact, QQ, voice, Live2D, and screen awareness through one shared character and data loop.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-2f7475.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-4c8bf5.svg)](#requirements)
+[![Platform](https://img.shields.io/badge/platform-Windows-4c8bf5.svg)](#requirements-and-official-downloads)
 [![Status](https://img.shields.io/badge/status-preview-d6a84b.svg)](#project-status)
 
 Mio is not just a chat webpage or a launcher that bundles unrelated AI features. It explores what it takes to keep one personal Agent present across a real desktop environment. The main app, desktop companion, QQ, voice calls, diary, and screen observation share the same persona, memory, life records, model configuration, and permission state.
@@ -85,15 +85,31 @@ Mio/
 
 The two Chinese source-directory names are retained for compatibility with the existing Windows build and source-discovery logic. End users see a single desktop application named Mio.
 
-## Requirements
+## Requirements and Official Downloads
 
-- Windows 11, the primary verified environment
-- Python 3.10+
-- Node.js 22.12+
-- WebView2 Runtime
-- At least one OpenAI-compatible model provider, or a configured local model
+### Using the installer (regular users)
 
-NapCat / NT QQ, local vision, Genie local voice, faster-whisper, OBS, and custom Live2D models are optional.
+| Item | Requirement | Official download |
+|---|---|---|
+| Mio | Use the Windows x64 installer from the official Release | [Mio Releases](https://github.com/ochiru520/Mio/releases/latest) |
+| Operating system | 64-bit Windows 11; this is the primary verified environment and the installer is x64-only | [Download Windows 11](https://www.microsoft.com/software-download/windows11) |
+| UI runtime | Microsoft Edge WebView2 Runtime; Mio checks it before startup, and it is usually preinstalled on Windows 11 | [Download WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| AI model | Mio can start without a model; AI conversations require at least one working cloud-model API or local model | Cloud providers require no software installation; local models can be installed in Mio under Environment and Models |
+
+**The official installer does not require a separate Python, Node.js, Git, or Inno Setup installation.** Local vision, Genie character voice, faster-whisper, NapCat / NT QQ, OBS, and custom Live2D models are optional capabilities installed only when needed.
+
+### Running or building from source (developers)
+
+| Tool | Current requirement | Official download |
+|---|---|---|
+| Windows | Windows 11 x64 | [Windows 11](https://www.microsoft.com/software-download/windows11) |
+| Python | Python 3.10.11 x64; current release builds and CI use Python 3.10 | [Python 3.10.11 x64](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) |
+| Node.js | Node.js 22.12.0 x64 or a later compatible version; CI is pinned to 22.12.0 | [Node.js 22.12.0 x64](https://nodejs.org/dist/v22.12.0/node-v22.12.0-x64.msi) |
+| Git | Required when cloning the repository; not required when using the source ZIP | [Git for Windows](https://git-scm.com/download/win) |
+| WebView2 | Required to run the desktop main window | [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| Inno Setup 6 | Required only to create the Windows installer; not required for ordinary source runs or directory builds | [Inno Setup](https://jrsoftware.org/isdl.php) |
+
+`npm` is installed with Node.js, and Windows PowerShell is provided by Windows.
 
 ## Run from Source
 

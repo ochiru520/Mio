@@ -11,7 +11,7 @@
 > Windows 本地优先的个人 AI Agent：让对话、长期记忆、日记、主动联系、QQ、语音、Live2D 与屏幕观察共享同一个角色和数据闭环。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-2f7475.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-4c8bf5.svg)](#运行要求)
+[![Platform](https://img.shields.io/badge/platform-Windows-4c8bf5.svg)](#环境要求与官方下载)
 [![Status](https://img.shields.io/badge/status-preview-d6a84b.svg)](#当前状态)
 
 Mio 不是单独的聊天网页，也不是把许多 AI 功能堆在一起的启动器。它尝试把一个长期存在的个人 Agent 放进真实桌面环境：同一份人格、记忆和生活记录可以同时服务于主应用、桌宠、QQ、语音电话、日记与屏幕观察；涉及联网、截图、主动联系或本地行动时，能力边界和当前状态应当可见、可暂停、可恢复。
@@ -85,15 +85,31 @@ Mio/
 
 两个子目录保留当前中文名称，是为了兼容现有 Windows 构建与源码发现逻辑。最终用户只会看到一个名为 Mio 的桌面应用。
 
-## 运行要求
+## 环境要求与官方下载
 
-- Windows 11（当前主要验证环境）
-- Python 3.10+
-- Node.js 22.12+
-- WebView2 Runtime
-- 至少一个可用的 OpenAI 兼容模型供应商，或自行配置本地模型
+### 使用安装程序（普通用户）
 
-以下能力是可选的：NapCat / NT QQ、本地视觉、Genie 本地音色、faster-whisper、OBS、Live2D 模型。
+| 项目 | 要求 | 官方下载 |
+|---|---|---|
+| Mio | 从正式 Release 获取 Windows x64 安装程序 | [Mio Releases](https://github.com/ochiru520/Mio/releases/latest) |
+| 操作系统 | Windows 11 64 位；这是当前主要验证环境，安装包仅支持 x64 | [下载 Windows 11](https://www.microsoft.com/software-download/windows11) |
+| 界面运行库 | Microsoft Edge WebView2 Runtime；Mio 启动时会强制检查，Windows 11 通常已经预装 | [下载 WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| AI 模型 | 程序可以在未配置模型时启动；要进行 AI 对话，至少需要一个可用的云端模型 API 或本地模型 | 云端供应商无需安装软件；本地模型可在 Mio 的“环境与模型”中安装 |
+
+**使用正式安装程序不需要另外安装 Python、Node.js、Git 或 Inno Setup。** 本地视觉、Genie 角色音色、faster-whisper、NapCat / NT QQ、OBS 和自定义 Live2D 模型都是按需安装的可选能力。
+
+### 从源码运行或构建（开发者）
+
+| 工具 | 当前要求 | 官方下载 |
+|---|---|---|
+| Windows | Windows 11 x64 | [Windows 11](https://www.microsoft.com/software-download/windows11) |
+| Python | Python 3.10.11 x64；当前发布构建与 CI 使用 Python 3.10 | [Python 3.10.11 x64](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) |
+| Node.js | Node.js 22.12.0 x64 或更高的兼容版本；当前 CI 固定为 22.12.0 | [Node.js 22.12.0 x64](https://nodejs.org/dist/v22.12.0/node-v22.12.0-x64.msi) |
+| Git | 克隆仓库时需要；直接下载源码 ZIP 时可以不安装 | [Git for Windows](https://git-scm.com/download/win) |
+| WebView2 | 运行桌面主窗口时必须 | [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| Inno Setup 6 | 仅在生成 Windows 安装程序时需要；普通源码运行和目录构建不需要 | [Inno Setup](https://jrsoftware.org/isdl.php) |
+
+`npm` 随 Node.js 一起安装，Windows PowerShell 由 Windows 提供。
 
 ## 从源码启动
 

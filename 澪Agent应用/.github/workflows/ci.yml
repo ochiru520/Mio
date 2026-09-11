@@ -24,6 +24,7 @@ jobs:
             throw '发现疑似 API Key'
           }
           if ($LASTEXITCODE -notin @(0, 1)) { throw '密钥扫描执行失败' }
+          exit 0
       - name: 前端依赖审计
         run: npm audit --audit-level=high
       - name: 构建前端

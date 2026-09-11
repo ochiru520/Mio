@@ -127,7 +127,7 @@ class WebViewRecoveryTests(unittest.TestCase):
                 patch.object(launcher, "_installed_state_dir", return_value=None),
                 patch.dict(os.environ, {"MIO_DESKTOP_STATE_DIR": ""}, clear=False),
             ):
-                self.assertEqual(launcher._desktop_state_dir(), executable.parent / "Data")
+                self.assertEqual(launcher._desktop_state_dir(), (executable.parent / "Data").resolve())
 
     def test_bundled_default_voice_seeds_only_empty_runtime(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -985,7 +985,7 @@ class WebViewRecoveryTests(unittest.TestCase):
             backend_root = Path(__file__).resolve().parents[2] / "私人AI日记系统" / "backend"
 
             def import_package(path, *, progress):
-                self.assertEqual(path, source_path)
+                self.assertEqual(path, source_path.resolve())
                 progress({"phase": "extracting", "message": "正在复制音色模型", "percent": 55})
                 return {"id": "voice-1", "name": "测试音色"}
 
@@ -1029,7 +1029,7 @@ class WebViewRecoveryTests(unittest.TestCase):
                 return real_write(path, payload, **kwargs)
 
             def import_package(path, *, progress):
-                self.assertEqual(path, source_path)
+                self.assertEqual(path, source_path.resolve())
                 for percent in range(1, 100):
                     progress({"phase": "extracting", "message": "正在复制音色模型", "percent": percent})
                 return {"id": "voice-1", "name": "测试音色"}

@@ -27,6 +27,7 @@ jobs:
             throw '发现疑似 API Key'
           }
           if ($LASTEXITCODE -notin @(0, 1)) { throw '密钥扫描执行失败' }
+          exit 0
       - name: 编译检查
         working-directory: backend
         run: python -m compileall app

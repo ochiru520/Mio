@@ -5,12 +5,14 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 
 from . import db, system_audio_service
+from .model_runtime import operation
 from .agent_loop_service import (
     AgentLoopResult,
+    CREATION_GENERATION_TOOLS,
     begin_final_response,
     cancel_final_response,
     commit_deferred_final_response,
@@ -48,6 +50,7 @@ from .llm import (
     resolve_model_id,
 )
 from .model_registry import get_model_profile, normalize_model_reasoning
+from .tool_registry import tool_registry
 from .model_latency_service import record_latency
 from .prompts import build_group_system_prompt, build_system_prompt
 from .web_search_service import (
@@ -67,6 +70,54 @@ _conversation_locks: dict[str, asyncio.Lock] = {}
 _PLACEHOLDER_REPLY_RE = re.compile(
     r"^(?:嗯|唔)?(?:我|让我|那我)?(?:先|再)?想(?:一想|想|一下)(?:再说|吧)?$"
 )
+_CREATION_COMPLETION_CLAIMS = (
+    "已经生成", "生成出来了", "生成好了", "图片完成", "视频完成", "创作完成",
+    "finished generating", "generation is complete",
+)
+_CREATION_SUBMISSION_CLAIMS = (
+    "已提交", "已经提交", "直接提交", "提交生成任务", "提交任务", "任务创建",
+    "正在后台生成", "后台跑起来", "等待出图", "任务已开始", "开始生成",
+    "马上给你生成", "给你生成", "给你来一张", "马上生成", "来出",
+    "generation started", "job submitted",
+)
+
+
+def _guard_agent_creation_completion_claim(
+    replies: list[str],
+    conversation_id: str,
+    agent_execution: AgentLoopResult | None,
+) -> list[str]:
+    """Never report a finished asset unless this turn has a verified output."""
+    if not conversation_id.startswith("desktop_agent_") or agent_execution is None:
+        return replies
+    joined = " ".join(str(item or "") for item in replies).casefold()
+    claims_completion = any(claim in joined for claim in _CREATION_COMPLETION_CLAIMS)
+    claims_submission = any(claim in joined for claim in _CREATION_SUBMISSION_CLAIMS)
+    if not claims_completion and not claims_submission:
+        return replies
+    jobs: list[dict[str, object]] = []
+    for observation in agent_execution.observations:
+        if observation.tool_name not in {*CREATION_GENERATION_TOOLS, "creation_get_job"}:
+            continue
+        job = observation.result.get("job") if isinstance(observation.result, dict) else None
+        if isinstance(job, dict) and job.get("id"):
+            jobs.append(job)
+    if claims_completion and any(job.get("status") == "completed" and job.get("outputs") for job in jobs):
+        return replies
+    if jobs:
+        job = jobs[-1]
+        status = str(job.get("status") or "")
+        if status in {"created", "submitted", "queued", "running"}:
+            return ["创作任务已提交，正在等待或执行生成。完成后会把校验过的结果发到这里。"]
+        messages = {
+            "failed": "创作任务失败了。", "cancelled": "创作任务已取消。",
+            "timed_out": "创作任务已超时。", "cancel_requested": "正在取消创作任务。",
+            "needs_confirmation": "创作任务正在等待确认，尚未执行。",
+            "unknown": "远程请求结果尚未确认，已停止自动重发。请先核对原请求。",
+            "completed": "任务已结束，但这次查询没有取得可验证的成品。",
+        }
+        return [messages.get(status, "尚未确认创作任务的当前状态。") + str(job.get("error") or "")[:300]]
+    return ["这轮没有创建图片或视频任务，所以还没有成品。我不会把工作流检查通过说成已经生成。"]
 
 
 def _self_snapshot_context_for_message_sync(message: str) -> str:
@@ -85,6 +136,7 @@ async def _self_snapshot_context_for_message(message: str) -> str:
         return ""
 
 
+@operation("memory", automatic=True)
 async def _run_companion_actions(
     conversation_id: str,
     user_message: str,
@@ -145,6 +197,18 @@ def schedule_companion_actions(
     return task
 
 
+async def cancel_scheduled_companion_actions(conversation_id: str) -> int:
+    task = _background_action_tasks_by_conversation.pop(conversation_id, None)
+    if task is None or task.done():
+        return 0
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    return 1
+
+
 @dataclass(frozen=True)
 class ChatResult:
     reply: str
@@ -173,6 +237,7 @@ class ChatResult:
     tool_receipts: tuple[dict[str, object], ...] = ()
     route_candidate_model_ids: tuple[str, ...] = ()
     route_escalated_from_model_id: str = ""
+    task_handoff: dict[str, object] = field(default_factory=dict)
 
 
 def _generated_chat_result(
@@ -735,13 +800,22 @@ async def _complete_chat_reply(
     model_name: str,
     reasoning_level: str,
     request_id: str = "",
+    agent_execution=None,
+    tools: list[dict[str, object]] | None = None,
 ) -> tuple[CompletionResult, str]:
-    completion = await call_chat_completion_result(
+    async def invoke(messages, **kwargs):
+        if agent_execution is None:
+            return await call_chat_completion_result(messages, **kwargs)
+        from .agent_loop_service import final_model_call
+        return await final_model_call(agent_execution, call_chat_completion_result, messages, **kwargs)
+
+    completion = await invoke(
         messages,
         temperature=temperature,
         model_id=model_id,
         reasoning_level=reasoning_level,
         request_id=request_id,
+        tools=tools,
     )
     user_facing_content, reasoning_leaked = _strip_unlabeled_reasoning(completion.content)
     if reasoning_leaked and user_facing_content != completion.content:
@@ -758,12 +832,13 @@ async def _complete_chat_reply(
                 ),
             },
         ]
-        retried = await call_chat_completion_result(
+        retried = await invoke(
             retry_messages,
             temperature=temperature,
             model_id=model_id,
             reasoning_level=reasoning_level,
             request_id=request_id,
+            tools=tools,
         )
         retried_content, retried_leak = _strip_unlabeled_reasoning(retried.content)
         if retried_leak and retried_content == retried.content:
@@ -793,12 +868,13 @@ async def _complete_chat_reply(
             ),
         },
     ]
-    retried = await call_chat_completion_result(
+    retried = await invoke(
         retry_messages,
         temperature=temperature,
         model_id=model_id,
         reasoning_level=retry_reasoning,
         request_id=request_id,
+        tools=tools,
     )
     combined = _combine_completion_results(completion, retried)
     _record_completion_latency(model_id, combined)
@@ -818,6 +894,8 @@ async def _complete_chat_reply_with_single_fallback(
     fallback_model_id: str = "",
     fallback_reasoning_level: str = "",
     request_id: str = "",
+    agent_execution=None,
+    tools: list[dict[str, object]] | None = None,
 ) -> tuple[CompletionResult, str, str]:
     try:
         completion, effective_reasoning = await _complete_chat_reply(
@@ -827,6 +905,8 @@ async def _complete_chat_reply_with_single_fallback(
             model_name=model_name,
             reasoning_level=reasoning_level,
             request_id=request_id,
+            agent_execution=agent_execution,
+            tools=tools,
         )
         return completion, effective_reasoning, ""
     except (ModelRequestError, LLMConfigError, TimeoutError):
@@ -857,6 +937,8 @@ async def _complete_chat_reply_with_single_fallback(
             model_name=fallback_profile.model,
             reasoning_level=normalized_fallback_reasoning,
             request_id=f"{request_id}:fallback"[:80],
+                agent_execution=agent_execution,
+                tools=tools,
         )
         return completion, effective_reasoning, model_id
 
@@ -964,6 +1046,8 @@ def _build_current_time_context(current: datetime | None = None) -> str:
 - 每轮开口前先在内部确认：现在的年月日、星期、时分和时间段，再理解用户说的“今天、昨天、刚才、早上、晚上”。不要依赖模型自己的时间感。
 - 这是本轮对话的真实当前时间。用户问日期、星期、几点或现在是什么时段时，直接依据它回答，不要猜。
 - 当前时间的优先级高于聊天历史、长期记忆和旧日记。绝不能把旧消息发生的时段误当成现在。
+- 历史消息或日记里的“今天、明天、昨天”只能按它自己的来源记录日解释，不能拿本轮当前日期重新套用。
+- 过去的计划、休息安排、上班状态和游戏更新即使曾经真实，也不能默认今天仍然有效；没有带日期证据时不要猜“前几天”或“就是今天”，应明确说具体日期尚未确认。
 - 回复前必须检查时间是否一致：如果现在是晚上或深夜，就不能把现在说成早上、上午、中午、下午或白天；其他时段同理。
 - 可以回忆其他时段发生的事，但必须明确说“今天白天”“刚才下午”或“你上午提到的”，不能让它听起来像当前时段。
 - 先回应用户当前说的话；只有话题适合时，才自然带到当前时段相关内容，不要机械报时或强行转话题。
@@ -1167,6 +1251,8 @@ async def chat_with_ai(
     persist: bool = True,
     agent_tools_enabled: bool = True,
     fast_path: bool = False,
+    allowed_tool_names: set[str] | None = None,
+    handoff_enabled: bool = False,
 ) -> ChatResult:
     return await chat_run_coordinator.submit(
         conversation_id,
@@ -1188,6 +1274,8 @@ async def chat_with_ai(
             persist=persist,
             agent_tools_enabled=agent_tools_enabled,
             fast_path=fast_path,
+            allowed_tool_names=allowed_tool_names,
+            handoff_enabled=handoff_enabled,
         ),
         capture_seconds=(
             settings.chat_follow_up_capture_seconds if capture_follow_ups else 0.0
@@ -1215,6 +1303,8 @@ async def _chat_with_ai_serialized(
     persist: bool = True,
     agent_tools_enabled: bool = True,
     fast_path: bool = False,
+    allowed_tool_names: set[str] | None = None,
+    handoff_enabled: bool = False,
 ) -> ChatResult:
     async with _conversation_lock(conversation_id):
         return await _chat_with_ai_unlocked(
@@ -1234,9 +1324,12 @@ async def _chat_with_ai_serialized(
             persist=persist,
             agent_tools_enabled=agent_tools_enabled,
             fast_path=fast_path,
+            allowed_tool_names=allowed_tool_names,
+            handoff_enabled=handoff_enabled,
         )
 
 
+@operation(lambda values: "agent" if str(values.get("conversation_id") or "").startswith("desktop_agent_") else "chat")
 async def _chat_with_ai_unlocked(
     user_message: str,
     conversation_id: str = "default",
@@ -1254,6 +1347,8 @@ async def _chat_with_ai_unlocked(
     persist: bool = True,
     agent_tools_enabled: bool = True,
     fast_path: bool = False,
+    allowed_tool_names: set[str] | None = None,
+    handoff_enabled: bool = False,
 ) -> ChatResult:
     message = user_message.strip()
     images = image_attachments or []
@@ -1348,7 +1443,7 @@ async def _chat_with_ai_unlocked(
 
     manuals = load_manuals(max_chars=1200) if fast_path else load_manuals()
     history_rows = list(db.get_recent_messages(
-        limit=min(16, settings.chat_raw_history_limit) if fast_path else settings.chat_raw_history_limit,
+        limit=min(96, settings.chat_raw_history_limit) if fast_path else settings.chat_raw_history_limit,
         conversation_id=conversation_id,
     ))
     if not persist:
@@ -1382,6 +1477,18 @@ async def _chat_with_ai_unlocked(
 
     local_now = datetime.fromisoformat(db.now_iso())
     system_blocks = [build_system_prompt(manuals, channel=source, compact=fast_path)]
+    if conversation_id.startswith("desktop_agent_"):
+        system_blocks.append(
+            "Agent workspace mode: understand the user's goal from the current message and recent context, "
+            "then use the available tools when execution is requested. Do not wait for a magic keyword. "
+            "Report only verified receipts and outputs; concise observable progress is allowed, but do not "
+            "claim a task is submitted or complete without evidence."
+        )
+    elif not agent_tools_enabled:
+        system_blocks.append(
+            "Companion mode: prioritize natural conversation, emotions, and time-aware shared memory. "
+            "Do not expose agent plans, tool traces, token counts, or costs in the reply."
+        )
     if source in {"web", "desktop_pet"}:
         system_blocks.append(
             "【本轮感知边界】用户这条消息是键盘输入的文字，不是麦克风转写。"
@@ -1447,6 +1554,7 @@ async def _chat_with_ai_unlocked(
         llm_messages.append({"role": row["role"], "content": content})
 
     agent_execution: AgentLoopResult | None = None
+    handoff_info: dict[str, object] = {}
     agent_final_step_id = 0
     if agent_tools_enabled:
         try:
@@ -1461,7 +1569,14 @@ async def _chat_with_ai_unlocked(
                 model_id=selected_model,
                 reasoning_level=normalized_reasoning_level,
                 allow_native_tools=bool(getattr(selected_profile, "supports_tool_calls", True)),
+                allowed_tool_names=allowed_tool_names,
                 web_precheck=web_lookup,
+                # Agent conversations let the model decide whether the user
+                # is asking for creation and which discovery steps are needed.
+                # This avoids keyword-gated preflight while keeping the
+                # execution layer responsible for workflow/dependency checks.
+                model_first_creation=conversation_id.startswith("desktop_agent_"),
+                context_snapshot=list(llm_messages),
             )
             mark_runtime_stage("agent_tools_observed")
             if agent_context := agent_execution.model_context():
@@ -1497,7 +1612,28 @@ async def _chat_with_ai_unlocked(
             fallback_model_id=fallback_model_id,
             fallback_reasoning_level=fallback_reasoning_level,
             request_id=request_id,
+            agent_execution=agent_execution,
+            tools=([tool_registry.require("handoff_to_agent").native_schema()] if handoff_enabled else None),
         )
+        if handoff_enabled and completion.tool_calls:
+            handoff_call = next((item for item in completion.tool_calls if item.name == "handoff_to_agent"), None)
+            if handoff_call is not None:
+                from .agent_handoff_service import create_handoff
+                from .agent_tool_service import ToolExecutionContext
+                handoff_info = create_handoff(
+                    json.loads(handoff_call.arguments_json),
+                    ToolExecutionContext(
+                        run_id=request_id, request_id=request_id, trace_id=current_runtime_trace_id(),
+                        conversation_id=conversation_id, source_message_id=saved_message_id,
+                        user_message=message, step_index=0, source=source,
+                    ),
+                    conversation_context=[item for item in llm_messages if item.get("role") in {"user", "assistant"}],
+                )
+                completion = replace(
+                    completion,
+                    content=str(handoff_info.get("message") or "已交给 Agent 处理。"),
+                    tool_calls=(),
+                )
         if agent_execution is not None:
             completion = _combine_agent_model_results(agent_execution.model_results, completion)
         mark_runtime_stage("model_completed")
@@ -1526,6 +1662,7 @@ async def _chat_with_ai_unlocked(
     speech_emotion, reply = extract_speech_emotion(completion.content)
     replies = _replies_with_lookup_context(reply, source, web_lookup)
     replies = _remove_replayed_previous_turn(replies, list(history_rows), saved_message_id)
+    replies = _guard_agent_creation_completion_claim(replies, conversation_id, agent_execution)
     if not replies:
         replies = ["嗯，我在听。"]
     reply_text = " ".join(replies)
@@ -1629,6 +1766,7 @@ async def _chat_with_ai_unlocked(
             item for item in (selected_model, str(fallback_model_id or "").strip()) if item
         ),
         route_escalated_from_model_id=escalated_from_model_id,
+        task_handoff=handoff_info,
     )
 
 
@@ -1816,13 +1954,22 @@ async def _chat_in_qq_group_unlocked(
     )
 
 
+def _background_chat_selection() -> tuple[str, str]:
+    from .companion_service import load_config
+    config = load_config()
+    model_id = resolve_model_id(str(config.get("chat_model_id") or "auto"))
+    require_configured(model_id)
+    return model_id, str(config.get("chat_reasoning_level") or "standard")
+
+
+@operation("proactive", automatic=True)
 async def generate_qq_proactive_replies(
     conversation_id: str,
     idle_minutes: int,
     due_threads: list[str] | None = None,
     topic_plan: dict[str, object] | None = None,
 ) -> ChatResult:
-    require_configured()
+    model_id, reasoning_level = _background_chat_selection()
 
     manuals = load_manuals()
     history_rows = db.get_recent_messages(
@@ -1873,13 +2020,14 @@ async def generate_qq_proactive_replies(
         }
     )
 
-    completion = await call_chat_completion_result(llm_messages, temperature=0.8)
+    completion = await call_chat_completion_result(llm_messages, temperature=0.8, model_id=model_id, reasoning_level=reasoning_level)
     replies = replies_for_source(completion.content, "qq")
-    return _generated_chat_result(completion, replies, reasoning_level="standard")
+    return _generated_chat_result(completion, replies, reasoning_level=reasoning_level)
 
 
+@operation("proactive", automatic=True)
 async def generate_desktop_startup_replies(conversation_id: str) -> ChatResult:
-    require_configured()
+    model_id, _ = _background_chat_selection()
 
     manuals = load_manuals()
     history_rows = db.get_recent_messages(
@@ -1926,13 +2074,15 @@ async def generate_desktop_startup_replies(conversation_id: str) -> ChatResult:
         llm_messages,
         temperature=0.8,
         reasoning_level="off",
+        model_id=model_id,
     )
     replies = replies_for_source(completion.content, "desktop") or ["我在。"]
     return _generated_chat_result(completion, replies, reasoning_level="off")
 
 
+@operation("proactive", automatic=True)
 async def generate_qq_night_close_replies(conversation_id: str) -> ChatResult:
-    require_configured()
+    model_id, reasoning_level = _background_chat_selection()
 
     manuals = load_manuals()
     history_rows = db.get_recent_messages(
@@ -1972,15 +2122,16 @@ async def generate_qq_night_close_replies(conversation_id: str) -> ChatResult:
         }
     )
 
-    completion = await call_chat_completion_result(llm_messages, temperature=0.8)
+    completion = await call_chat_completion_result(llm_messages, temperature=0.8, model_id=model_id, reasoning_level=reasoning_level)
     replies = replies_for_source(completion.content, "qq")
-    return _generated_chat_result(completion, replies, reasoning_level="standard")
+    return _generated_chat_result(completion, replies, reasoning_level=reasoning_level)
 
 
 __all__ = [
     "ChatResult",
     "LLMConfigError",
     "TextAttachment",
+    "cancel_scheduled_companion_actions",
     "chat_in_qq_group",
     "chat_with_ai",
     "clean_chat_reply",

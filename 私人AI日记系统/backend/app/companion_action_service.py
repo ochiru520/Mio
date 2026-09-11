@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import hashlib
 import logging
 import re
@@ -257,6 +258,7 @@ def build_companion_planner_messages(
 - remember_thread 只能用于用户自己的未来事件，并且必须有明确的 follow_up_after。Mio 随口提出的建议、普通吐槽、没有时间的“之后再说”、以及已经有结果的事情都不能创建待跟进话题。
 - 不要为同一件事反复创建不同措辞的 remember_thread。
 - remember_memory 只记录用户明确说出的事实，不记录 Mio 的猜测。L0 仅用于身份事实、长期稳定偏好和关系边界；L1 用于最近三周仍有用的状态或计划；L2 用于重要项目、人物和长期经历。
+- remember_memory 必须区分 occurred_at（事情发生时间）、learned_at（Mio 得知时间）、valid_from/valid_until（有效期）、last_confirmed_at（最后确认仍有效时间）和 temporal_status。能从原话确定的时间写 ISO 日期或时间；“昨天、明天、几个月前”必须先按当前消息时间换算为绝对日期，不能原样写入。无法确定 occurred_at 时留空并使用 time_unknown，不能拿写入时间冒充事件时间。
 - remember_memory 置信度 0.55-0.74 时只放入候选箱，不进入上下文；只有确认后才成为 active。无法从用户原话找到证据时不要生成候选。
 - memory_key 使用稳定、简短的英文或中文键表达同一事实槽位，例如 preferred_reply_style、current_project、sleep_schedule。用户纠正旧事实时必须沿用同一个 memory_key，让系统替代旧记录。
 - 群聊内容禁止写入私人记忆。当前会话若以 qq_group_ 开头，不能输出 remember_memory。
@@ -273,7 +275,7 @@ def build_companion_planner_messages(
 - remember_thread: content, follow_up_after(YYYY-MM-DD HH:MM 或空), confidence
 - resolve_thread: content, confidence（仅兼容明确完成）
 - record_follow_up_result: content, outcome(completed/partial/not_completed), summary, adjustment, next_follow_up_after(YYYY-MM-DD HH:MM 或空), confidence
-- remember_memory: layer(L0/L1/L2), category(identity/preference/relationship/current_state/plan/project/experience/person/other), memory_key, content, confidence
+- remember_memory: layer(L0/L1/L2), category(identity/preference/relationship/current_state/plan/project/experience/person/other), memory_key, content, confidence, occurred_at(ISO或空), learned_at(ISO或空), valid_from(ISO或空), valid_until(ISO或空), last_confirmed_at(ISO或空), time_confidence(0-1), temporal_status(current/historical/planned/enduring/time_unknown)
 
 输出结构：
 {{
@@ -901,6 +903,13 @@ async def execute_companion_action_primitive(
             "source_conversation_id": conversation_id,
             "source_message_id": source_message_id,
             "confidence": confidence,
+            "occurred_at": str(action.get("occurred_at") or ""),
+            "learned_at": str(action.get("learned_at") or ""),
+            "valid_from": str(action.get("valid_from") or ""),
+            "valid_until": str(action.get("valid_until") or ""),
+            "last_confirmed_at": str(action.get("last_confirmed_at") or ""),
+            "time_confidence": _bounded_confidence(action.get("time_confidence")),
+            "temporal_status": str(action.get("temporal_status") or ""),
         }
         saved = save_memory_candidate(**memory_kwargs) if action.get("_candidate") else save_memory_item(**memory_kwargs)
         return f"memory:{saved['id']}:{saved['outcome']}"
@@ -1069,10 +1078,39 @@ async def execute_companion_actions(
 
 
 async def approve_companion_action(action_id: int) -> dict[str, str]:
+    from . import agent_task_service as tasks
+    tasks.initialize()
+    with db.get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM companion_actions WHERE id=?", (action_id,)).fetchone()
+        if row is None or row["status"] != "needs_confirmation":
+            raise ValueError("这个任务当前不需要确认。")
+        db.assert_conversation_writable(row["conversation_id"], conn)
+        parent = conn.execute("SELECT t.* FROM agent_tasks t JOIN agent_task_runs r ON t.id=r.task_id WHERE r.run_id=?", (row["agent_run_id"],)).fetchone()
+        if parent is not None and parent["status"] not in {"waiting_confirmation", "running"}:
+            raise ValueError("父任务已经停止，确认项已失效。")
+        conn.execute("UPDATE companion_actions SET status='running' WHERE id=? AND status='needs_confirmation'", (action_id,))
+    task_id = parent["id"] if parent else ""
+    process = asyncio.current_task()
+    if task_id:
+        tasks._approvals.setdefault(task_id, set()).add(process)
+    try:
+        return await _execute_approved_action(action_id)
+    except asyncio.CancelledError:
+        db.update_companion_action(action_id, "cancelled", "执行已取消。")
+        if row["agent_step_id"]:
+            db.update_agent_run_step(int(row["agent_step_id"]), "cancelled", error="执行已取消。")
+        raise
+    finally:
+        if task_id:
+            tasks._approvals.get(task_id, set()).discard(process)
+
+
+async def _execute_approved_action(action_id: int) -> dict[str, str]:
     row = db.get_companion_action(action_id)
     if row is None:
         raise ValueError("没有找到这个任务。")
-    if str(row["status"] or "") != "needs_confirmation":
+    if str(row["status"] or "") != "running":
         raise ValueError("这个任务当前不需要确认。")
     action_type = str(row["action_type"] or "")
     if ACTION_POLICIES.get(action_type) != "confirmation":

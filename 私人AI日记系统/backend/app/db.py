@@ -83,6 +83,8 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS deleted_conversations (id TEXT PRIMARY KEY);
+
             CREATE TABLE IF NOT EXISTS diaries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL UNIQUE,
@@ -112,8 +114,16 @@ def init_db() -> None:
                 memory_key TEXT NOT NULL,
                 content TEXT NOT NULL,
                 source_conversation_id TEXT NOT NULL DEFAULT '',
+                source_window TEXT NOT NULL DEFAULT '',
                 source_message_id INTEGER NOT NULL DEFAULT 0,
                 confidence REAL NOT NULL DEFAULT 0,
+                occurred_at TEXT NOT NULL DEFAULT '',
+                learned_at TEXT NOT NULL DEFAULT '',
+                valid_from TEXT NOT NULL DEFAULT '',
+                valid_until TEXT NOT NULL DEFAULT '',
+                last_confirmed_at TEXT NOT NULL DEFAULT '',
+                time_confidence REAL NOT NULL DEFAULT 0,
+                temporal_status TEXT NOT NULL DEFAULT 'time_unknown',
                 status TEXT NOT NULL DEFAULT 'active',
                 superseded_by INTEGER NOT NULL DEFAULT 0,
                 last_seen_at TEXT NOT NULL,
@@ -426,6 +436,65 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run
                 ON agent_run_steps(run_id, step_index);
 
+            CREATE TABLE IF NOT EXISTS creation_assets (
+                id TEXT PRIMARY KEY,
+                original_name TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                path TEXT NOT NULL,
+                size INTEGER NOT NULL DEFAULT 0,
+                sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS creation_presets (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                name TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                negative_prompt TEXT NOT NULL DEFAULT '',
+                params_json TEXT NOT NULL DEFAULT '{}',
+                reference_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+                approved INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_creation_presets_kind_updated
+                ON creation_presets(kind, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS creation_jobs (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT 'creation_page',
+                media_type TEXT NOT NULL,
+                backend TEXT NOT NULL,
+                workflow_id TEXT NOT NULL DEFAULT '',
+                provider_id TEXT NOT NULL DEFAULT '',
+                model_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'created',
+                stage TEXT NOT NULL DEFAULT 'created',
+                progress REAL NOT NULL DEFAULT 0,
+                prompt_id TEXT NOT NULL DEFAULT '',
+                client_id TEXT NOT NULL DEFAULT '',
+                spec_json TEXT NOT NULL DEFAULT '{}',
+                preset_snapshot_json TEXT NOT NULL DEFAULT '{}',
+                outputs_json TEXT NOT NULL DEFAULT '[]',
+                confirmation_reason TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT '',
+                idempotency_key TEXT NOT NULL UNIQUE,
+                parent_job_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT NOT NULL DEFAULT '',
+                finished_at TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_creation_jobs_created
+                ON creation_jobs(created_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_creation_jobs_prompt
+                ON creation_jobs(prompt_id);
+
             CREATE TABLE IF NOT EXISTS model_route_observations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 request_id TEXT NOT NULL DEFAULT '',
@@ -610,6 +679,14 @@ def init_db() -> None:
         _ensure_column(conn, "messages", "first_token_latency_ms", "REAL")
         _ensure_column(conn, "messages", "total_latency_ms", "REAL")
         _ensure_column(conn, "messages", "delivery_key", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "structured_memories", "occurred_at", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "structured_memories", "learned_at", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "structured_memories", "source_window", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "structured_memories", "valid_from", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "structured_memories", "valid_until", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "structured_memories", "last_confirmed_at", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "structured_memories", "time_confidence", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "structured_memories", "temporal_status", "TEXT NOT NULL DEFAULT 'time_unknown'")
         _ensure_column(conn, "screen_events", "observation_id", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "companion_reactions", "model_id", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "companion_reactions", "request_cost_yuan", "REAL")
@@ -838,6 +915,14 @@ def save_structured_memory(
     source_conversation_id: str = "",
     source_message_id: int = 0,
     confidence: float = 0.0,
+    occurred_at: str = "",
+    learned_at: str = "",
+    valid_from: str = "",
+    valid_until: str = "",
+    last_confirmed_at: str = "",
+    time_confidence: float = 0.0,
+    temporal_status: str = "time_unknown",
+    source_window: str = "",
 ) -> tuple[int, str]:
     timestamp = now_iso()
     with get_conn() as conn:
@@ -856,14 +941,31 @@ def save_structured_memory(
                 """
                 UPDATE structured_memories
                 SET layer = ?, source_conversation_id = ?, source_message_id = ?,
-                    confidence = MAX(confidence, ?), last_seen_at = ?, updated_at = ?
+                    source_window = CASE WHEN ? <> '' THEN ? ELSE source_window END,
+                    confidence = MAX(confidence, ?),
+                    occurred_at = CASE WHEN ? <> '' THEN ? ELSE occurred_at END,
+                    learned_at = CASE WHEN ? <> '' THEN ? ELSE learned_at END,
+                    valid_from = CASE WHEN ? <> '' THEN ? ELSE valid_from END,
+                    valid_until = CASE WHEN ? <> '' THEN ? ELSE valid_until END,
+                    last_confirmed_at = CASE WHEN ? <> '' THEN ? ELSE last_confirmed_at END,
+                    time_confidence = MAX(time_confidence, ?),
+                    temporal_status = CASE WHEN ? <> 'time_unknown' THEN ? ELSE temporal_status END,
+                    last_seen_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     layer,
                     source_conversation_id,
                     int(source_message_id or 0),
+                    source_window, source_window,
                     float(confidence),
+                    occurred_at, occurred_at,
+                    learned_at, learned_at,
+                    valid_from, valid_from,
+                    valid_until, valid_until,
+                    last_confirmed_at, last_confirmed_at,
+                    float(time_confidence),
+                    temporal_status, temporal_status,
                     timestamp,
                     timestamp,
                     int(current["id"]),
@@ -875,10 +977,12 @@ def save_structured_memory(
         cursor = conn.execute(
             """
             INSERT INTO structured_memories (
-                layer, category, memory_key, content, source_conversation_id,
+                layer, category, memory_key, content, source_conversation_id, source_window,
                 source_message_id, confidence, status, superseded_by,
+                occurred_at, learned_at, valid_from, valid_until,
+                last_confirmed_at, time_confidence, temporal_status,
                 last_seen_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 layer,
@@ -886,8 +990,16 @@ def save_structured_memory(
                 memory_key,
                 content,
                 source_conversation_id,
+                source_window,
                 int(source_message_id or 0),
                 float(confidence),
+                occurred_at,
+                learned_at,
+                valid_from,
+                valid_until,
+                last_confirmed_at,
+                float(time_confidence),
+                temporal_status,
                 timestamp,
                 timestamp,
                 timestamp,
@@ -916,16 +1028,26 @@ def save_structured_memory_candidate(
     source_conversation_id: str = "",
     source_message_id: int = 0,
     confidence: float = 0.0,
+    occurred_at: str = "",
+    learned_at: str = "",
+    valid_from: str = "",
+    valid_until: str = "",
+    last_confirmed_at: str = "",
+    time_confidence: float = 0.0,
+    temporal_status: str = "time_unknown",
+    source_window: str = "",
 ) -> int:
     timestamp = now_iso()
     with get_conn() as conn:
         cursor = conn.execute(
             """
             INSERT INTO structured_memories (
-                layer, category, memory_key, content, source_conversation_id,
+                layer, category, memory_key, content, source_conversation_id, source_window,
                 source_message_id, confidence, status, superseded_by,
+                occurred_at, learned_at, valid_from, valid_until,
+                last_confirmed_at, time_confidence, temporal_status,
                 last_seen_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'candidate', 0, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'candidate', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 layer,
@@ -933,8 +1055,16 @@ def save_structured_memory_candidate(
                 memory_key,
                 content,
                 source_conversation_id,
+                source_window,
                 int(source_message_id or 0),
                 float(confidence),
+                occurred_at,
+                learned_at,
+                valid_from,
+                valid_until,
+                last_confirmed_at,
+                float(time_confidence),
+                temporal_status,
                 timestamp,
                 timestamp,
                 timestamp,
@@ -964,8 +1094,10 @@ def list_structured_memories(
     with get_conn() as conn:
         return conn.execute(
             f"""
-            SELECT id, layer, category, memory_key, content, source_conversation_id,
+            SELECT id, layer, category, memory_key, content, source_conversation_id, source_window,
                    source_message_id, confidence, status, superseded_by,
+                   occurred_at, learned_at, valid_from, valid_until,
+                   last_confirmed_at, time_confidence, temporal_status,
                    last_seen_at, created_at, updated_at
             FROM structured_memories
             {where}
@@ -983,8 +1115,10 @@ def get_structured_memory(memory_id: int) -> sqlite3.Row | None:
     with get_conn() as conn:
         return conn.execute(
             """
-            SELECT id, layer, category, memory_key, content, source_conversation_id,
+            SELECT id, layer, category, memory_key, content, source_conversation_id, source_window,
                    source_message_id, confidence, status, superseded_by,
+                   occurred_at, learned_at, valid_from, valid_until,
+                   last_confirmed_at, time_confidence, temporal_status,
                    last_seen_at, created_at, updated_at
             FROM structured_memories
             WHERE id = ?
@@ -1050,9 +1184,12 @@ def search_structured_memories(
             rows = conn.execute(
                 """
                 SELECT memories.id, memories.layer, memories.category, memories.memory_key,
-                       memories.content, memories.source_conversation_id,
+                       memories.content, memories.source_conversation_id, memories.source_window,
                        memories.source_message_id, memories.confidence, memories.status,
-                       memories.superseded_by, memories.last_seen_at, memories.created_at,
+                       memories.superseded_by, memories.occurred_at, memories.learned_at,
+                       memories.valid_from, memories.valid_until, memories.last_confirmed_at,
+                       memories.time_confidence, memories.temporal_status,
+                       memories.last_seen_at, memories.created_at,
                        memories.updated_at
                 FROM structured_memories_fts
                 JOIN structured_memories memories
@@ -1073,8 +1210,10 @@ def search_structured_memories(
         return list(
             conn.execute(
                 """
-                SELECT id, layer, category, memory_key, content, source_conversation_id,
+                SELECT id, layer, category, memory_key, content, source_conversation_id, source_window,
                        source_message_id, confidence, status, superseded_by,
+                       occurred_at, learned_at, valid_from, valid_until,
+                       last_confirmed_at, time_confidence, temporal_status,
                        last_seen_at, created_at, updated_at
                 FROM structured_memories
                 WHERE status = ?
@@ -1177,6 +1316,18 @@ def archive_structured_memory(memory_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def conversation_deleted(conversation_id: str, conn=None) -> bool:
+    if conn is None:
+        with get_conn() as connection:
+            return conversation_deleted(conversation_id, connection)
+    return conn.execute("SELECT 1 FROM deleted_conversations WHERE id=?", (conversation_id,)).fetchone() is not None
+
+
+def assert_conversation_writable(conversation_id: str, conn=None) -> None:
+    if conversation_deleted(conversation_id, conn):
+        raise ValueError("对话已删除，不能继续执行或写入。")
+
+
 def save_message(
     role: str,
     content: str,
@@ -1200,6 +1351,12 @@ def save_message(
 ) -> int:
     with get_conn() as conn:
         normalized_delivery_key = str(delivery_key or "")[:160]
+        conn.execute("BEGIN IMMEDIATE")
+        assert_conversation_writable(conversation_id, conn)
+        if role == "assistant" and request_id and conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_task_runs'").fetchone():
+            stopped = conn.execute("SELECT 1 FROM agent_task_runs r JOIN agent_tasks t ON t.id=r.task_id WHERE r.request_id=? AND t.status IN ('paused','cancelled')", (request_id,)).fetchone()
+            if stopped:
+                raise ValueError("任务已停止，不能写入迟到的回复。")
         try:
             cursor = conn.execute(
                 """
@@ -2300,8 +2457,16 @@ def list_conversation_attachment_records(conversation_id: str) -> list[str]:
     return _conversation_repository.list_conversation_attachment_records(conversation_id)
 
 
+def list_message_attachment_records(conversation_id: str, message_ids: list[int]) -> list[str]:
+    return _conversation_repository.list_message_attachment_records(conversation_id, message_ids)
+
+
 def delete_agent_conversation(conversation_id: str) -> bool:
     return _conversation_repository.delete_agent_conversation(conversation_id)
+
+
+def delete_conversation_messages(conversation_id: str, message_ids: list[int]) -> dict[str, object]:
+    return _conversation_repository.delete_conversation_messages(conversation_id, message_ids)
 
 
 def get_messages_since(
@@ -2766,9 +2931,9 @@ def create_agent_run(
                 int(source_message_id or 0),
                 str(model_id or "")[:160],
                 str(reasoning_level or "")[:40],
-                max(1, min(32, int(max_steps))),
-                max(1, min(8, int(max_model_calls))),
-                max(0, min(24, int(max_tool_calls))),
+                max(1, min(200, int(max_steps))),
+                max(1, min(24, int(max_model_calls))),
+                max(0, min(100, int(max_tool_calls))),
                 str(deadline_at or "")[:40],
                 timestamp,
                 timestamp,
@@ -2953,7 +3118,7 @@ def update_agent_run(
         if value is None:
             continue
         assignments.append(f"{column} = ?")
-        parameters.append(str(value)[:max_chars] if max_chars is not None else max(0, int(value)))
+        parameters.append(str(value) if column.endswith("_json") else str(value)[:max_chars] if max_chars is not None else max(0, int(value)))
     if terminal:
         assignments.append("finished_at = ?")
         parameters.append(now_iso())
@@ -3015,7 +3180,7 @@ def claim_agent_run_step(
                 str(tool_call_id or "")[:120],
                 str(tool_name or "")[:80],
                 str(permission or "")[:40],
-                str(arguments_json or "{}")[:8000],
+                str(arguments_json or "{}"),
                 clean_key,
                 timestamp,
                 timestamp,
@@ -3049,7 +3214,7 @@ def update_agent_run_step(
         parameters.append(now_iso())
     if result_json is not None:
         assignments.append("result_json = ?")
-        parameters.append(str(result_json or "{}")[:12000])
+        parameters.append(str(result_json or "{}"))
     if error is not None:
         assignments.append("error = ?")
         parameters.append(str(error or "")[:1000])
@@ -3215,7 +3380,7 @@ def log_companion_action(
                 today_string(),
                 conversation_id,
                 action_type[:80],
-                payload_json[:4000],
+                payload_json,
                 status[:40],
                 result[:1000],
                 int(source_message_id or 0),
@@ -3829,7 +3994,7 @@ def record_agent_event(
                 max(0, int(goal_id or 0)),
                 str(capability)[:80],
                 str(risk_level)[:40],
-                json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":"))[:12000],
+                json.dumps(payload or {}, ensure_ascii=False, separators=(",", ":")),
                 min(1.0, max(0.0, float(relevance))),
                 min(1.0, max(0.0, float(confidence))),
                 min(1.0, max(0.0, float(urgency))),
@@ -3992,7 +4157,7 @@ def create_autonomy_behavior(
                 str(permission_mode)[:40],
                 str(status)[:40],
                 str(reason)[:2000],
-                json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))[:12000],
+                json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                 str(content)[:4000],
                 str(destination)[:80],
                 str(request_id)[:160],

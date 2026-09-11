@@ -126,7 +126,7 @@ if (-not $SkipTests) {
             throw "后端虚拟环境不存在：$BackendPython"
         }
         Push-Location (Join-Path $BackendRoot "backend")
-        try { & $BackendPython -m unittest discover -s tests; if ($LASTEXITCODE -ne 0) { throw "后端测试失败" } }
+        try { & $BackendPython -m pytest -q tests; if ($LASTEXITCODE -ne 0) { throw "后端测试失败" } }
         finally { Pop-Location }
     }
     Invoke-Step "Agent 前端" {

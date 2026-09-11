@@ -17,6 +17,7 @@ from .chat_service import (
     generate_qq_proactive_replies,
 )
 from .config import settings
+from .model_runtime import operation
 from .cost_reconciliation_service import queue_cost_reconciliation
 from .napcat_service import (
     get_napcat_login_status,
@@ -527,6 +528,7 @@ def _defer_proactive_messages_after_startup(now: datetime) -> None:
         )
 
 
+@operation("proactive", automatic=True)
 async def run_desktop_startup_greeting_once(
     conversation_id: str,
     now: datetime | None = None,

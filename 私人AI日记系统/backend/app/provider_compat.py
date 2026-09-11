@@ -5,9 +5,20 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 
+def client_headers(base_url: str) -> dict[str, str]:
+    headers = {"User-Agent": "MioAgent/0.11"}
+    parsed = urlsplit(base_url)
+    if parsed.hostname == "opencode.ai" and (parsed.path == "/zen/go" or parsed.path.startswith("/zen/go/")):
+        from .model_runtime import protocol_session_id
+        headers["x-opencode-session"] = protocol_session_id()
+    return headers
+
+
 AUTH_SCHEMES = ("bearer", "x-api-key", "api-key")
 _KNOWN_ENDPOINT_SUFFIXES = (
     "/chat/completions",
+    "/images/generations",
+    "/responses",
     "/models",
 )
 
@@ -86,4 +97,3 @@ def response_is_json(response: httpx.Response) -> bool:
         return True
     sample = response.text.lstrip()[:1]
     return sample in {"{", "["}
-

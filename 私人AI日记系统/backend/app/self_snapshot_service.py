@@ -35,6 +35,9 @@ VIEW_LABELS = {
     "memory": "记忆",
     "tasks": "任务",
     "companion": "桌宠",
+    "creation": "创作",
+    "creation-image": "图片创作",
+    "creation-video": "视频创作",
     "settings": "设置",
     "stats": "统计",
 }

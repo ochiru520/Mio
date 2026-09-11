@@ -3,6 +3,8 @@
 @import './styles/records.css';
 @import './styles/settings.css';
 @import './styles/companion.css';
+@import './styles/creation.css';
+@import './styles/agent-workspace.css';
 
 :root {
   font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;

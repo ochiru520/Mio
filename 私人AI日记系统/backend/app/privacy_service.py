@@ -18,6 +18,8 @@ RUNTIME_SENSITIVE_KEYS = (
     "daily_review_auto_notify_qq",
     "weekly_review_enabled",
     "weekly_review_notify_qq",
+    "monthly_review_enabled",
+    "monthly_review_notify_qq",
     "night_close_enabled",
     "photo_archive_enabled",
 )
@@ -30,6 +32,10 @@ PAUSE_ACTION_LABELS = {
     "screen_session": "结束屏幕观察会话",
     "system_audio": "停止系统声音监听",
     "qq_connections": "断开 QQ 连接与处理中任务",
+    "model_operations": "停止在途自动生成和回写",
+    "agent_tasks": "停止 Agent 任务",
+    "monthly_generation": "停止月记生成",
+    "daily_generation": "停止日记生成",
 }
 
 COMPANION_SENSITIVE_KEYS = (
@@ -48,9 +54,11 @@ def _state_path() -> Path:
 def _load_state() -> dict[str, Any]:
     try:
         data = json.loads(_state_path().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
     except (OSError, json.JSONDecodeError):
-        data = {}
-    return data if isinstance(data, dict) else {}
+        return {"paused": True, "transition": "state_uncertain", "transition_error": "隐私状态文件无法读取，请检查后恢复。"}
+    return data if isinstance(data, dict) else {"paused": True, "transition": "state_uncertain"}
 
 
 def _save_state(data: dict[str, Any]) -> dict[str, Any]:
@@ -135,7 +143,7 @@ def _capabilities() -> list[dict[str, object]]:
             "label": "自动日记与回顾",
             "enabled": any(
                 bool(runtime.get(key))
-                for key in ("daily_diary_auto_enabled", "daily_review_auto_enabled", "weekly_review_enabled")
+                for key in ("daily_diary_auto_enabled", "daily_review_auto_enabled", "weekly_review_enabled", "monthly_review_enabled")
             ),
             "destination": "生成时会把对应日期的本地上下文发送给当前模型",
             "control": "日记与成长设置",
@@ -144,6 +152,7 @@ def _capabilities() -> list[dict[str, object]]:
 
 
 def privacy_status() -> dict[str, Any]:
+    from .model_runtime import live_operations
     state = _load_state()
     return {
         "paused": bool(state.get("paused")),
@@ -152,6 +161,7 @@ def privacy_status() -> dict[str, Any]:
         "transition_error": str(state.get("transition_error") or ""),
         "failed_actions": list(state.get("failed_actions") or []),
         "capabilities": _capabilities(),
+        "active_operations": live_operations(automatic_only=True),
         "local_data": {
             "database": str(settings.db_path),
             "diaries": str(settings.diary_dir),
@@ -199,6 +209,17 @@ async def pause_sensitive_capabilities() -> dict[str, Any]:
     run("screen_session", screen_observation_service.end_session)
     run("system_audio", system_audio_service.stop)
     run("autonomy_policy", lambda: autonomy_service.update_policy({"paused": True}))
+    from . import agent_task_service, monthly_review_service, daily_diary_service, model_runtime
+    for action, callback in (
+        ("model_operations", lambda: model_runtime.cancel_operations(automatic_only=True, reason="privacy")),
+        ("agent_tasks", lambda: agent_task_service.stop_tasks(stop_linked_jobs=True)),
+        ("monthly_generation", monthly_review_service.cancel_active),
+        ("daily_generation", daily_diary_service.cancel_active),
+    ):
+        try:
+            await callback()
+        except Exception as exc:
+            failures.append({"action": action, "label": PAUSE_ACTION_LABELS[action], "error": str(exc)[:500]})
     from .routes.onebot import disconnect_all_connections
 
     disconnected_connections = 0

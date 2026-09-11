@@ -1,24 +1,29 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Check, CheckCircle2, CircleAlert, CircleHelp, Download, ExternalLink, RefreshCw, RotateCw, Settings2, Wrench } from '@lucide/vue'
-import { installDependency, loadDependencies, loadDependencyStatus } from '../services/dependenciesApi.js'
+import { activateLocalVision, installDependency, loadDependencies, loadDependencyStatus } from '../services/dependenciesApi.js'
 
 const props = defineProps({
   compact: { type: Boolean, default: false },
 })
-const emit = defineEmits(['refresh-environment'])
+const emit = defineEmits(['refresh-environment', 'navigate'])
 
 const busy = ref(false)
 const error = ref('')
 const dependencies = ref([])
 const progress = ref({})
 const pollTimer = ref(null)
+const activating = ref(false)
+const notice = ref('')
 
 const statusMeta = {
   ready: { label: '已就绪', icon: CheckCircle2, tone: 'ok' },
   configured: { label: '已配置', icon: CheckCircle2, tone: 'ok' },
   unconfigured: { label: '未配置', icon: CircleHelp, tone: 'hint' },
   missing: { label: '缺失', icon: CircleAlert, tone: 'warn' },
+  installed: { label: '已安装 · 未启动', icon: CheckCircle2, tone: 'hint' },
+  unverified: { label: '已启动 · 待验证', icon: CircleHelp, tone: 'hint' },
+  degraded: { label: '已安装 · 暂不可用', icon: CircleAlert, tone: 'warn' },
 }
 
 async function refresh() {
@@ -33,6 +38,7 @@ async function refresh() {
       if (!['ready', 'configured'].includes(item.status) && item.progress) nextProgress[item.id] = item.progress
     }
     progress.value = nextProgress
+    if (activeInstalls().length) startPolling()
     emit('refresh-environment')
   } catch (err) {
     error.value = err.message || '依赖检查失败'
@@ -88,8 +94,15 @@ async function install(item) {
   if (busy.value || item.installing) return
   busy.value = true
   error.value = ''
+  notice.value = ''
+  let alreadyInstalled = false
   try {
     const started = await installDependency(item.id)
+    if (started.installing === false) {
+      notice.value = started.message
+      alreadyInstalled = true
+      return
+    }
     item.installing = true
     item.last_error = ''
     progress.value[item.id] = { installing: true, stage: 'starting', percent: 0, message: started.message || '正在启动安装…' }
@@ -98,6 +111,25 @@ async function install(item) {
     error.value = err.message || '安装启动失败'
   } finally {
     busy.value = false
+    if (alreadyInstalled) await refresh()
+  }
+}
+
+async function activateVision() {
+  if (busy.value || activating.value) return
+  activating.value = true
+  busy.value = true
+  notice.value = ''
+  error.value = ''
+  try {
+    const result = await activateLocalVision()
+    if (result.status === 'available') notice.value = result.detail
+    else notice.value = `文件已安装，当前验证未通过：${result.detail}`
+  } catch (err) { notice.value = `本地视觉启动失败：${err.message}` }
+  finally {
+    activating.value = false
+    busy.value = false
+    await refresh()
   }
 }
 
@@ -106,6 +138,9 @@ function openUrl(url) {
 }
 
 function actionFor(item) {
+  if (item.id === 'ollama_vision' && ['installed', 'unverified', 'degraded'].includes(item.status)) {
+    return { kind: 'activate', label: item.status === 'installed' ? '启动并验证' : '重新验证' }
+  }
   if (item.kind === 'builtin') return { kind: 'none' }
   if (item.kind === 'configure') {
     if (item.id === 'cloud_model') return { kind: 'navigate', label: '去配置', target: 'settings-models' }
@@ -161,6 +196,7 @@ onBeforeUnmount(stopPolling)
     </div>
 
     <div v-if="error" class="dependency-error">{{ error }}</div>
+    <p v-if="notice" role="status" class="dependency-notice">{{ notice }}</p>
 
     <ul class="dependency-list">
       <li v-for="item in dependencies" :key="item.id" :class="['dependency-item', `status-${item.status}`, { installing: item.installing }]">
@@ -172,14 +208,18 @@ onBeforeUnmount(stopPolling)
               <b :class="statusMeta[item.status]?.tone">{{ statusMeta[item.status]?.label || item.status }}</b>
             </div>
             <p>{{ item.what }}</p>
+            <small v-if="item.detail" class="dependency-detail">{{ item.detail }}</small>
             <small v-if="item.status !== 'ready' && item.status !== 'configured'">{{ item.missing_effect }}</small>
-            <small class="dependency-how">怎么装：{{ item.how }}</small>
+            <small v-if="!['installed', 'unverified', 'degraded', 'ready', 'configured'].includes(item.status)" class="dependency-how">怎么装：{{ item.how }}</small>
             <small v-if="item.size_label" class="dependency-size">体积：{{ item.size_label }}</small>
             <small v-if="item.install_path" class="dependency-path">一键安装位置：{{ item.install_path }}</small>
             <div v-if="item.last_error" class="dependency-last-error">上次安装：{{ item.last_error }}</div>
           </div>
           <div class="dependency-item-actions">
-            <template v-if="actionFor(item).kind === 'install'">
+            <template v-if="actionFor(item).kind === 'activate'">
+              <button class="primary" type="button" :disabled="busy || activating" @click="activateVision"><RefreshCw :class="{ spin: activating }" :size="14" />{{ activating ? '正在启动并验证' : actionFor(item).label }}</button>
+            </template>
+            <template v-else-if="actionFor(item).kind === 'install'">
               <button class="primary" type="button" :disabled="busy" @click="install(item)"><Download :size="14" />{{ actionFor(item).label }}</button>
             </template>
             <template v-else-if="actionFor(item).kind === 'manual'">

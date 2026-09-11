@@ -16,10 +16,21 @@ from starlette.websockets import WebSocketDisconnect
 from app.local_security import SecureAttachmentFiles
 from app.main import BACKGROUND_TASK_FACTORIES, app_lifespan, create_app
 from app import maintenance_service, runtime_diagnostics
-from app import companion_service
+from app import companion_service, db
+from app.config import settings
 
 
 class AppLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        # Lifecycle recovery touches persistence even when initialize_runtime is
+        # mocked. Never depend on, or recover tasks from, a developer database.
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        original = settings.db_path
+        object.__setattr__(settings, 'db_path', Path(directory.name) / 'lifecycle.db')
+        self.addCleanup(object.__setattr__, settings, 'db_path', original)
+        db.init_db()
+
     async def test_desktop_voice_warmup_waits_for_interactive_ui_signal(self) -> None:
         companion_service.reset_frontend_ready()
         with (

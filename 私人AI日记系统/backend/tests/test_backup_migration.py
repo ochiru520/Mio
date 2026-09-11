@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 import warnings
@@ -28,6 +29,8 @@ class BackupMigrationTests(unittest.TestCase):
             "mio_profile_path": settings.mio_profile_path,
             "runtime_config_path": settings.runtime_config_path,
             "backup_enabled": settings.backup_enabled,
+            "backup_keep_count": settings.backup_keep_count,
+            "backup_max_total_mb": settings.backup_max_total_mb,
         }
         object.__setattr__(settings, "data_dir", root / "数据")
         object.__setattr__(settings, "db_path", root / "数据" / "personal_ai.db")
@@ -35,6 +38,8 @@ class BackupMigrationTests(unittest.TestCase):
         object.__setattr__(settings, "mio_profile_path", root / "数据" / "澪属性.json")
         object.__setattr__(settings, "runtime_config_path", root / "数据" / "运行设置.json")
         object.__setattr__(settings, "backup_enabled", True)
+        object.__setattr__(settings, "backup_keep_count", 14)
+        object.__setattr__(settings, "backup_max_total_mb", 1024)
         settings.ensure_directories()
         db.init_db()
 
@@ -113,6 +118,70 @@ class BackupMigrationTests(unittest.TestCase):
         with zipfile.ZipFile(archive_path) as archive:
             self.assertEqual(archive.read("profile.json"), b"before")
         self.assertEqual(profile.read_text(encoding="utf-8"), "after")
+
+    def test_daily_and_manual_backups_exclude_model_weights_but_safety_keeps_them(self) -> None:
+        model_dir = settings.data_dir / "桌宠" / "第三方音色" / "voice-test"
+        model_dir.mkdir(parents=True)
+        model = model_dir / "G_800.pth"
+        model.write_bytes(b"model-weights")
+        config = model_dir / "config.json"
+        config.write_text('{"model":"G_800.pth"}', encoding="utf-8")
+
+        for kind in ("auto", "manual"):
+            with self.subTest(kind=kind):
+                archive_path = backup_service.create_complete_backup(kind=kind)
+                info = backup_service.inspect_backup(archive_path)
+                names = {str(item["path"]) for item in info["files"]}
+                self.assertNotIn("桌宠/第三方音色/voice-test/G_800.pth", names)
+                self.assertIn("桌宠/第三方音色/voice-test/config.json", names)
+                self.assertFalse(info["includes_model_weights"])
+                self.assertEqual(info["excluded_model_weight_count"], 1)
+                self.assertEqual(info["excluded_model_weight_bytes"], len(b"model-weights"))
+
+        safety = backup_service.create_complete_backup(kind="safety")
+        safety_info = backup_service.inspect_backup(safety)
+        safety_names = {str(item["path"]) for item in safety_info["files"]}
+        self.assertIn("桌宠/第三方音色/voice-test/G_800.pth", safety_names)
+        self.assertTrue(safety_info["includes_model_weights"])
+
+    def test_restoring_lightweight_backup_preserves_installed_model_weights(self) -> None:
+        model_dir = settings.data_dir / "桌宠" / "第三方音色" / "voice-test"
+        model_dir.mkdir(parents=True)
+        model = model_dir / "G_800.pth"
+        model.write_bytes(b"installed-model")
+        diary = settings.diary_dir / "2026-08-22.md"
+        diary.write_text("备份内日记", encoding="utf-8")
+        archive = backup_service.create_complete_backup(kind="manual")
+
+        diary.write_text("后来修改", encoding="utf-8")
+        result = backup_service.restore_backup(archive.name)
+
+        self.assertTrue(result["restored"])
+        self.assertEqual(diary.read_text(encoding="utf-8"), "备份内日记")
+        self.assertEqual(model.read_bytes(), b"installed-model")
+
+    def test_automatic_cleanup_obeys_count_and_total_size_without_touching_manual(self) -> None:
+        directory = settings.data_dir / "备份"
+        directory.mkdir(parents=True, exist_ok=True)
+        automatic: list[Path] = []
+        for index in range(4):
+            path = directory / f"自动备份-2026081{index}-000000-000000.zip"
+            path.write_bytes(bytes([index]) * 4)
+            os.utime(path, (100 + index, 100 + index))
+            automatic.append(path)
+        manual = directory / "完整备份-保留.zip"
+        manual.write_bytes(b"manual")
+
+        result = backup_service._cleanup_old_backups(directory, keep_count=3, max_total_bytes=10)
+
+        self.assertEqual(result["kept_count"], 2)
+        self.assertEqual(result["deleted_count"], 2)
+        self.assertEqual(result["reclaimed_bytes"], 8)
+        self.assertTrue(automatic[3].exists())
+        self.assertTrue(automatic[2].exists())
+        self.assertFalse(automatic[1].exists())
+        self.assertFalse(automatic[0].exists())
+        self.assertTrue(manual.exists())
 
     def test_backup_and_restore_checkpoint_wal_before_database_io(self) -> None:
         db.create_agent_conversation("wal_before", "检查点前")
@@ -262,6 +331,7 @@ class BackupMigrationTests(unittest.TestCase):
             listed = client.get("/api/backups")
             self.assertEqual(listed.status_code, 200)
             self.assertIn(name, [item["name"] for item in listed.json()["backups"]])
+            self.assertGreaterEqual(listed.json()["storage"]["count"], 1)
             downloaded = client.get(f"/api/backups/{name}/download")
             self.assertEqual(downloaded.status_code, 200)
             self.assertTrue(downloaded.content.startswith(b"PK"))
@@ -272,6 +342,11 @@ class BackupMigrationTests(unittest.TestCase):
             )
             self.assertEqual(imported.status_code, 200)
             self.assertTrue(imported.json()["backup"]["valid"])
+            cleanup = client.post("/api/backups/cleanup")
+            self.assertEqual(cleanup.status_code, 200)
+            deleted = client.delete(f"/api/backups/{name}")
+            self.assertEqual(deleted.status_code, 200)
+            self.assertTrue(deleted.json()["deleted"])
             status = client.get("/api/migrations/status")
             self.assertEqual(status.status_code, 200)
             self.assertTrue(status.json()["up_to_date"])

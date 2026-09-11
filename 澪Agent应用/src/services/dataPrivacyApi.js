@@ -7,6 +7,7 @@ export function loadDataPrivacy() {
     apiRequest('/api/migrations/status'),
   ]).then(([backups, privacy, migrations]) => ({
     backups: backups.backups || [],
+    backupStorage: backups.storage || {},
     privacy,
     migrations,
   }))
@@ -30,6 +31,14 @@ export function restoreCompleteBackup(name) {
     method: 'POST',
     body: '{}',
   })
+}
+
+export function deleteCompleteBackup(name) {
+  return apiRequest(`/api/backups/${encodeURIComponent(name)}`, { method: 'DELETE' })
+}
+
+export function cleanupAutomaticBackups() {
+  return apiRequest('/api/backups/cleanup', { method: 'POST', body: '{}' })
 }
 
 export function setPrivacyPaused(paused) {

@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from . import db
+from .model_runtime import operation
 from .config import settings
 from .llm import LLMConfigError, call_chat_completion
 
@@ -222,6 +223,7 @@ def build_profile_update_messages(
     ]
 
 
+@operation("profile")
 async def update_mio_profile_with_instruction(
     instruction: str,
     context_messages: list[str] | None = None,

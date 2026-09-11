@@ -7,54 +7,48 @@ on:
 permissions:
   contents: read
 
-env:
-  PYTHONUTF8: "1"
-  PYTHONIOENCODING: "utf-8"
-  PIP_PROGRESS_BAR: "off"
-  PIP_DISABLE_PIP_VERSION_CHECK: "1"
-
 jobs:
   backend:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           cache: pip
           cache-dependency-path: 私人AI日记系统/backend/requirements.txt
       - name: 安装后端依赖
         run: python -m pip install -r "私人AI日记系统/backend/requirements.txt"
+      - name: 安装测试依赖
+        run: python -m pip install pytest==9.1.1
       - name: 扫描高置信度密钥
         shell: pwsh
         run: |
           $hits = @(git grep -I -n -E 'sk-[A-Za-z0-9_-]{24,}' -- .)
-          $grepExitCode = $LASTEXITCODE
-          if ($grepExitCode -eq 0 -and $hits.Count) {
-            $hits | Write-Host
+          if ($LASTEXITCODE -eq 0 -and $hits.Count) {
+            Write-Host "疑似密钥命中数：$($hits.Count)，请在本地检查；不输出匹配内容。"
             throw '发现疑似 API Key'
           }
-          if ($grepExitCode -notin @(0, 1)) { throw '密钥扫描执行失败' }
-          exit 0
+          if ($LASTEXITCODE -notin @(0, 1)) { throw '密钥扫描执行失败' }
       - name: 编译检查
         working-directory: 私人AI日记系统/backend
         run: python -m compileall app
       - name: 后端测试
         working-directory: 私人AI日记系统/backend
-        run: python -m unittest discover -s tests
+        run: python -m pytest -q tests
 
   desktop:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           cache: pip
           cache-dependency-path: |
             私人AI日记系统/backend/requirements.txt
             澪Agent应用/desktop/requirements-desktop.txt
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v4
         with:
           node-version: "22.12.0"
           cache: npm
@@ -69,6 +63,9 @@ jobs:
       - name: Vue 测试
         working-directory: 澪Agent应用
         run: npm test
+      - name: 前端依赖审计
+        working-directory: 澪Agent应用
+        run: npm audit --audit-level=high
       - name: Vue 构建
         working-directory: 澪Agent应用
         run: npm run build
@@ -88,6 +85,9 @@ jobs:
       - name: Live2D 测试
         working-directory: 澪Agent应用/live2d-desktop
         run: npm run test:model
+      - name: Live2D 依赖审计
+        working-directory: 澪Agent应用/live2d-desktop
+        run: npm audit --audit-level=high
       - name: 完整 Windows 目录构建
         working-directory: 澪Agent应用
         shell: pwsh

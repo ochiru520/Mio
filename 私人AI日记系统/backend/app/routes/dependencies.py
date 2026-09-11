@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from .. import dependency_installer
+from .. import dependency_installer, local_vision_service
 
 logger = logging.getLogger(__name__)
 
@@ -51,3 +51,11 @@ async def dependencies_install_status(dep_id: str):
     except Exception as exc:
         logger.warning("依赖状态查询异常：%s", dep_id, exc_info=True)
         raise HTTPException(status_code=500, detail="状态查询失败，请稍后重试。") from exc
+
+
+@router.post("/ollama_vision/activate")
+async def dependencies_activate_local_vision():
+    try:
+        return await asyncio.to_thread(local_vision_service.activate)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -30,6 +30,7 @@ from ..model_registry import (
 from ..provider_compat import (
     api_base_from_endpoint,
     auth_headers,
+    client_headers,
     auth_scheme_candidates,
     completion_endpoint_candidates,
     models_endpoint_candidates,
@@ -391,7 +392,7 @@ async def _request_chat_endpoint(
             )
             response = await client.post(
                 endpoint,
-                headers={**auth_headers(api_key, auth_scheme), "Content-Type": "application/json"},
+                headers={**auth_headers(api_key, auth_scheme), **client_headers(endpoint), "Content-Type": "application/json"},
                 json=payload,
             )
             response_label = "JSON" if response_is_json(response) else "非JSON"
@@ -407,7 +408,7 @@ async def _request_chat_endpoint(
                 payload.pop("max_output_tokens", None)
                 response = await client.post(
                     endpoint,
-                    headers={**auth_headers(api_key, auth_scheme), "Content-Type": "application/json"},
+                    headers={**auth_headers(api_key, auth_scheme), **client_headers(endpoint), "Content-Type": "application/json"},
                     json=payload,
                 )
                 response_label = "JSON" if response_is_json(response) else "非JSON"

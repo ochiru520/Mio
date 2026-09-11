@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app import db
@@ -47,6 +47,10 @@ from app.routes.agent import (
     remove_model_profile,
 )
 from app.routes import agent as agent_routes
+from app.routes.conversations import (
+    ConversationMessageDeleteRequest,
+    delete_shared_conversation_messages,
+)
 
 
 class AgentMessageMetadataTests(unittest.TestCase):
@@ -187,6 +191,29 @@ class AgentMessageMetadataTests(unittest.TestCase):
         self.assertEqual(payload["kind"], "desktop")
         self.assertIsNotNone(db.get_agent_conversation(payload["id"]))
 
+    def test_agent_conversation_keeps_its_workspace_kind_after_rename(self) -> None:
+        test_app = FastAPI()
+        test_app.include_router(agent_routes.router)
+
+        with TestClient(test_app) as client:
+            created_response = client.post(
+                "/api/agent/conversations",
+                json={"title": "创作对话", "workspace": "agent"},
+            )
+            created = created_response.json()
+            renamed_response = client.patch(
+                f"/api/agent/conversations/{created['id']}",
+                json={"title": "角色立绘"},
+            )
+
+        self.assertEqual(created_response.status_code, 200)
+        self.assertTrue(created["id"].startswith("desktop_agent_"))
+        self.assertEqual(created["kind"], "agent")
+        self.assertEqual(renamed_response.status_code, 200)
+        self.assertEqual(renamed_response.json()["kind"], "agent")
+        listed = next(item for item in _conversation_list() if item["id"] == created["id"])
+        self.assertEqual(listed["kind"], "agent")
+
     def test_desktop_pet_is_a_fixed_conversation_window(self) -> None:
         db.save_message(
             "assistant",
@@ -249,6 +276,95 @@ class AgentMessageMetadataTests(unittest.TestCase):
                 (conversation_id,),
             ).fetchone()[0]
         self.assertEqual(action_count, 0)
+
+    def test_selected_qq_messages_can_be_deleted_without_clearing_other_context(self) -> None:
+        conversation_id = "qq_private_test"
+        attachment = Path(self.temp_dir.name) / "attachments" / "2026-08-01" / "qq-delete.png"
+        attachment.parent.mkdir(parents=True)
+        attachment.write_bytes(b"qq-delete")
+        selected_message_id = db.save_message(
+            "user",
+            "这句需要清理",
+            source="qq",
+            conversation_id=conversation_id,
+            request_id="qq-delete-request",
+            attachments_json=json.dumps([{"url": "/agent-files/2026-08-01/qq-delete.png"}]),
+        )
+        kept_message_id = db.save_message(
+            "assistant",
+            "这句需要保留",
+            source="qq",
+            conversation_id=conversation_id,
+            request_id="qq-keep-request",
+        )
+        other_conversation_message_id = db.save_message(
+            "user",
+            "其他对话也要保留",
+            source="desktop",
+            conversation_id="desktop_other",
+        )
+        db.remember_pending_thread(
+            conversation_id,
+            "由被清理消息产生的待跟进",
+            source_message_id=selected_message_id,
+        )
+        db.log_companion_action(
+            conversation_id,
+            "remember_thread",
+            "{}",
+            "done",
+            source_message_id=selected_message_id,
+        )
+        db.claim_chat_request(
+            "qq-delete-request",
+            "request-hash",
+            conversation_id=conversation_id,
+            source="qq",
+        )
+        db.replace_memory("conversation_summary", "旧摘要仍含被删除句子", tags=conversation_id)
+        db.replace_memory("profile", "需要长期保留的独立记忆", tags="user")
+
+        with patch(
+            "app.routes.conversations.conversation_service.primary_conversation_id",
+            return_value=conversation_id,
+        ):
+            result = asyncio.run(delete_shared_conversation_messages(
+                conversation_id,
+                ConversationMessageDeleteRequest(
+                    message_ids=[selected_message_id, other_conversation_message_id],
+                ),
+            ))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["deleted"]["message_ids"], [selected_message_id])
+        self.assertEqual(result["deleted"]["messages"], 1)
+        self.assertEqual(result["deleted"]["pending_threads"], 1)
+        self.assertEqual(result["deleted"]["companion_actions"], 1)
+        self.assertEqual(result["deleted"]["chat_requests"], 1)
+        self.assertEqual(result["deleted"]["conversation_summaries"], 1)
+        self.assertEqual(
+            [row["id"] for row in db.get_recent_messages(10, conversation_id)],
+            [kept_message_id],
+        )
+        self.assertEqual(
+            [row["id"] for row in db.get_recent_messages(10, "desktop_other")],
+            [other_conversation_message_id],
+        )
+        self.assertIsNone(db.get_latest_memory("conversation_summary", tags=conversation_id))
+        self.assertEqual(db.get_latest_memory("profile", tags="user")["content"], "需要长期保留的独立记忆")
+        self.assertEqual(db.list_open_pending_threads(conversation_id), [])
+        self.assertFalse(attachment.exists())
+        with db.get_conn() as conn:
+            action_count = conn.execute(
+                "SELECT COUNT(*) FROM companion_actions WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()[0]
+            request_count = conn.execute(
+                "SELECT COUNT(*) FROM chat_requests WHERE client_request_id = ?",
+                ("qq-delete-request",),
+            ).fetchone()[0]
+        self.assertEqual(action_count, 0)
+        self.assertEqual(request_count, 0)
 
     def test_conversation_is_not_deleted_when_attachment_cleanup_fails(self) -> None:
         conversation_id = "desktop_attachment_busy"
@@ -496,6 +612,54 @@ class AgentMessageMetadataTests(unittest.TestCase):
         self.assertEqual(captured["conversation_id"], "desktop_agent_test")
         self.assertEqual(captured["text_attachments"][0].name, "计划.md")
         self.assertEqual(result["reply"], "收到")
+
+    def test_agent_workspace_chat_is_limited_to_creation_tools(self) -> None:
+        captured: dict[str, object] = {}
+
+        async def fake_chat(message: str, **kwargs):
+            captured["message"] = message
+            captured.update(kwargs)
+            return ChatResult(reply="先整理创作需求", replies=["先整理创作需求"], model_id=kwargs["model_id"])
+
+        conversation_id = "desktop_agent_creation_only"
+        db.create_agent_conversation(conversation_id)
+        payload = AgentChatRequest(
+            message="画一张雨夜车站的图",
+            model_id="test-model",
+            conversation_id=conversation_id,
+            agent_workspace=True,
+        )
+        with (
+            patch("app.routes.agent.resolve_model_id", return_value="test-model"),
+            patch("app.routes.agent.chat_with_ai", new=fake_chat),
+            patch("app.routes.agent.db.ensure_daily_state_today") as ensure_daily_state,
+            patch("app.routes.agent.screen_observation_service.is_screen_chat_follow_up") as screen_follow_up,
+            patch("app.routes.agent._schedule_today_state_analysis") as schedule_state_analysis,
+        ):
+            result = asyncio.run(agent_chat(payload))
+
+        self.assertEqual(result["reply"], "先整理创作需求")
+        self.assertEqual(captured["allowed_tool_names"], agent_routes.AGENT_WORKSPACE_TOOL_NAMES)
+        self.assertFalse(captured["capture_follow_ups"])
+        self.assertTrue(captured["agent_tools_enabled"])
+        self.assertFalse(captured["fast_path"])
+        ensure_daily_state.assert_not_called()
+        screen_follow_up.assert_not_called()
+        schedule_state_analysis.assert_not_called()
+
+    def test_agent_workspace_rejects_a_main_conversation(self) -> None:
+        payload = AgentChatRequest(
+            message="生成一张图片",
+            conversation_id="desktop_main_only",
+            agent_workspace=True,
+        )
+        db.create_agent_conversation("desktop_main_only")
+
+        with self.assertRaises(HTTPException) as raised:
+            asyncio.run(agent_chat(payload))
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("独立的 Agent 对话", raised.exception.detail)
 
     def test_agent_chat_auto_mode_applies_router_model_and_reasoning(self) -> None:
         captured: dict[str, object] = {}

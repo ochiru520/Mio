@@ -13,7 +13,7 @@ import json
 import os
 import subprocess
 import threading
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -87,8 +87,8 @@ _DEPENDENCY_DEFS: tuple[dict[str, Any], ...] = (
         "script": "install-ollama-vision.ps1",
         "size_label": "运行器约 1.36 GiB，视觉模型约 3 GB",
         "what": "让 Mio 在你自己电脑上看懂屏幕画面，不占云端额度。",
-        "missing_effect": "没有它，屏幕观察会优先使用云端视觉模型；不影响聊天。",
-        "how": "点击「一键安装」；运行器支持断点续传和 SHA-256 校验，再自动拉取视觉模型。",
+        "missing_effect": "本地视觉不可用时不会自动把整屏画面转发云端；聊天不受影响。",
+        "how": "缺少文件时安装；文件完整后启动并验证。使用 Mio 独立服务和模型目录。",
         "manual_url": "https://ollama.com/download/windows",
         "manual_label": "手动安装：Ollama 官网",
     },
@@ -282,6 +282,8 @@ def _detect_status(
     status["detail"] = str(item.get("detail") or "")
     if env_status in {"available", "configured"}:
         status["status"] = "ready"
+    elif dep_id == "ollama_vision" and env_status in {"installed", "unverified", "degraded"}:
+        status["status"] = env_status
     elif env_status == "missing":
         status["status"] = "missing"
     else:
@@ -298,12 +300,14 @@ def list_dependencies() -> list[dict[str, Any]]:
         detected = _detect_status(dep, environment)
         entry["status"] = detected["status"]
         entry["detail"] = detected["detail"]
-        detected_ready = entry["status"] in {"ready", "configured"}
+        detected_ready = entry["status"] in {"ready", "configured"} or (
+            dep["id"] == "ollama_vision" and entry["status"] in {"installed", "unverified", "degraded"}
+        )
         entry["installing"] = False if detected_ready else _install_running(dep["id"])
         progress = _read_status(dep["id"])
         if entry["installing"]:
             entry["progress"] = _progress_payload(progress, installing=True)
-        elif entry["status"] not in {"ready", "configured"} and progress.get("done") and progress.get("error"):
+        elif not detected_ready and progress.get("done") and progress.get("error"):
             entry["last_error"] = str(progress.get("error") or "")
         result.append(entry)
     return result
@@ -460,12 +464,33 @@ def _ensure_install_finalized(dep_id: str) -> dict[str, Any]:
 
 def _watch_install(dep_id: str, process: subprocess.Popen[Any]) -> None:
     try:
-        process.wait()
+        exit_code = process.wait()
+        if dep_id == "ollama_vision" and isinstance(exit_code, int):
+            _finalize_vision_download(exit_code)
         _ensure_install_finalized(dep_id)
     finally:
         with _install_lock:
             if _running_installs.get(dep_id) == process.pid:
                 _running_installs.pop(dep_id, None)
+
+
+def _finalize_vision_download(exit_code: int | None = None) -> dict[str, Any]:
+    from . import local_vision_service
+
+    progress = _read_status("ollama_vision")
+    if not progress or (progress.get("done") and progress.get("error")):
+        return progress
+    installed = all(local_vision_service.installation_status().values())
+    if installed and exit_code in {None, 0}:
+        progress.update(done=True, stage="done", percent=100, error="",
+                        message="本地视觉文件已完整安装，请在环境与模型中心启动并验证。")
+    else:
+        log_path = _status_dir() / "ollama_vision-install.log"
+        message = f"安装已结束但文件校验未通过（退出码：{exit_code if exit_code is not None else '未知'}）。日志：{log_path}"
+        progress.update(done=True, stage="error", error=message, message=message)
+    _write_status("ollama_vision", progress)
+    environment_check_service.refresh_detection_cache()
+    return progress
 
 
 def _dependency_def(dep_id: str) -> dict[str, Any] | None:
@@ -481,6 +506,12 @@ def install_dependency(dep_id: str) -> dict[str, Any]:
         raise ValueError("不认识的依赖项目。")
     if str(dep.get("kind") or "") != "script":
         raise ValueError("这个项目不需要安装，请按界面引导操作。")
+    if dep_id == "ollama_vision":
+        from . import local_vision_service
+
+        if all(local_vision_service.installation_status().values()):
+            return {"id": dep_id, "installing": False, "status": "installed",
+                    "message": "本地视觉文件已完整安装，请启动并验证，无需重复下载。"}
     script = _scripts_dir() / str(dep.get("script") or "")
     if not script.is_file():
         raise FileNotFoundError(f"找不到安装脚本：{script.name}")
@@ -492,7 +523,7 @@ def install_dependency(dep_id: str) -> dict[str, Any]:
         "percent": 0,
         "message": (
             "正在启动后台安装…"
-            if dep_id in {"gpt_sovits"}
+            if dep_id in {"gpt_sovits", "ollama_vision"}
             else "正在启动安装窗口…"
         ),
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -525,22 +556,18 @@ def install_dependency(dep_id: str) -> dict[str, Any]:
         )
         creation_flags = (
             getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            if dep_id in {"gpt_sovits", "genie_runtime"}
+            if dep_id in {"gpt_sovits", "genie_runtime", "ollama_vision"}
             else getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         )
-        process = subprocess.Popen(
-            [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(script),
-            ],
-            cwd=str(script.parent),
-            env=env,
-            creationflags=creation_flags,
-        )
+        with ExitStack() as stack:
+            output = {}
+            if dep_id == "ollama_vision":
+                log = stack.enter_context((_status_dir() / "ollama_vision-install.log").open("ab"))
+                output = {"stdout": log, "stderr": log}
+            process = subprocess.Popen(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                cwd=str(script.parent), env=env, creationflags=creation_flags, **output,
+            )
         _running_installs[dep_id] = process.pid
         status = _read_status(dep_id)
         status["console_pid"] = process.pid
@@ -560,7 +587,7 @@ def install_dependency(dep_id: str) -> dict[str, Any]:
         "percent": 0,
         "message": (
             "正在后台安装，下载与校验进度会持续显示在这里。"
-            if dep_id in {"gpt_sovits", "genie_runtime"}
+            if dep_id in {"gpt_sovits", "genie_runtime", "ollama_vision"}
             else "安装窗口已打开，可以在窗口里看到下载进度。"
         ),
     }
@@ -572,6 +599,8 @@ def install_status(dep_id: str) -> dict[str, Any]:
         raise ValueError("不认识的依赖项目。")
     progress = _read_status(dep_id)
     installing = _install_running(dep_id)
+    if dep_id == "ollama_vision" and progress and not installing and not progress.get("done"):
+        progress = _finalize_vision_download()
     if progress.get("done") and not installing and not progress.get("error"):
         progress = _ensure_install_finalized(dep_id)
     if progress.get("done") and not installing:

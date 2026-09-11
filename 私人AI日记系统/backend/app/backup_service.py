@@ -39,6 +39,23 @@ _VOLATILE_NAMES = {
     "屏幕预览.jpg",
     "preview.jpg",
 }
+_MODEL_WEIGHT_SUFFIXES = {
+    ".bin",
+    ".ckpt",
+    ".gguf",
+    ".onnx",
+    ".pb",
+    ".pt",
+    ".pth",
+    ".safetensors",
+}
+_MODEL_ASSET_DIRECTORY_NAMES = {
+    "mioVoice".casefold(),
+    "本地视觉".casefold(),
+    "模型".casefold(),
+    "第三方音色".casefold(),
+    "音色训练".casefold(),
+}
 
 
 def _backup_dir() -> Path:
@@ -79,10 +96,23 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _is_persistent_file(path: Path) -> bool:
+def _relative_data_path(path: Path) -> Path | None:
     try:
-        relative = path.resolve().relative_to(settings.data_dir.resolve())
+        return path.resolve().relative_to(settings.data_dir.resolve())
     except (OSError, ValueError):
+        return None
+
+
+def _is_model_weight_file(path: Path) -> bool:
+    relative = _relative_data_path(path)
+    if relative is None or path.suffix.casefold() not in _MODEL_WEIGHT_SUFFIXES:
+        return False
+    return any(part.casefold() in _MODEL_ASSET_DIRECTORY_NAMES for part in relative.parts[:-1])
+
+
+def _is_persistent_file(path: Path) -> bool:
+    relative = _relative_data_path(path)
+    if relative is None:
         return False
     if not relative.parts or relative.parts[0] == "备份":
         return False
@@ -93,11 +123,16 @@ def _is_persistent_file(path: Path) -> bool:
     return path.is_file()
 
 
-def _persistent_files() -> list[Path]:
+def _persistent_files(*, include_model_weights: bool = True) -> list[Path]:
     if not settings.data_dir.exists():
         return []
     return sorted(
-        (path for path in settings.data_dir.rglob("*") if _is_persistent_file(path)),
+        (
+            path
+            for path in settings.data_dir.rglob("*")
+            if _is_persistent_file(path)
+            and (include_model_weights or not _is_model_weight_file(path))
+        ),
         key=lambda item: item.as_posix().casefold(),
     )
 
@@ -107,8 +142,17 @@ def _safe_backup_name(kind: str) -> str:
     return f"{prefix}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.zip"
 
 
-def create_complete_backup(*, kind: str = "manual", reason: str = "用户手动创建") -> Path:
-    """Create a verified snapshot of all persistent data without plaintext .env files."""
+def create_complete_backup(
+    *,
+    kind: str = "manual",
+    reason: str = "用户手动创建",
+    include_model_weights: bool | None = None,
+) -> Path:
+    """Create a verified data snapshot without secrets or repeated model weights."""
+    if include_model_weights is None:
+        # Daily and ordinary manual backups stay portable and small. Safety and
+        # migration snapshots retain every persistent file for exact rollback.
+        include_model_weights = kind not in {"auto", "manual"}
     with _BACKUP_LOCK:
         directory = _backup_dir()
         target = directory / _safe_backup_name(kind)
@@ -120,11 +164,19 @@ def create_complete_backup(*, kind: str = "manual", reason: str = "用户手动�
 
             entries: list[dict[str, object]] = []
             files: list[tuple[Path, str]] = [(db_snapshot, DATABASE_ARCHIVE_PATH)]
-            persistent_sources = [
+            all_persistent_sources = [
                 source
-                for source in _persistent_files()
+                for source in _persistent_files(include_model_weights=True)
                 if source.resolve() != settings.db_path.resolve()
             ]
+            excluded_model_sources = [
+                source for source in all_persistent_sources if _is_model_weight_file(source)
+            ]
+            persistent_sources = (
+                all_persistent_sources
+                if include_model_weights
+                else [source for source in all_persistent_sources if not _is_model_weight_file(source)]
+            )
             if len(persistent_sources) + 2 > MAX_ARCHIVE_FILES:
                 raise ValueError(f"备份文件数量超过上限 {MAX_ARCHIVE_FILES}。")
             staged_total = db_snapshot.stat().st_size
@@ -162,6 +214,13 @@ def create_complete_backup(*, kind: str = "manual", reason: str = "用户手动�
                 "kind": kind,
                 "reason": reason,
                 "app_version": CURRENT_APP_VERSION,
+                "includes_model_weights": bool(include_model_weights),
+                "excluded_model_weight_count": 0 if include_model_weights else len(excluded_model_sources),
+                "excluded_model_weight_bytes": (
+                    0
+                    if include_model_weights
+                    else sum(source.stat().st_size for source in excluded_model_sources)
+                ),
                 "files": entries,
             }
             manifest_payload = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -348,6 +407,20 @@ def list_backups() -> list[dict[str, object]]:
     return records
 
 
+def backup_storage_status() -> dict[str, object]:
+    directory = _backup_dir()
+    files = [path for path in directory.glob("*.zip") if path.is_file()]
+    automatic = [path for path in files if path.name.startswith("自动备份-")]
+    return {
+        "count": len(files),
+        "total_bytes": sum(path.stat().st_size for path in files),
+        "automatic_count": len(automatic),
+        "automatic_bytes": sum(path.stat().st_size for path in automatic),
+        "keep_count": max(1, int(settings.backup_keep_count)),
+        "max_total_bytes": max(64, int(settings.backup_max_total_mb)) * 1024 * 1024,
+    }
+
+
 def _resolve_backup(name: str) -> Path:
     if Path(name).name != name or not name.lower().endswith(".zip"):
         raise ValueError("备份名称无效。")
@@ -359,6 +432,14 @@ def _resolve_backup(name: str) -> Path:
 
 def backup_path(name: str) -> Path:
     return _resolve_backup(name)
+
+
+def delete_backup(name: str) -> dict[str, object]:
+    with _BACKUP_LOCK:
+        path = _resolve_backup(name)
+        size = path.stat().st_size
+        path.unlink()
+    return {"deleted": True, "name": name, "reclaimed_bytes": size}
 
 
 def create_import_staging_path() -> Path:
@@ -424,7 +505,12 @@ def _replace_from_staging(staging: Path, manifest: dict[str, object]) -> None:
     _checkpoint_database()
     data_root = settings.data_dir.resolve()
     expected = {str(raw["path"]) for raw in manifest["files"]}
+    includes_model_weights = bool(manifest.get("includes_model_weights", True))
     for current in _persistent_files():
+        # Lightweight daily/manual backups intentionally omit heavyweight model
+        # files. Restoring one must not treat the installed models as stale data.
+        if not includes_model_weights and _is_model_weight_file(current):
+            continue
         archive_name = (
             DATABASE_ARCHIVE_PATH
             if current.resolve() == settings.db_path.resolve()
@@ -491,13 +577,49 @@ def restore_backup(name: str) -> dict[str, object]:
         }
 
 
-def _cleanup_old_backups(directory: Path, keep_count: int) -> None:
+def _cleanup_old_backups(
+    directory: Path,
+    keep_count: int,
+    max_total_bytes: int | None = None,
+) -> dict[str, object]:
     backups = sorted(
         (path for path in directory.glob("自动备份-*.zip") if path.is_file()),
         key=lambda item: item.stat().st_mtime,
+        reverse=True,
     )
-    for old in backups[: max(0, len(backups) - keep_count)]:
-        old.unlink(missing_ok=True)
+    limit_count = max(1, int(keep_count))
+    limit_bytes = None if max_total_bytes is None else max(1, int(max_total_bytes))
+    kept: list[Path] = []
+    deleted: list[dict[str, object]] = []
+    kept_bytes = 0
+    for path in backups:
+        size = path.stat().st_size
+        keep_newest = not kept
+        within_count = len(kept) < limit_count
+        within_bytes = limit_bytes is None or kept_bytes + size <= limit_bytes
+        if keep_newest or (within_count and within_bytes):
+            kept.append(path)
+            kept_bytes += size
+            continue
+        path.unlink(missing_ok=True)
+        deleted.append({"name": path.name, "size": size})
+    return {
+        "deleted": deleted,
+        "deleted_count": len(deleted),
+        "reclaimed_bytes": sum(int(item["size"]) for item in deleted),
+        "kept_count": len(kept),
+        "kept_bytes": kept_bytes,
+    }
+
+
+def cleanup_automatic_backups() -> dict[str, object]:
+    with _BACKUP_LOCK:
+        result = _cleanup_old_backups(
+            _backup_dir(),
+            settings.backup_keep_count,
+            max(64, int(settings.backup_max_total_mb)) * 1024 * 1024,
+        )
+    return {**result, "storage": backup_storage_status()}
 
 
 def run_backup_once() -> Path | None:
@@ -506,9 +628,10 @@ def run_backup_once() -> Path | None:
     directory = _backup_dir()
     date_prefix = f"自动备份-{datetime.now().strftime('%Y%m%d')}"
     if any(directory.glob(f"{date_prefix}-*.zip")):
+        cleanup_automatic_backups()
         return None
     target = create_complete_backup(kind="auto", reason="每日自动备份")
-    _cleanup_old_backups(directory, settings.backup_keep_count)
+    cleanup_automatic_backups()
     return target
 
 

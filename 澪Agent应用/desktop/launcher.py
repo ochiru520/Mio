@@ -1575,8 +1575,61 @@ def _focus_process_window(process_id: int) -> bool:
     return True
 
 
-class DesktopBridge:
+class WorkspaceWindowController:
     def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._windows: dict[str, object] = {}
+        self._active = "main"
+        self._destroying = False
+
+    def attach(self, role: str, window) -> None:
+        if role not in {"main", "agent"}:
+            raise ValueError("不支持的工作区窗口")
+        with self._lock:
+            self._windows[role] = window
+
+    def switch(self, target: str) -> dict[str, object]:
+        if target not in {"main", "agent"}:
+            return {"ok": False, "error": "不支持的工作区"}
+        with self._lock:
+            if self._destroying:
+                return {"ok": False, "error": "应用正在退出"}
+            target_window = self._windows.get(target)
+            other_window = self._windows.get("agent" if target == "main" else "main")
+        if target_window is None:
+            return {"ok": False, "error": "目标窗口尚未就绪"}
+        try:
+            if other_window is not None:
+                other_window.hide()
+            target_window.show()
+            target_window.restore()
+        except Exception as exc:
+            logging.exception("Failed to switch Mio workspace window")
+            return {"ok": False, "error": str(exc)}
+        with self._lock:
+            self._active = target
+        return {"ok": True, "workspace": target}
+
+    def destroy_all(self) -> None:
+        with self._lock:
+            if self._destroying:
+                return
+            self._destroying = True
+            windows = tuple(self._windows.values())
+            self._windows.clear()
+        for window in windows:
+            try:
+                window.destroy()
+            except Exception:
+                logging.exception("Failed to close a Mio workspace window")
+
+
+class DesktopBridge:
+    def __init__(
+        self,
+        workspace: str = "main",
+        workspace_controller: WorkspaceWindowController | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._preview_process: subprocess.Popen[bytes] | None = None
         self._pet_chat_process: subprocess.Popen[bytes] | None = None
@@ -1584,10 +1637,17 @@ class DesktopBridge:
         self._window = None
         self._hide_window = None
         self._window_maximized = False
+        self._workspace = workspace
+        self._workspace_controller = workspace_controller
 
     def attach_window(self, window, hide_window) -> None:
         self._window = window
         self._hide_window = hide_window
+
+    def switch_workspace(self, target: str) -> dict[str, object]:
+        if self._workspace_controller is None:
+            return {"ok": False, "error": "工作区窗口控制器尚未就绪"}
+        return self._workspace_controller.switch(str(target or ""))
 
     def hide_pet_chat_window(self) -> dict[str, object]:
         with self._lock:
@@ -1714,6 +1774,39 @@ class DesktopBridge:
                 logging.exception("Failed to open the desktop pet chat window")
                 return {"ok": False, "error": str(exc)}
             return {"ok": True, "already_open": False}
+
+    def select_agent_path(self, kind: str = "directory") -> dict[str, object]:
+        """Only return a path/content the user selected in the native dialog."""
+        if self._window is None:
+            return {"ok": False, "error": "窗口尚未就绪。"}
+        if kind not in {"directory", "comfyui", "workflow"}:
+            return {"ok": False, "error": "不支持的选择类型。"}
+        try:
+            import webview
+            options = {"directory": str(Path.home()), "allow_multiple": False}
+            if kind == "workflow":
+                options["file_types"] = ("ComfyUI JSON (*.json)",)
+            selected = self._window.create_file_dialog(
+                webview.OPEN_DIALOG if kind == "workflow" else webview.FOLDER_DIALOG, **options)
+            if not selected:
+                return {"ok": False, "canceled": True}
+            path = Path(selected[0] if isinstance(selected, (tuple, list)) else selected).resolve(strict=True)
+            if kind == "workflow":
+                if not path.is_file() or path.suffix.lower() != ".json":
+                    raise ValueError("请选择工作流 JSON 文件。")
+                with path.open("rb") as handle:
+                    content = handle.read(2_000_001)
+                if len(content) > 2_000_000:
+                    raise ValueError("工作流不能超过 2 MB。")
+                return {"ok": True, "path": str(path), "name": path.name, "prompt": json.loads(content.decode("utf-8-sig"))}
+            if not path.is_dir():
+                raise ValueError("请选择文件夹。")
+            if kind == "comfyui":
+                from app.creation_custom import normalize_root
+                path = normalize_root(path)
+            return {"ok": True, "path": str(path)}
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
 
     def import_live2d_model(self) -> dict[str, object]:
         if self._window is None:
@@ -1992,7 +2085,9 @@ def _run_window(
     _install_webview_recovery()
 
     webview.settings["ALLOW_DOWNLOADS"] = True
-    bridge = DesktopBridge()
+    workspace_controller = WorkspaceWindowController()
+    bridge = DesktopBridge("main", workspace_controller)
+    agent_bridge = DesktopBridge("agent", workspace_controller)
     window = webview.create_window(
         APP_NAME,
         f"http://{HOST}:{PORT}/agent-app/?v={WEBVIEW_CACHE_REPAIR_VERSION}",
@@ -2009,7 +2104,25 @@ def _run_window(
         background_color="#e9eff1",
         confirm_close=False,
     )
+    agent_window = webview.create_window(
+        "Mio Agent",
+        f"http://{HOST}:{PORT}/agent-app/?workspace=agent&v={WEBVIEW_CACHE_REPAIR_VERSION}",
+        js_api=agent_bridge,
+        width=1180,
+        height=780,
+        min_size=MAIN_WINDOW_MIN_SIZE,
+        resizable=True,
+        frameless=True,
+        easy_drag=False,
+        shadow=True,
+        background_color="#eef1f0",
+        confirm_close=False,
+        hidden=True,
+    )
+    workspace_controller.attach("main", window)
+    workspace_controller.attach("agent", agent_window)
     _notify_window_topology("agent-main", "created", window=window)
+    _notify_window_topology("agent-workspace", "created", window=agent_window, visible=False)
     exit_requested = threading.Event()
     restart_requested = threading.Event()
     listener_stop = threading.Event()
@@ -2044,12 +2157,30 @@ def _run_window(
     window.events.shown += report_main_window_shown
     window.events.loaded += configure_main_window
 
+    def configure_agent_window():
+        try:
+            _make_main_window_resizable(agent_window)
+        except Exception:
+            logging.exception("Failed to enable native Agent-window resizing")
+
+    def return_to_main_window():
+        if exit_requested.is_set():
+            return True
+        threading.Timer(0.05, workspace_controller.switch, args=("main",)).start()
+        return False
+
+    agent_window.events.shown += configure_agent_window
+    agent_window.events.loaded += configure_agent_window
+    agent_window.events.closing += return_to_main_window
+    agent_bridge.attach_window(agent_window, return_to_main_window)
+
     def hide_in_background():
         if exit_requested.is_set():
             return True
         if not _read_desktop_preferences()["close_to_background"]:
             exit_requested.set()
             tray_icon.stop()
+            threading.Timer(0.05, workspace_controller.destroy_all).start()
             return True
         window_in_background.set()
         _notify_window_topology("agent-main", "hidden", window=window)
@@ -2110,10 +2241,7 @@ def _run_window(
             exit_requested.set()
             tray_icon.stop()
             bridge.close_child_windows()
-            try:
-                window.destroy()
-            except Exception:
-                logging.exception("Failed to close the broken WebView2 window")
+            workspace_controller.destroy_all()
 
         def force_exit_if_stuck():
             if restart_requested.is_set():
@@ -2128,7 +2256,7 @@ def _run_window(
     def restore_window(*, open_pet_chat: bool = False):
         try:
             window_in_background.clear()
-            window.show()
+            workspace_controller.switch("main")
             _notify_window_topology("agent-main", "shown", window=window, visible=True, focused=True)
             if open_pet_chat:
                 window.evaluate_js(
@@ -2145,10 +2273,7 @@ def _run_window(
         exit_requested.set()
         tray_icon.stop()
         bridge.close_child_windows()
-        try:
-            window.destroy()
-        except Exception:
-            logging.exception("Failed to close Mio window")
+        workspace_controller.destroy_all()
 
     tray_icon.menu = pystray.Menu(
         pystray.MenuItem("打开 Mio", show_window, default=True),
@@ -2249,6 +2374,7 @@ def _run_window(
         storage_path=str(WEBVIEW_DATA_DIR),
     )
     _notify_window_topology("agent-main", "closed", window=window)
+    _notify_window_topology("agent-workspace", "closed", window=agent_window)
     bridge.close_child_windows()
     listener_stop.set()
     _WEBVIEW_RECOVERY_CALLBACK = None

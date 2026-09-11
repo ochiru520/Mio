@@ -39,7 +39,7 @@ class DependencyListTests(unittest.TestCase):
         for item in dependency_installer.list_dependencies():
             self.assertTrue(str(item.get("what") or "").strip(), f"{item['id']} 缺 what 文案")
             self.assertTrue(str(item.get("how") or "").strip(), f"{item['id']} 缺 how 文案")
-            self.assertIn(item["status"], {"ready", "configured", "unconfigured", "missing"})
+            self.assertIn(item["status"], {"ready", "configured", "unconfigured", "missing", "installed", "unverified", "degraded"})
 
     def test_screen_capture_is_builtin_ready(self) -> None:
         entries = {item["id"]: item for item in dependency_installer.list_dependencies()}
@@ -144,6 +144,9 @@ class DependencyListTests(unittest.TestCase):
 
 class DependencyInstallLaunchTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.patch_vision = mock.patch("app.local_vision_service.installation_status", return_value={"runtime_installed": False, "model_installed": False})
+        self.patch_vision.start()
+        self.addCleanup(self.patch_vision.stop)
         self.scripts_dir = Path(tempfile.mkdtemp(prefix="mio-deps-scripts-"))
         (self.scripts_dir / "deps").mkdir(parents=True)
         (self.scripts_dir / "deps" / "install-ollama-vision.ps1").write_text(

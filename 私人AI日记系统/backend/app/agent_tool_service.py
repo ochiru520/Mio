@@ -23,9 +23,15 @@ TERMINAL_STEP_STATUSES = {
     "skipped",
 }
 PRIVATE_DATA_TOOLS = {
+    "creation_inspect_workflow", "creation_read_workflow_source", "creation_remember_workflow",
+    "agent_search_files", "creation_find_local_workflows", "creation_import_local_workflow", "creation_read_local_workflow",
+    "agent_list_files", "agent_read_document", "agent_write_document", "birefnet_remove_background", "agent_task_update",
     "get_today_state",
     "search_memory",
     "get_diary",
+    "creation_list_presets",
+    "creation_list_loras",
+    "creation_list_assets",
     "add_diary_material",
     "set_daily_thirty",
     "set_daily_mood",
@@ -49,7 +55,9 @@ class ToolExecutionContext:
     source_message_id: int
     user_message: str
     step_index: int
+    source: str = "desktop"
     tool_call_id: str = ""
+    task_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -77,7 +85,7 @@ class ToolExecutionResult:
 
 
 def _json(value: object, max_chars: int = 12000) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)[:max_chars]
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 def _parsed_object(value: object) -> dict[str, Any]:
@@ -106,6 +114,12 @@ def tool_availability(definition: ToolDefinition) -> tuple[bool, str]:
         elif dependency == "web_search_enabled":
             if not settings.web_search_enabled:
                 return False, "联网搜索已关闭。"
+        elif dependency == "comfyui_configured":
+            from . import creation_service
+
+            root = settings.comfyui_root.expanduser().resolve()
+            if not root.is_dir() or not (root / "main.py").is_file():
+                return False, "没有找到位于 D:\\AI 内的 ComfyUI。"
         else:
             return False, f"未知工具依赖：{dependency}"
     if definition.permission != ToolPermission.READ_ONLY:
@@ -134,7 +148,29 @@ def _safe_row(row: object, *, max_text: int = 3000) -> dict[str, Any] | None:
 
 
 async def _dispatch_read_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if name == 'creation_read_workflow_reference':
+        from .workflow_research import read_reference
+        return await read_reference(arguments['url'])
+    if name in {'creation_inspect_workflow', 'creation_read_workflow_source'}:
+        from . import workflow_research
+        callback = workflow_research.inspect if name == 'creation_inspect_workflow' else workflow_research.read_source
+        return await callback(**arguments)
+    if name == 'creation_read_local_workflow':
+        from .local_discovery import read_workflow
+        return await asyncio.to_thread(read_workflow, **arguments)
+    if name in {"agent_search_files", "creation_find_local_workflows"}:
+        from . import local_discovery
+        callback = local_discovery.search_files if name == "agent_search_files" else local_discovery.discover_workflows
+        return await asyncio.to_thread(callback, **arguments)
     from . import self_snapshot_service
+    if name == "birefnet_status":
+        from .birefnet_service import health
+        return await health()
+    if name in {"agent_list_files", "agent_read_document"}:
+        from . import agent_file_service
+        if name == "agent_list_files":
+            return agent_file_service.list_files(**arguments)
+        return agent_file_service.read_document(**arguments)
 
     if name == "get_self_state":
         scopes = tuple(str(item).strip() for item in arguments.get("scopes", []) if str(item).strip())
@@ -177,6 +213,64 @@ async def _dispatch_read_tool(name: str, arguments: dict[str, Any]) -> dict[str,
     if name == "get_diary":
         target_date = str(arguments.get("date") or db.today_string())
         return {"date": target_date, "diary": _safe_row(db.get_diary(target_date), max_text=8000)}
+    if name == "creation_list_presets":
+        from .creation_service import list_presets
+
+        return {"presets": list_presets(str(arguments.get("kind") or ""))}
+    if name == "creation_list_loras":
+        from .creation_lora_catalog import list_image_loras
+
+        return list_image_loras(str(arguments.get("workflow_id") or "anima-2.9b-image"))
+    if name == "creation_list_assets":
+        from .creation_service import list_assets
+
+        return {"assets": list_assets(int(arguments.get("limit") or 100))}
+    if name == "creation_check_workflow":
+        from .creation_service import comfyui_preflight
+
+        report = await comfyui_preflight(str(arguments.get("workflow_id") or ""))
+        # The planner only needs a decision-ready summary.  Do not put local
+        # absolute paths or the full ComfyUI system report into persisted tool
+        # receipts or model context.
+        workflows = []
+        for item in report.get("workflows") or []:
+            if not isinstance(item, dict):
+                continue
+            workflows.append({
+                "id": item.get("id"),
+                "label": item.get("label"),
+                "requires_reference": item.get("requires_reference"),
+                "filename": item.get("filename"),
+                "media_type": item.get("media_type"),
+                "status": item.get("status"),
+                "errors": list(item.get("errors") or [])[:5],
+                "missing_nodes": list((item.get("nodes") or {}).get("missing") or [])[:20],
+                "missing_models": [
+                    str(model.get("requested") or model.get("selected") or "")
+                    for model in item.get("models") or []
+                    if isinstance(model, dict) and not model.get("available")
+                ][:20],
+            })
+        from .creation_custom import default_ids
+        return {"ok": bool(report.get("ok")), "checked": bool(report.get("checked")), "workflows": workflows, "defaults": default_ids()}
+    if name == "creation_get_job":
+        from .creation_service import get_job
+
+        job = get_job(str(arguments.get("job_id") or ""))
+        if job is None:
+            raise ValueError("找不到创作任务。")
+        return {"job": job}
+    if name == "creation_get_output":
+        from .creation_service import get_job
+
+        job = get_job(str(arguments.get("job_id") or ""))
+        if job is None:
+            raise ValueError("找不到创作任务。")
+        index = int(arguments.get("index") or 0)
+        outputs = job.get("outputs") if isinstance(job, dict) else []
+        if not isinstance(outputs, list) or index < 0 or index >= len(outputs):
+            raise ValueError("找不到这个创作输出。")
+        return {"job_id": job["id"], "output": outputs[index]}
     raise ValueError(f"只读工具尚未接入执行器：{name}")
 
 
@@ -185,6 +279,74 @@ async def _dispatch_write_tool(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> dict[str, Any]:
+    if name == 'creation_remember_workflow':
+        from .workflow_research import remember
+        return await remember(**arguments)
+    if name == "creation_import_local_workflow":
+        from .local_discovery import import_local_workflow
+        return await import_local_workflow(**arguments)
+    if name == "handoff_to_agent":
+        from .agent_handoff_service import create_handoff
+        return create_handoff(arguments, context)
+    if name == "birefnet_remove_background":
+        from .birefnet_service import create_cutout
+        return create_cutout(arguments, context)
+    if name == "agent_write_document":
+        from . import agent_file_service
+        return agent_file_service.write_document(**arguments, task_id=context.task_id)
+    if name == "agent_task_update":
+        from . import agent_task_service
+        task = agent_task_service.for_run(context.run_id)
+        if task is None:
+            raise ValueError("当前没有可更新的任务。")
+        snapshot = {key: value for key, value in arguments.items() if value or key in {"decision", "blocker"}}
+        decision_status = {"continue": "running", "ask_user": "waiting_user", "completed": "completed", "failed": "failed"}
+        updated = agent_task_service.update(task["id"], snapshot=snapshot,
+            status=decision_status[arguments.get("decision", "continue")])
+        return {"task_id": task["id"], "snapshot": updated["snapshot"], "status": updated["status"]}
+    if name in {"comfyui_generate_image", "comfyui_generate_video", "remote_generate_image"}:
+        from .creation_models import CreationJobRequest
+        from .creation_service import create_job
+
+        media_type = "video" if name == "comfyui_generate_video" else "image"
+        backend = "remote_api" if name == "remote_generate_image" else "comfyui"
+        parent_job_id = str(arguments.get("parent_job_id") or "")
+        spec = {
+            "media_type": media_type,
+            "backend": backend,
+            "workflow_id": arguments.get("workflow_id") or "",
+            "prompt": arguments.get("prompt") or "",
+            "negative_prompt": arguments.get("negative_prompt") or "",
+            "character_preset_id": arguments.get("character_preset_id") or "",
+            "style_preset_id": arguments.get("style_preset_id") or "",
+            "project_preset_id": arguments.get("project_preset_id") or "",
+            "reference_asset_ids": [arguments["reference_asset_id"]] if arguments.get("reference_asset_id") else [],
+            "width": arguments.get("width"),
+            "height": arguments.get("height"),
+            "steps": arguments.get("steps"),
+            "cfg": arguments.get("cfg"),
+            "lora_choices": arguments.get("lora_choices"),
+            "seed": arguments.get("seed", -1),
+            "duration_seconds": arguments.get("duration_seconds"),
+            "fps": arguments.get("fps"),
+            "provider_id": arguments.get("provider_id") or "",
+            "model_id": arguments.get("model_id") or "",
+            "remote_api_mode": arguments.get("remote_api_mode") or "auto",
+            "idempotency_key": "agent:" + hashlib.sha256(
+                f"{context.task_id or context.run_id}:{context.source_message_id}:{name}:{json.dumps(arguments, sort_keys=True)}".encode("utf-8")
+            ).hexdigest(),
+        }
+        job, created = create_job(
+            CreationJobRequest.model_validate(spec),
+            source=context.source,
+            conversation_id=context.conversation_id,
+            parent_job_id=parent_job_id,
+        )
+        return {"job": job, "created": created, "message": "创作任务已创建；请根据任务状态等待完成或确认。"}
+    if name == "creation_cancel_job":
+        from .creation_service import cancel_job
+
+        return {"job": await cancel_job(str(arguments.get("job_id") or ""))}
     from .companion_action_service import execute_companion_action_primitive
 
     action = {"type": name, **arguments}
@@ -235,7 +397,10 @@ async def execute_tool_call(
     except ValueError as exc:
         raise ValueError(f"工具参数不符合 Schema：{exc}") from exc
 
-    key = _idempotency_key(context.run_id, definition.name, validated)
+    scope = f"{context.task_id}:{context.source_message_id}" if context.task_id else context.run_id
+    if definition.permission == ToolPermission.READ_ONLY or definition.name == "agent_task_update":
+        scope = f"{context.run_id}:{context.step_index}"
+    key = _idempotency_key(scope, definition.name, validated)
     created, step = db.claim_agent_run_step(
         context.run_id,
         context.step_index,
@@ -270,10 +435,11 @@ async def execute_tool_call(
             error=unavailable_reason,
         )
 
-    requires_confirmation = (
-        definition.permission == ToolPermission.HIGH_RISK_WRITE
-        and not definition.has_explicit_intent(context.user_message)
-    )
+    # Intent is the model's responsibility.  Explicit-intent regexes remain
+    # descriptive metadata for compatibility, but they must not silently
+    # authorize a high-risk mutation.  The runtime always gates that class;
+    # local creation and other low-risk actions can proceed automatically.
+    requires_confirmation = definition.permission == ToolPermission.HIGH_RISK_WRITE
     action_id = 0
     if definition.permission != ToolPermission.READ_ONLY:
         action_id = db.log_companion_action(

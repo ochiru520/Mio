@@ -55,7 +55,8 @@ class ConversationRepository:
         return list(reversed(rows))
 
     def get_message_by_id(self, message_id: int) -> sqlite3.Row | None:
-        with self._connection_factory() as conn:
+        conn = self._connection_factory()
+        try:
             return conn.execute(
                 """
                 SELECT id, role, content, source, conversation_id, created_at,
@@ -65,6 +66,8 @@ class ConversationRepository:
                 """,
                 (int(message_id),),
             ).fetchone()
+        finally:
+            conn.close()
 
     def get_latest_message_id(self, role: str = "", conversation_id: str = "") -> int:
         clauses: list[str] = []
@@ -211,14 +214,45 @@ class ConversationRepository:
             ).fetchall()
         return [str(row["attachments_json"] or "[]") for row in rows]
 
+    def list_message_attachment_records(
+        self,
+        conversation_id: str,
+        message_ids: list[int],
+    ) -> list[str]:
+        normalized_ids = sorted({int(message_id) for message_id in message_ids if int(message_id) > 0})
+        if not normalized_ids:
+            return []
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        with self._connection_factory() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT attachments_json
+                FROM messages
+                WHERE conversation_id = ? AND id IN ({placeholders}) AND attachments_json <> '[]'
+                """,
+                (conversation_id, *normalized_ids),
+            ).fetchall()
+        return [str(row["attachments_json"] or "[]") for row in rows]
+
     def delete_agent_conversation(self, conversation_id: str) -> bool:
         with self._connection_factory() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             exists = conn.execute(
                 "SELECT 1 FROM agent_conversations WHERE id = ?",
                 (conversation_id,),
             ).fetchone()
             if exists is None:
                 return False
+            conn.execute("INSERT OR IGNORE INTO deleted_conversations VALUES(?)", (conversation_id,))
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "agent_task_runs" in tables:
+                conn.execute("DELETE FROM agent_task_runs WHERE task_id IN (SELECT id FROM agent_tasks WHERE conversation_id=?)", (conversation_id,))
+                conn.execute("DELETE FROM agent_tasks WHERE conversation_id=?", (conversation_id,))
+            conn.execute("DELETE FROM agent_run_steps WHERE run_id IN (SELECT run_id FROM agent_runs WHERE conversation_id=?)", (conversation_id,))
+            conn.execute("DELETE FROM tool_execution_receipts WHERE conversation_id=?", (conversation_id,))
+            conn.execute("DELETE FROM agent_runs WHERE conversation_id=?", (conversation_id,))
+            if "creation_jobs" in tables:
+                conn.execute("DELETE FROM creation_jobs WHERE conversation_id=?", (conversation_id,))
             conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
             conn.execute("DELETE FROM pending_threads WHERE conversation_id = ?", (conversation_id,))
             conn.execute("DELETE FROM companion_actions WHERE conversation_id = ?", (conversation_id,))
@@ -229,6 +263,78 @@ class ConversationRepository:
             )
             conn.execute("DELETE FROM agent_conversations WHERE id = ?", (conversation_id,))
             return True
+
+    def delete_conversation_messages(
+        self,
+        conversation_id: str,
+        message_ids: list[int],
+    ) -> dict[str, object]:
+        normalized_ids = sorted({int(message_id) for message_id in message_ids if int(message_id) > 0})
+        empty_result: dict[str, object] = {
+            "message_ids": [],
+            "messages": 0,
+            "pending_threads": 0,
+            "companion_actions": 0,
+            "chat_requests": 0,
+            "conversation_summaries": 0,
+        }
+        if not normalized_ids:
+            return empty_result
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        with self._connection_factory() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, request_id
+                FROM messages
+                WHERE conversation_id = ? AND id IN ({placeholders})
+                """,
+                (conversation_id, *normalized_ids),
+            ).fetchall()
+            existing_ids = sorted(int(row["id"]) for row in rows)
+            if not existing_ids:
+                return empty_result
+            existing_placeholders = ", ".join("?" for _ in existing_ids)
+            request_ids = sorted({str(row["request_id"] or "") for row in rows if str(row["request_id"] or "")})
+
+            def count(table: str, where: str, parameters: tuple[object, ...]) -> int:
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS total FROM {table} WHERE {where}",
+                    parameters,
+                ).fetchone()
+                return int(row["total"] if row else 0)
+
+            source_parameters = (conversation_id, *existing_ids)
+            source_where = f"conversation_id = ? AND source_message_id IN ({existing_placeholders})"
+            deleted: dict[str, object] = {
+                "message_ids": existing_ids,
+                "messages": len(existing_ids),
+                "pending_threads": count("pending_threads", source_where, source_parameters),
+                "companion_actions": count("companion_actions", source_where, source_parameters),
+                "chat_requests": 0,
+                "conversation_summaries": count(
+                    "memories",
+                    "type = 'conversation_summary' AND tags = ?",
+                    (conversation_id,),
+                ),
+            }
+            if request_ids:
+                request_placeholders = ", ".join("?" for _ in request_ids)
+                request_where = f"conversation_id = ? AND client_request_id IN ({request_placeholders})"
+                request_parameters = (conversation_id, *request_ids)
+                deleted["chat_requests"] = count("chat_requests", request_where, request_parameters)
+                conn.execute(f"DELETE FROM chat_requests WHERE {request_where}", request_parameters)
+
+            conn.execute(f"DELETE FROM pending_threads WHERE {source_where}", source_parameters)
+            conn.execute(f"DELETE FROM companion_actions WHERE {source_where}", source_parameters)
+            conn.execute(
+                "DELETE FROM memories WHERE type = 'conversation_summary' AND tags = ?",
+                (conversation_id,),
+            )
+            conn.execute(
+                f"DELETE FROM messages WHERE conversation_id = ? AND id IN ({existing_placeholders})",
+                (conversation_id, *existing_ids),
+            )
+        return deleted
 
     def get_messages_since(
         self,

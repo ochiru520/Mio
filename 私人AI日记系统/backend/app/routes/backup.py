@@ -14,7 +14,11 @@ router = APIRouter(prefix="/api")
 
 @router.get("/backups")
 async def backups():
-    return {"backups": await asyncio.to_thread(backup_service.list_backups)}
+    listed, storage = await asyncio.gather(
+        asyncio.to_thread(backup_service.list_backups),
+        asyncio.to_thread(backup_service.backup_storage_status),
+    )
+    return {"backups": listed, "storage": storage}
 
 
 @router.post("/backups")
@@ -25,6 +29,14 @@ async def create_backup():
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=500, detail=f"完整备份创建失败：{exc}") from exc
     return {"backup": info}
+
+
+@router.post("/backups/cleanup")
+async def cleanup_backups():
+    try:
+        return await asyncio.to_thread(backup_service.cleanup_automatic_backups)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"自动备份清理失败：{exc}") from exc
 
 
 @router.post("/backups/import")
@@ -77,6 +89,14 @@ async def download_backup(name: str):
     except (OSError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=404, detail="没有找到这个备份。") from exc
     return FileResponse(path, media_type="application/zip", filename=path.name)
+
+
+@router.delete("/backups/{name}")
+async def delete_backup(name: str):
+    try:
+        return await asyncio.to_thread(backup_service.delete_backup, name)
+    except (OSError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="没有找到这个备份。") from exc
 
 
 @router.post("/backups/{name}/restore")

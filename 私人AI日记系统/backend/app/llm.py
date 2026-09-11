@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .config import settings
+from .model_runtime import model_call
 from .model_registry import (
     ModelProfile,
     get_model_profile,
@@ -21,6 +22,7 @@ from .model_registry import (
 from .provider_compat import (
     api_base_from_endpoint,
     auth_headers,
+    client_headers,
     auth_scheme_candidates,
     completion_endpoint_candidates,
 )
@@ -347,9 +349,11 @@ def _completion_headers(
     *,
     stream: bool = False,
     idempotency_key: str = "",
+    base_url: str = "",
 ) -> dict[str, str]:
     headers = {
         **auth_headers(profile.api_key, auth_scheme or profile.auth_scheme),
+        **client_headers(base_url or (profile.base_urls[0] if profile.base_urls else "")),
         "Content-Type": "application/json",
     }
     if stream:
@@ -491,6 +495,7 @@ def _remaining_request_seconds(deadline: float) -> float:
     return deadline - time.monotonic()
 
 
+@model_call
 async def call_chat_completion_result(
     messages: list[dict[str, Any]],
     temperature: float = 0.7,
@@ -552,6 +557,7 @@ async def call_chat_completion_result(
                             profile,
                             route.auth_scheme,
                             idempotency_key=provider_idempotency_key,
+                            base_url=route.base_url,
                         ),
                         json=request_payload,
                     )
@@ -589,14 +595,12 @@ async def call_chat_completion_result(
         try:
             data = response.json()
         except ValueError as exc:
-            raise ModelRequestError(
-                "供应商返回的成功响应不是有效 JSON。",
-                profile=profile,
-                request_id=request_id,
-                http_status=response.status_code,
-                route=_route_name(route),
-                attempts=attempt_records + [_attempt_record(route, exc)],
-            ) from exc
+            # A guessed compatibility path can return the gateway's HTML page.
+            # Keep earlier authentication failures and allow a real API fallback.
+            errors.append(f"{_route_name(route)} -> 成功响应不是有效 JSON")
+            attempt_records.append({"route": _route_name(route), "http_status": response.status_code,
+                                    "error": "成功响应不是有效 JSON"})
+            continue
         if route.api_mode == "responses":
             content, parsed_tool_calls = _responses_message(data)
             message = {"content": content, "tool_calls": []}
@@ -707,6 +711,14 @@ async def call_chat_completion_result(
 
     detail = "；".join(errors[-4:]) if errors else "没有返回有效响应"
     last_attempt = attempt_records[-1] if attempt_records else {}
+    auth_failure = next((item for item in attempt_records if item.get("http_status") in {401, 403}), None)
+    if auth_failure:
+        raise ModelRequestError(
+            f"模型供应商鉴权失败（HTTP {auth_failure['http_status']}），请检查该供应商的 API Key 和模型访问权限；备用路线也未返回有效回复。",
+            profile=profile, request_id=request_id,
+            http_status=int(auth_failure["http_status"]), route=str(auth_failure.get("route") or ""),
+            attempts=attempt_records,
+        )
     raise ModelRequestError(
         f"模型请求失败，已尝试直连/代理/备用路线：{detail}",
         profile=profile,
@@ -717,6 +729,7 @@ async def call_chat_completion_result(
     )
 
 
+@model_call
 async def call_chat_completion_stream_result(
     messages: list[dict[str, Any]],
     temperature: float = 0.7,
@@ -790,6 +803,7 @@ async def call_chat_completion_stream_result(
                             route.auth_scheme,
                             stream=True,
                             idempotency_key=provider_idempotency_key,
+                            base_url=route.base_url,
                         ),
                         json=payload,
                     ) as response:

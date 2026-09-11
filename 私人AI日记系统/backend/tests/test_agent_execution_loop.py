@@ -301,7 +301,7 @@ class AgentExecutionLoopTests(unittest.IsolatedAsyncioTestCase):
         ))
         with patch(
             "app.agent_loop_service.call_chat_completion_result",
-            new=AsyncMock(return_value=native),
+            new=AsyncMock(side_effect=[native, completion(tool_calls=(native.tool_calls[1],)), completion()]),
         ) as planner:
             result = await run_agent_loop(
                 conversation_id="desktop_agent_test",
@@ -314,7 +314,7 @@ class AgentExecutionLoopTests(unittest.IsolatedAsyncioTestCase):
                 reasoning_level="low",
             )
 
-        self.assertEqual(planner.await_count, 1)
+        self.assertEqual(planner.await_count, 3)
         self.assertEqual([item.status for item in result.observations], ["completed", "completed"])
         final_step = begin_final_response(result)
         finish_final_response(result, final_step, reply="已经读取并记录。")
@@ -415,6 +415,7 @@ class AgentExecutionLoopTests(unittest.IsolatedAsyncioTestCase):
             side_effect=[
                 ModelRequestError("供应商不支持 tools", profile=profile, http_status=400),
                 json_plan,
+                completion('{"tool_calls": []}'),
             ]
         )
 
@@ -430,17 +431,20 @@ class AgentExecutionLoopTests(unittest.IsolatedAsyncioTestCase):
                 reasoning_level="low",
             )
 
-        self.assertEqual(planner.await_count, 2)
+        self.assertEqual(planner.await_count, 3)
         self.assertEqual(result.plan_mode, "json")
+        self.assertEqual(result.status, "completed")
         self.assertEqual([item.status for item in result.observations], ["completed"])
         self.assertIn("不支持 tools", result.error)
         self.assertNotIn("tools", planner.await_args_list[1].kwargs)
+        self.assertNotIn("tools", planner.await_args_list[2].kwargs)
 
     async def test_failed_tool_replans_once_and_uses_recovery_call(self) -> None:
         planner = AsyncMock(
             side_effect=[
                 completion(tool_calls=(ToolCall("bad-call", "missing_tool", "{}"),)),
                 completion(tool_calls=(ToolCall("recovery-call", "get_today_state", "{}"),)),
+                completion(),
             ]
         )
 
@@ -456,15 +460,16 @@ class AgentExecutionLoopTests(unittest.IsolatedAsyncioTestCase):
                 reasoning_level="low",
             )
 
-        self.assertEqual(planner.await_count, 2)
+        self.assertEqual(planner.await_count, 3)
         self.assertTrue(result.replanned)
         self.assertEqual(
             [(item.tool_name, item.status) for item in result.observations],
             [("missing_tool", "failed"), ("get_today_state", "completed")],
         )
         steps = db.list_agent_run_steps(result.run_id)
-        self.assertEqual(len([row for row in steps if row["step_kind"] == "replan"]), 1)
-        self.assertEqual(db.get_agent_run(result.run_id)["replan_count"], 1)
+        self.assertEqual(len([row for row in steps if row["step_kind"] == "replan"]), 2)
+        self.assertEqual(db.get_agent_run(result.run_id)["replan_count"], 2)
+        self.assertEqual(result.status, "completed")
 
     async def test_model_fallback_does_not_repeat_completed_tool_side_effect(self) -> None:
         planner = AsyncMock(return_value=completion(tool_calls=(

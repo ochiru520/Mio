@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -14,11 +15,14 @@ import httpx
 
 from .config import settings
 from .llm import CompletionResult
+from .ollama_model_files import manifest_complete
 
 
-DEFAULT_URL = "http://127.0.0.1:11434"
+DEFAULT_PORT = 11435
+_server_url = ""
 DEFAULT_MODEL = "qwen2.5vl:3b"
 _lock = threading.Lock()
+_lifecycle_lock = threading.RLock()
 _server_process: subprocess.Popen | None = None
 _pull_process: subprocess.Popen | None = None
 _last_error = ""
@@ -47,10 +51,10 @@ def _model_manifest_path(model: str = DEFAULT_MODEL) -> Path:
 
 
 def _runtime_env() -> dict[str, str]:
-    env = os.environ.copy()
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("OLLAMA_")}
     _home_dir().mkdir(parents=True, exist_ok=True)
     env["OLLAMA_MODELS"] = str(_models_dir())
-    env["OLLAMA_HOST"] = "127.0.0.1:11434"
+    env["OLLAMA_HOST"] = _server_url.removeprefix("http://")
     env["OLLAMA_KEEP_ALIVE"] = "5m"
     env["HOME"] = str(_home_dir())
     env["USERPROFILE"] = str(_home_dir())
@@ -67,9 +71,39 @@ def _invalidate_probe() -> None:
     _probe_at = 0.0
 
 
+def installation_status() -> dict[str, bool]:
+    executable = _ollama_executable()
+    try:
+        runtime_installed = executable.is_file() and executable.stat().st_size > 0
+    except OSError:
+        runtime_installed = False
+    return {"runtime_installed": runtime_installed,
+            "model_installed": manifest_complete(_model_manifest_path(), _models_dir())}
+
+
+def _owned_server_url() -> str:
+    with _lock:
+        if _server_process is None or _server_process.poll() is not None or not _server_url:
+            raise OSError("Mio 本地视觉服务未启动。")
+        return _server_url
+
+
+def _available_server_url() -> str:
+    # An occupied preferred port is never treated as an existing Mio service.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        try:
+            listener.bind(("127.0.0.1", DEFAULT_PORT))
+        except OSError:
+            listener.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{listener.getsockname()[1]}"
+
+
 def _request_json(path: str, *, method: str = "GET", payload: dict[str, Any] | None = None, timeout: float = 4.0) -> dict[str, Any]:
+    base_url = _owned_server_url()
     with httpx.Client(timeout=timeout, trust_env=False) as client:
-        response = client.request(method, f"{DEFAULT_URL}{path}", json=payload)
+        response = client.request(method, f"{base_url}{path}", json=payload)
         response.raise_for_status()
         data = response.json()
     return data if isinstance(data, dict) else {}
@@ -103,7 +137,8 @@ def status(*, force: bool = False) -> dict[str, Any]:
             return dict(_probe_cache)
         server_process = _server_process
         pull_process = _pull_process
-    runtime_installed = _ollama_executable().is_file()
+    installed = installation_status()
+    runtime_installed = installed["runtime_installed"]
     server_running = False
     installed_models: list[str] = []
     loaded_models: list[str] = []
@@ -119,24 +154,25 @@ def status(*, force: bool = False) -> dict[str, Any]:
     model = DEFAULT_MODEL
     pulling = bool(pull_process is not None and pull_process.poll() is None)
     owned_server = bool(server_process is not None and server_process.poll() is None)
+    if server_process is not None and not owned_server and _server_desired_running:
+        probe_error = f"Mio 本地视觉服务已退出，退出码：{server_process.returncode}。"
     result = {
         "runtime_installed": runtime_installed,
         "server_running": server_running,
         "owned_server": owned_server,
         "model": model,
-        "model_installed": (
-            any(_matches_model(name, model) for name in installed_models)
-            or _model_manifest_path(model).is_file()
-        ),
+        "model_installed": installed["model_installed"],
+        "model_available": any(_matches_model(name, model) for name in installed_models),
+        "base_url": _server_url if owned_server else "",
         "model_loaded": any(_matches_model(name, model) for name in loaded_models),
-        "inference_ready": bool(_inference_probe_result.get("ready")),
+        "inference_ready": owned_server and server_running and bool(_inference_probe_result.get("ready")),
         "inference_state": str(_inference_probe_result.get("state") or "unverified"),
         "inference_error": str(_inference_probe_result.get("error") or ""),
         "inference_probe_at": _inference_probe_result.get("checked_at"),
         "pulling": pulling,
         "root": str(settings.local_vision_dir),
         "models_dir": str(_models_dir()),
-        "last_error": _last_error or (probe_error if runtime_installed and owned_server else ""),
+        "last_error": _last_error or (probe_error if runtime_installed and server_process is not None else ""),
     }
     with _lock:
         _probe_at = now
@@ -144,18 +180,18 @@ def status(*, force: bool = False) -> dict[str, Any]:
     return result
 
 
-def probe_inference(*, force: bool = False, timeout: float = 8.0) -> dict[str, Any]:
+def probe_inference(*, force: bool = False, timeout: float = 90.0) -> dict[str, Any]:
     """Run a bounded real Ollama inference probe, without starting the server."""
     global _inference_probe_at, _inference_probe_result, _last_error
+    current = status(force=True)
     now = time.monotonic()
     with _lock:
-        if not force and _inference_probe_result and now - _inference_probe_at < 15.0:
+        if current["server_running"] and not force and _inference_probe_result and now - _inference_probe_at < 15.0:
             return dict(_inference_probe_result)
-    current = status(force=True)
     checked_at = time.time()
     if not current.get("server_running"):
         result = {"ready": False, "state": "unverified", "error": "Ollama 服务未运行，尚未执行真实推理探针", "checked_at": checked_at}
-    elif not current.get("model_installed"):
+    elif not current.get("model_installed") or not current.get("model_available"):
         result = {"ready": False, "state": "missing", "error": f"未找到本地模型 {DEFAULT_MODEL}", "checked_at": checked_at}
     else:
         try:
@@ -170,6 +206,12 @@ def probe_inference(*, force: bool = False, timeout: float = 8.0) -> dict[str, A
                       else {"ready": False, "state": "failed", "error": "本地视觉模型返回了空结果", "checked_at": checked_at})
         except (OSError, ValueError, httpx.HTTPError) as exc:
             message = str(exc).strip() or type(exc).__name__
+            if isinstance(exc, httpx.HTTPStatusError):
+                try:
+                    body = exc.response.json()
+                    message = str(body.get("error") or message) if isinstance(body, dict) else message
+                except ValueError:
+                    pass
             lowered = message.lower()
             state = "oom" if any(token in lowered for token in ("out of memory", "oom", "memory", "commit")) else "failed"
             result = {"ready": False, "state": state, "error": message[:500], "checked_at": checked_at}
@@ -177,7 +219,27 @@ def probe_inference(*, force: bool = False, timeout: float = 8.0) -> dict[str, A
     with _lock:
         _inference_probe_at = now
         _inference_probe_result = dict(result)
+        if result.get("ready"):
+            _last_error = ""
     return result
+
+
+def dependency_status() -> dict[str, Any]:
+    current = status(force=True)
+    if not current["runtime_installed"]:
+        state, detail = "missing", "Mio 本地视觉运行器尚未安装。"
+    elif not current["model_installed"]:
+        state, detail = "missing", f"运行器已安装，但 {DEFAULT_MODEL} 模型文件缺失或不完整。"
+    elif not current["server_running"]:
+        state = "degraded" if current["last_error"] else "installed"
+        detail = current["last_error"] or "模型文件已完整安装，Mio 本地视觉服务尚未启动。"
+    elif current["inference_ready"]:
+        state, detail = "available", "Mio 独立本地视觉服务已通过推理验证。"
+    elif current["inference_state"] in {"failed", "oom", "missing"}:
+        state, detail = "degraded", current["inference_error"] or "模型已安装，但推理失败。"
+    else:
+        state, detail = "unverified", "服务已启动，尚未验证模型推理。"
+    return {"status": state, "detail": detail, **current}
 
 
 def passive_status() -> dict[str, Any]:
@@ -201,8 +263,8 @@ def passive_status() -> dict[str, Any]:
     return {
         "runtime_installed": _ollama_executable().is_file(),
         "model": DEFAULT_MODEL,
-        "model_installed": bool(cached.get("model_installed") or _model_manifest_path().is_file()),
-        "inference_ready": bool(_inference_probe_result.get("ready") or cached.get("inference_ready")),
+        "model_installed": installation_status()["model_installed"],
+        "inference_ready": owned_server and bool(_inference_probe_result.get("ready")),
         "inference_state": str(_inference_probe_result.get("state") or cached.get("inference_state") or "unverified"),
         "inference_error": str(_inference_probe_result.get("error") or cached.get("inference_error") or ""),
         "model_loaded": bool(cached.get("model_loaded")) if observed_running is not None else None,
@@ -217,107 +279,140 @@ def passive_status() -> dict[str, Any]:
 
 
 def start_server() -> dict[str, Any]:
-    global _server_process, _last_error, _server_desired_running
-    with _lock:
-        _server_desired_running = True
-    if status(force=True).get("server_running"):
-        return status(force=True)
-    executable = _ollama_executable()
-    if not executable.is_file():
-        raise FileNotFoundError(f"本地视觉运行器不存在：{executable}")
-    settings.local_vision_dir.mkdir(parents=True, exist_ok=True)
-    _models_dir().mkdir(parents=True, exist_ok=True)
-    log_path = settings.local_vision_dir / "ollama.log"
-    log_handle = log_path.open("ab")
-    try:
-        process = subprocess.Popen(
-            [str(executable), "serve"],
-            cwd=str(executable.parent),
-            env=_runtime_env(),
-            stdout=log_handle,
-            stderr=log_handle,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    finally:
-        log_handle.close()
-    with _lock:
-        _server_process = process
-        _last_error = ""
-    _invalidate_probe()
-    deadline = time.monotonic() + 20.0
-    while time.monotonic() < deadline:
-        if status(force=True).get("server_running"):
+    global _server_process, _server_url, _last_error, _server_desired_running
+    global _inference_probe_at, _inference_probe_result
+    with _lifecycle_lock:
+        with _lock:
+            _server_desired_running = True
+            process = _server_process
+        if process is not None and process.poll() is None:
             return status(force=True)
-        if process.poll() is not None:
-            raise OSError(f"本地视觉服务启动失败，退出码：{process.returncode}")
-        time.sleep(0.25)
-    raise TimeoutError("本地视觉服务启动超时")
+        executable = _ollama_executable()
+        if not installation_status()["runtime_installed"]:
+            raise FileNotFoundError(f"本地视觉运行器不存在：{executable}")
+        settings.local_vision_dir.mkdir(parents=True, exist_ok=True)
+        _models_dir().mkdir(parents=True, exist_ok=True)
+        _server_url = _available_server_url()
+        _inference_probe_at = 0.0
+        _inference_probe_result = {}
+        log_path = settings.local_vision_dir / "ollama.log"
+        try:
+            with log_path.open("ab") as log_handle:
+                process = subprocess.Popen(
+                    [str(executable), "serve"], cwd=str(executable.parent), env=_runtime_env(),
+                    stdout=log_handle, stderr=log_handle,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            with _lock:
+                _server_process = process
+                _last_error = ""
+            _invalidate_probe()
+            deadline = time.monotonic() + 20.0
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    raise OSError(f"本地视觉服务启动失败，退出码：{process.returncode}。请查看 {log_path}")
+                current = status(force=True)
+                if current["server_running"] and process.poll() is None:
+                    return current
+                time.sleep(0.25)
+            raise TimeoutError(f"本地视觉服务启动超时，请查看 {log_path}")
+        except (OSError, RuntimeError) as exc:
+            _last_error = str(exc)
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+            with _lock:
+                _server_process = None
+            _server_url = ""
+            _invalidate_probe()
+            raise
 
 
 def unload_model() -> dict[str, Any]:
-    current = status(force=True)
-    if current.get("server_running") and current.get("model_installed"):
-        try:
-            _request_json(
-                "/api/generate",
-                method="POST",
-                payload={"model": DEFAULT_MODEL, "prompt": "", "keep_alive": 0, "stream": False},
-                timeout=20.0,
-            )
-        except (OSError, ValueError, httpx.HTTPError):
-            pass
-    _invalidate_probe()
-    return status(force=True)
+    global _inference_probe_at, _inference_probe_result
+    with _lifecycle_lock:
+        current = status(force=True)
+        if current.get("owned_server") and current.get("server_running") and current.get("model_available"):
+            try:
+                _request_json("/api/generate", method="POST",
+                              payload={"model": DEFAULT_MODEL, "prompt": "", "keep_alive": 0, "stream": False},
+                              timeout=20.0)
+            except (OSError, ValueError, httpx.HTTPError):
+                pass
+        _inference_probe_at = 0.0
+        _inference_probe_result = {}
+        _invalidate_probe()
+        return status(force=True)
 
 
 def stop_server() -> dict[str, Any]:
-    global _server_process, _last_error, _server_desired_running
-    unload_model()
-    with _lock:
-        _server_desired_running = False
-        process = _server_process
-        _server_process = None
-    if process is not None and process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=3)
-    _last_error = ""
-    _invalidate_probe()
-    return status(force=True)
+    global _server_process, _pull_process, _server_url, _last_error, _server_desired_running
+    with _lifecycle_lock:
+        unload_model()
+        with _lock:
+            _server_desired_running = False
+            processes = (_pull_process, _server_process)
+            _pull_process = None
+            _server_process = None
+        for process in processes:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+        _server_url = ""
+        _last_error = ""
+        _invalidate_probe()
+        return status(force=True)
 
 
 def restart_server() -> dict[str, Any]:
-    stop_server()
-    return start_server()
+    with _lifecycle_lock:
+        stop_server()
+        return start_server()
 
 
 def start_model_pull() -> dict[str, Any]:
     global _pull_process, _last_error
-    start_server()
-    with _lock:
-        if _pull_process is not None and _pull_process.poll() is None:
+    with _lifecycle_lock:
+        start_server()
+        with _lock:
+            pulling = _pull_process is not None and _pull_process.poll() is None
+        if pulling:
             return status(force=True)
-    log_path = settings.local_vision_dir / "模型下载.log"
-    log_handle = log_path.open("ab")
-    try:
-        process = subprocess.Popen(
-            [str(_ollama_executable()), "pull", DEFAULT_MODEL],
-            cwd=str(_ollama_executable().parent),
-            env=_runtime_env(),
-            stdout=log_handle,
-            stderr=log_handle,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    finally:
-        log_handle.close()
-    with _lock:
-        _pull_process = process
-        _last_error = ""
-    _invalidate_probe()
-    return status(force=True)
+        log_path = settings.local_vision_dir / "模型下载.log"
+        with log_path.open("ab") as log_handle:
+            process = subprocess.Popen(
+                [str(_ollama_executable()), "pull", DEFAULT_MODEL],
+                cwd=str(_ollama_executable().parent), env=_runtime_env(),
+                stdout=log_handle, stderr=log_handle,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        with _lock:
+            _pull_process = process
+            _last_error = ""
+        _invalidate_probe()
+        return status(force=True)
+
+
+def activate() -> dict[str, Any]:
+    with _lifecycle_lock:
+        installed = installation_status()
+        if not all(installed.values()):
+            raise ValueError("本地视觉文件尚未完整安装，请先安装或修复缺失文件。")
+        current = status(force=True)
+        if current["owned_server"] and not current["server_running"]:
+            restart_server()
+        else:
+            start_server()
+        probe_inference(force=True, timeout=90.0)
+        return dependency_status()
 
 
 async def ensure_ready() -> dict[str, Any]:
@@ -356,7 +451,7 @@ async def analyze_image(*, prompt: str, image: bytes, system_prompt: str) -> Com
     }
     try:
         async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
-            response = await client.post(f"{DEFAULT_URL}/api/chat", json=payload)
+            response = await client.post(f"{_owned_server_url()}/api/chat", json=payload)
             response.raise_for_status()
             data = response.json()
     except (OSError, ValueError, httpx.HTTPError) as exc:

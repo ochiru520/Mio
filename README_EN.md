@@ -20,9 +20,16 @@ The project currently targets single-user Windows installations and is still in 
 
 ## Core Capabilities
 
+### What's new in 0.2
+
+Mio 0.2 adds a dedicated Agent workspace, persistent multi-step tasks, ComfyUI workflow discovery/import/research/execution, native file and folder selection, and per-mode model policies. Chat stays focused on conversation; Agent settings are grouped, task progress fits into a single line above the composer, and image previews show the full image over a blurred background.
+
+This release also fixes missed automatic diaries, proactive messages using the wrong model, local-vision conflicts with existing Ollama installations, and task cancellation, handoff, and concurrent settings issues. See the [0.2 changelog](CHANGELOG_EN.md) for upgrade instructions and current limits.
+
 | Area | Capabilities |
 |---|---|
 | Chat and models | Multiple conversations, OpenAI-compatible providers, Responses and Chat Completions APIs, reasoning levels, token and cost records, image/PDF/Word/text attachments |
+| Agent and creation | Dedicated task workspace, multi-step tool use, pause/resume/cancel, authorized file access, ComfyUI workflow discovery/import/research/execution |
 | Long-term records | SQLite conversations, structured memory, daily state, diary, weekly and monthly reviews, export, backup, and restore |
 | Proactivity | Configurable proactive messages, unfinished-topic follow-up, scheduled diaries and reviews; sensitive or costly automation is disabled by default |
 | Desktop character | Vue main app, independent Live2D companion, chat bubble, actions, expressions, speech lip sync, and playback queue |

@@ -59,6 +59,7 @@ class RuntimeSettingsTest(unittest.TestCase):
             "screen_reaction_timeout_seconds": 24,
             "screen_history_retention_days": 45,
             "screen_history_max_rows": 36000,
+            "backup_max_total_mb": 768,
         })
 
         self.assertEqual(saved["chat_context_max_chars"], 24000)
@@ -75,6 +76,7 @@ class RuntimeSettingsTest(unittest.TestCase):
         self.assertEqual(saved["screen_reaction_timeout_seconds"], 24)
         self.assertEqual(saved["screen_history_retention_days"], 45)
         self.assertEqual(saved["screen_history_max_rows"], 36000)
+        self.assertEqual(saved["backup_max_total_mb"], 768)
         self.assertEqual(load_runtime_settings()["chat_context_max_chars"], 24000)
 
     def test_invalid_or_unknown_values_are_rejected_without_mutating_settings(self) -> None:
@@ -124,6 +126,7 @@ class RuntimeSettingsTest(unittest.TestCase):
             ("screen_reaction_timeout_seconds", 4),
             ("screen_history_retention_days", 0),
             ("screen_history_max_rows", 999),
+            ("backup_max_total_mb", 63),
         ):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, "低于允许范围"):

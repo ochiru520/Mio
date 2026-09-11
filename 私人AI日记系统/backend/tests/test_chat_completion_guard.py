@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import time
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -20,6 +22,8 @@ from app.chat_service import (
 )
 from app.conversation_runtime import ConversationRunCoordinator, RuntimeTraceStore
 from app.llm import CompletionResult
+from app import db
+from app.config import settings
 
 
 def _completion(content: str, *, tokens: int, cost: float) -> CompletionResult:
@@ -48,6 +52,14 @@ def _agent_result(run_id: str) -> AgentLoopResult:
 
 
 class ChatCompletionGuardTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        original = settings.db_path
+        object.__setattr__(settings, 'db_path', Path(directory.name) / 'guard.db')
+        self.addCleanup(object.__setattr__, settings, 'db_path', original)
+        db.init_db()
+
     def test_detects_placeholder_only_replies(self) -> None:
         self.assertTrue(_is_placeholder_only_reply("我想想。"))
         self.assertTrue(_is_placeholder_only_reply("嗯……让我先想一下。"))

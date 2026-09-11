@@ -22,3 +22,10 @@ test('monthly records use a persisted monthly summary endpoint', () => {
   assert.match(records, /renderedMarkdown\(context\.selectedMonthlyReview\.markdown_content\)/)
   assert.match(records, /生成月记/)
 })
+
+test('diary search is wired to records context and ignores stale requests', () => {
+  assert.match(records, /v-model="context\.diarySearch"[\s\S]*@input="context\.scheduleDiarySearch"/)
+  assert.match(app, /provide\('mio-records-page',[\s\S]*diarySearch,[\s\S]*scheduleDiarySearch,/)
+  assert.match(app, /const requestId = \+\+diarySearchRequestId/)
+  assert.match(app, /requestId !== diarySearchRequestId \|\| query !== diarySearch\.value\.trim\(\)/)
+})

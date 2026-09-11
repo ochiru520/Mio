@@ -9,6 +9,11 @@ backend/server.err.log
 backend/importtime-*.txt
 澪_日记网站/
 数据/personal_ai.db
+*.db-wal
+*.db-shm
+*.db-journal
+数据/Agent文件/
+数据/创作/
 数据/*.json
 数据/日记/*.md
 数据/日记版本/
@@ -17,3 +22,4 @@ backend/importtime-*.txt
 数据/Agent附件/
 数据/桌宠/
 数据/dependency-install/
+数据/logs/

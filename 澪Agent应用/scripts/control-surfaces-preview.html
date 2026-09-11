@@ -1,0 +1,13 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>控制面板验收</title></head><body><div id="app"></div><script type="module">
+window.fetch = async (input, options = {}) => {
+  const url = String(input); const path = new URL(url, location.href).pathname;
+  const json = async () => path.includes('/runtime/policies') ? { policies: ['chat','agent','record','proactive','memory','vision','translation','profile'].map((mode, i) => ({ mode, revision: 0, selection: 'follow_chat', model_id: '', reasoning_level: 'inherit', enabled: true })) } : path.includes('/runtime/operations') ? { operations: [{ id: 'op-a', mode: 'agent', purpose: 'run_agent_loop', request_id: 'req-a', status: 'running', calls: [] }] } : path.includes('/runtime/usage') ? { modes: [{ mode: 'agent', calls: 4, prompt_tokens: 1200, completion_tokens: 300, unknown_cost_calls: 1 }] } : path.includes('/privacy/status') ? { active_operations: [{ id: 'op-a', mode: 'agent', purpose: 'run_agent_loop', request_id: 'req-a', status: 'running' }] } : path.includes('/artifacts') ? { artifacts: [{ id: 'artifact-a', name: 'result.png', producer: 'creation', size: 2048, version: 1, url: '/api/artifacts/artifact-a/download' }] } : { settings: {} };
+  if ((options.method || 'GET') === 'PUT') return { ok: true, json: async () => ({ mode: 'agent', revision: 1, selection: 'fixed', model_id: 'model-b', reasoning_level: 'inherit', enabled: true }) };
+  return { ok: true, json };
+};
+const [{createApp,h,reactive}, {default:Strategy}, {default:Timeline}, {default:Artifacts}, {default:Privacy}] = await Promise.all([
+ import('vue'), import('../src/components/ModelStrategyPanel.vue'), import('../src/components/RuntimeTimeline.vue'), import('../src/components/ArtifactLibrary.vue'), import('../src/components/PrivacyOperationsPanel.vue')
+]);
+const context = reactive({ modelOptions: [{ id: 'model-a', display_name: '模型 A' }, { id: 'model-b', display_name: '模型 B' }] });
+createApp({ render: () => h('main', { style: 'max-width:900px;margin:auto;padding:20px' }, [h(Strategy, { modes: ['agent'] }), h(Timeline, { mode: 'agent' }), h(Artifacts), h(Privacy)]) }).provide('mio-settings-page', context).mount('#app');
+</script></body></html>

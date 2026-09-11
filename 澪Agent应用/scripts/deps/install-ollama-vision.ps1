@@ -1,5 +1,5 @@
 ﻿# 一键安装：本地视觉（Ollama + Qwen2.5-VL 3B）
-# 由后端 dependency_installer 调用，独立控制台窗口运行，进度写入 MIO_STATUS_FILE。
+# 由后端后台调用，进度写入 MIO_STATUS_FILE，控制台输出保存到安装日志。
 param()
 
 $ErrorActionPreference = "Stop"
@@ -139,12 +139,14 @@ function Invoke-OllamaPull {
 }
 
 $serverProcess = $null
+$installationFailed = $false
 
 try {
     Write-Host "=== 本地视觉一键安装 ==="
     Write-DepsStatus -Stage "prepare" -Percent 2 -Message "正在准备安装目录"
 
     New-Item -ItemType Directory -Force -Path $visionDir | Out-Null
+    Get-ChildItem Env:OLLAMA_* | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
     $env:OLLAMA_MODELS = $modelsDir
 
     if (-not (Test-Path -LiteralPath $ollamaExe)) {
@@ -174,16 +176,16 @@ try {
     if (-not (Test-OllamaModel)) {
         throw "模型文件校验失败，请重试。"
     }
-    Write-DepsStatus -Stage "done" -Percent 100 -Message "本地视觉安装完成，回到应用点击「重新检查」即可使用" -Done $true
+    Write-DepsStatus -Stage "done" -Percent 100 -Message "本地视觉文件已安装，请回到环境与模型中心启动并验证" -Done $true
     Write-Host "=== 安装完成 ==="
-    Write-Host "回到澪的界面，点击「重新检查」，屏幕观察就能使用本地视觉了。"
+    Write-Host "回到环境与模型中心，点击「启动并验证」。"
 } catch {
+    $installationFailed = $true
     Write-DepsFail -Message ("本地视觉安装失败：" + $_.Exception.Message)
-    Write-Host "按任意键关闭窗口..." 
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 } finally {
     if ($null -ne $serverProcess -and -not $serverProcess.HasExited) {
         try { Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue } catch { }
         try { $serverProcess.WaitForExit(5000) | Out-Null } catch { }
     }
 }
+if ($installationFailed) { exit 1 }

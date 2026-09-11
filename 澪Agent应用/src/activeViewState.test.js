@@ -18,6 +18,16 @@ test('active view report keeps only settings sections', () => {
     section_id: '',
     visible: false,
   })
+  assert.deepEqual(buildActiveViewReport('creation-image'), {
+    view_id: 'creation-image',
+    section_id: '',
+    visible: true,
+  })
+  assert.deepEqual(buildActiveViewReport('creation-video'), {
+    view_id: 'creation-video',
+    section_id: '',
+    visible: true,
+  })
 })
 
 test('active view report rejects unknown views and settings sections', () => {

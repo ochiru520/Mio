@@ -6,6 +6,9 @@ const VALID_VIEW_IDS = new Set([
   'memory',
   'tasks',
   'companion',
+  'creation',
+  'creation-image',
+  'creation-video',
   'settings',
   'stats',
 ])

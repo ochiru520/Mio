@@ -6,11 +6,19 @@ $ErrorActionPreference = "Stop"
 
 $AppRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkspaceRoot = Split-Path -Parent $AppRoot
-$BackendRoot = Get-ChildItem -LiteralPath $WorkspaceRoot -Directory |
-    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "backend\app") } |
-    Select-Object -First 1 -ExpandProperty FullName
+$BackendCandidates = @(Get-ChildItem -LiteralPath $WorkspaceRoot -Directory |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "backend\app") })
+$BackendRoot = if ($env:MIO_BACKEND_PROJECT_ROOT) {
+    (Resolve-Path -LiteralPath $env:MIO_BACKEND_PROJECT_ROOT).Path
+} else {
+    $PreferredBackendName = -join ([char[]]@(0x79c1,0x4eba,0x41,0x49,0x65e5,0x8bb0,0x7cfb,0x7edf))
+    $preferred = @($BackendCandidates | Where-Object { $_.Name -eq $PreferredBackendName })
+    $withPython = @($BackendCandidates | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "backend\.venv\Scripts\python.exe") })
+    $selected = if ($preferred.Count -eq 1) { $preferred[0] } elseif ($withPython.Count -eq 1) { $withPython[0] } elseif ($BackendCandidates.Count -eq 1) { $BackendCandidates[0] } else { $null }
+    if ($selected) { $selected.FullName } else { $null }
+}
 if (-not $BackendRoot) {
-    throw "Mio backend project was not found."
+    throw "Mio backend project is ambiguous. Set MIO_BACKEND_PROJECT_ROOT to the intended project directory."
 }
 $BackendRoot = Join-Path $BackendRoot "backend"
 $PythonExe = if ($env:MIO_BACKEND_PYTHON) { $env:MIO_BACKEND_PYTHON } else { Join-Path $BackendRoot ".venv\Scripts\python.exe" }

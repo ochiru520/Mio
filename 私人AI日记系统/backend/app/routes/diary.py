@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from .. import db
+from ..model_runtime import operation
 from ..config import settings
 from ..llm import LLMConfigError, call_chat_completion
 from ..life_loop_service import diary_lifecycle
@@ -62,6 +63,13 @@ def _diary_export_entries(rows) -> list[tuple[str, str]]:
 def _diary_model_id() -> str:
     """Resolve the configured default profile instead of sending an empty ID."""
     profiles = [profile for profile in list_model_profiles() if profile.base_urls and profile.api_key]
+    from ..model_runtime import model_selection
+    requested, _ = model_selection("record")
+    if requested and requested != "auto":
+        selected = next((profile for profile in profiles if profile.id == requested), None)
+        if selected is None:
+            raise LLMConfigError("日记专用模型不可用，请在日记设置中重新选择模型并检查供应商密钥。")
+        return selected.id
     selected = next((profile for profile in profiles if profile.is_default), None)
     if selected is None and profiles:
         selected = profiles[0]
@@ -186,6 +194,7 @@ def save_diary_markdown(
     }
 
 
+@operation("record", automatic=True)
 async def edit_diary_with_instruction(date: str, instruction: str) -> dict[str, str]:
     date = normalize_diary_date(date)
     diary = db.get_diary(date)
@@ -316,7 +325,11 @@ async def generate_today_diary_payload() -> dict[str, str]:
     return await generate_diary_for_date_payload(db.today_string(), overwrite=True)
 
 
+@operation("record", automatic=True)
 async def generate_diary_for_date_payload(date: str, overwrite: bool = True) -> dict[str, str]:
+    from ..agent_task_service import automatic_work_paused
+    if automatic_work_paused():
+        raise HTTPException(status_code=409, detail="隐私暂停中，日记生成已停止。")
     date = normalize_diary_date(date)
     existing = db.get_diary(date)
     if existing is not None and not overwrite:
@@ -354,6 +367,12 @@ async def generate_diary_for_date_payload(date: str, overwrite: bool = True) -> 
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    if automatic_work_paused():
+        raise HTTPException(status_code=409, detail="隐私暂停中，日记生成已停止。")
+    # A manual save may have completed while the model request was awaiting.
+    # No await is allowed between this check and the synchronous save below.
+    if not overwrite and db.get_diary(date) is not None:
+        return {"date": date, "skipped": True, "overwritten": False}
     markdown_content, auto_tags = _extract_tags(markdown_content)
     result = save_diary_markdown(
         date,
@@ -373,6 +392,18 @@ async def generate_diary_for_date_payload(date: str, overwrite: bool = True) -> 
 @router.get("/api/diaries")
 async def api_list_diaries(q: str = Query(default="")):
     return [dict(row) for row in db.search_diaries(q)]
+
+
+@router.get("/api/diary/automatic")
+async def automatic_diary_status():
+    from ..daily_diary_service import get_daily_diary_status
+    return get_daily_diary_status()
+
+
+@router.post("/api/diary/automatic/check")
+async def retry_automatic_diary():
+    from ..daily_diary_service import request_check
+    return request_check()
 
 
 @router.put("/api/diaries/{date}")

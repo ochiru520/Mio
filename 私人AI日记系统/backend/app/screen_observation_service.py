@@ -15,6 +15,7 @@ from . import companion_service, db, local_vision_service, pet_event_service, sy
 from .auto_router import select_auto_route
 from .chat_service import ChatResult, replies_for_source
 from .config import settings
+from .model_runtime import operation, OperationStopped
 from .cost_reconciliation_service import queue_cost_reconciliation
 from .llm import (
     CompletionResult,
@@ -1212,6 +1213,7 @@ def _game_event_can_open(
     return seconds_since_last_speech >= max(minimum_gap, float(cooldown_seconds))
 
 
+@operation("vision", automatic=True, persist=False)
 async def analyze_once(
     *,
     force: bool = False,
@@ -2063,6 +2065,8 @@ async def observation_loop() -> None:
     while True:
         try:
             await analyze_once()
+        except OperationStopped:
+            pass
         except asyncio.CancelledError:
             raise
         except Exception as exc:

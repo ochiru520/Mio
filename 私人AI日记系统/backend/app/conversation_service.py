@@ -55,7 +55,14 @@ def list_conversations() -> list[dict[str, object]]:
         "updated_at": str(pet_last["created_at"] or "") if pet_last else "",
     }]
     conversations.extend(
-        {**dict(row), "kind": "desktop"}
+        {
+            **dict(row),
+            "kind": (
+                "agent"
+                if str(row["id"] or "").startswith("desktop_agent_")
+                else "desktop"
+            ),
+        }
         for row in db.list_agent_conversations()
         if str(row["id"] or "") not in {primary_id, DESKTOP_PET_CONVERSATION_ID}
     )
@@ -91,8 +98,21 @@ def _agent_tool_receipts(run, steps: list[object] | None = None) -> list[dict[st
             result = {}
         if not result and isinstance(previous.get("result"), dict):
             result = dict(previous["result"])
+        tool_name = str(row["tool_name"] or previous.get("tool_name") or "")
+        if tool_name in {
+            "comfyui_generate_image",
+            "comfyui_generate_video",
+            "remote_generate_image",
+        }:
+            saved_job = result.get("job") if isinstance(result, dict) else None
+            job_id = str(saved_job.get("id") or "") if isinstance(saved_job, dict) else ""
+            if job_id:
+                from .creation_service import get_job
+
+                if current_job := get_job(job_id):
+                    result["job"] = current_job
         receipts.append({
-            "tool_name": str(row["tool_name"] or previous.get("tool_name") or ""),
+            "tool_name": tool_name,
             "status": str(row["status"] or previous.get("status") or "failed"),
             "result": result,
             "step_id": step_id,

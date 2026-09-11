@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import db
+from .model_runtime import OperationStopped
 from .config import settings
 from .review_service import generate_review_for_date
 from .routes.onebot import send_private_message
@@ -81,6 +82,8 @@ async def daily_review_loop() -> None:
     while True:
         try:
             await run_daily_review_once()
+        except OperationStopped:
+            pass
         except asyncio.CancelledError:
             raise
         except Exception:

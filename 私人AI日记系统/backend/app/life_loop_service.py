@@ -168,9 +168,8 @@ def build_follow_up_result_context(conversation_id: str, limit: int = 6) -> str:
         detail = item["summary"] or "用户没有补充说明"
         adjustment = f"；后续调整={item['adjustment']}" if item["adjustment"] else ""
         next_time = f"；下次跟进={item['next_follow_up_after']}" if item["next_follow_up_after"] else ""
-        lines.append(
-            f"- {item['thread_content']}：结果={item['outcome_label']}；反馈={detail}{adjustment}{next_time}"
-        )
+        recorded_at = f"；结果记录于={item['created_at']}" if item["created_at"] else ""
+        lines.append(f"- {item['thread_content']}：结果={item['outcome_label']}；反馈={detail}{adjustment}{next_time}{recorded_at}")
     return (
         "最近的现实行动回访：\n"
         + "\n".join(lines)

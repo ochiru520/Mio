@@ -140,6 +140,21 @@ function addNaturalMemory() {
   context.addStructuredMemory()
 }
 
+function memoryTimeLabel(memory) {
+  const statusLabels = {
+    current: '当前仍有效', historical: '历史事件', planned: '未来计划',
+    enduring: '长期有效', time_unknown: '发生时间未确认',
+  }
+  const parts = [statusLabels[memory?.temporal_status] || '时间状态未确认']
+  if (memory?.occurred_at) parts.push(`发生于 ${context.formatShortTime(memory.occurred_at)}`)
+  else if (memory?.learned_at) parts.push(`于 ${context.formatShortTime(memory.learned_at)} 得知`)
+  if (memory?.valid_from || memory?.valid_until) {
+    parts.push(`有效期 ${memory.valid_from ? context.formatShortTime(memory.valid_from) : '未知'} 至 ${memory.valid_until ? context.formatShortTime(memory.valid_until) : '未结束'}`)
+  }
+  if (memory?.last_confirmed_at) parts.push(`最后确认 ${context.formatShortTime(memory.last_confirmed_at)}`)
+  return parts.join(' · ')
+}
+
 function startDiaryEdit() {
   if (!context.selectedDiary) return
   diaryDraft.value = {
@@ -166,10 +181,21 @@ async function saveDiaryEdit() {
       <button type="button" :class="{ active: recordMode === 'growth' }" @click="chooseRecordMode('growth')"><ChartNoAxesCombined :size="16" />成长报告</button>
     </nav>
 
+    <div v-if="recordMode === 'daily' && context.autoDiaryStatus" class="auto-diary-status" :class="{ error: context.autoDiaryStatus.result === 'error' }" role="status">
+      <div><strong>{{ context.autoDiaryStatusLabel }}</strong>
+        <p v-if="context.autoDiaryStatus.error">{{ context.autoDiaryStatus.error }}</p>
+        <small v-if="context.autoDiaryStatus.retry_after_seconds > 0">约 {{ Math.ceil(context.autoDiaryStatus.retry_after_seconds / 60) }} 分钟后重试；更新模型设置后会重新检查。</small>
+        <small v-else-if="context.autoDiaryStatus.pending_dates?.length">还有 {{ context.autoDiaryStatus.pending_dates.length }} 天待补写，已有日记不会覆盖。</small>
+      </div>
+      <div class="auto-diary-actions">
+        <button v-if="context.autoDiaryStatus.enabled && context.autoDiaryStatus.result !== 'paused'" type="button" :disabled="context.autoDiaryStatus.busy" @click="context.retryAutoDiary()">{{ context.autoDiaryStatus.busy ? '正在生成' : '检查补写' }}</button>
+        <button type="button" @click="context.openDiarySettings()">日记设置</button>
+      </div>
+    </div>
     <div v-if="recordMode === 'daily'" :class="['record-reader-layout', { collapsed: !dateRailExpanded }]">
       <aside class="record-date-rail">
         <header><span>全部日记</span><button type="button" :title="dateRailExpanded ? '收起日期栏' : '展开日期栏'" @click="dateRailExpanded = !dateRailExpanded"><component :is="dateRailExpanded ? PanelLeftClose : PanelLeftOpen" :size="15" /></button></header>
-        <label v-if="dateRailExpanded" class="record-search"><Search :size="14" /><input v-model="context.diarySearch" type="search" placeholder="搜索日记" @input="context.loadDiaries" /></label>
+        <label v-if="dateRailExpanded" class="record-search"><Search :size="14" /><input v-model="context.diarySearch" type="search" placeholder="搜索日记" @input="context.scheduleDiarySearch" /></label>
         <div class="record-date-list">
           <button v-for="diary in context.diaries" :key="diary.date" type="button" :class="{ active: context.selectedDiary?.date === diary.date }" @click="context.openDiary(diary.date)">
             <time>{{ dateRailExpanded ? diary.date : diary.date.slice(5) }}</time>
@@ -228,7 +254,7 @@ async function saveDiaryEdit() {
       <section class="memory-understanding"><span>{{ context.mioDisplayName }}现在怎样认识你</span><p v-if="context.memoryData.structured?.length">{{ context.memoryData.structured.slice(0, 5).map((item) => item.content).join('；') }}</p><p v-else>还没有形成稳定的长期认识</p></section>
       <form class="memory-natural-add" @submit.prevent="addNaturalMemory"><select v-model="context.newStructuredMemory.category"><option v-for="item in memoryCategories" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select><input v-model="context.newStructuredMemory.content" :placeholder="`用一句自然的话告诉${context.mioDisplayName}要记住什么`" /><button type="submit" :disabled="Boolean(context.memoryBusy)"><Plus :size="15" />记住</button></form>
       <section v-if="pendingCandidates.length" class="memory-candidate-panel"><header><strong>等待你确认</strong><span>{{ pendingCandidates.length }} 条</span></header><article v-for="memory in pendingCandidates" :key="memory.id"><p>{{ memory.content }}</p><div><button type="button" @click="context.rejectMemoryCandidate(memory)">忽略</button><button type="button" class="primary-button" @click="context.confirmMemoryCandidate(memory)">确认记住</button></div></article></section>
-      <div v-if="groupedMemories.length" class="memory-category-grid"><section v-for="group in groupedMemories" :key="group.id"><header><strong>{{ group.label }}</strong><span>{{ group.items.length }}</span></header><article v-for="memory in group.items" :key="memory.id"><p>{{ memory.content }}</p><div class="memory-item-actions"><details><summary>查看依据</summary><span>来源：{{ memory.source_conversation_id || '手动记录' }}<template v-if="memory.source_message_id"> · 消息 #{{ memory.source_message_id }}</template><br />置信度：{{ Math.round(Number(memory.confidence || 0) * 100) }}% · {{ context.memoryLayerLabel(memory.layer) }}</span></details><button type="button" @click="context.editStructuredMemory(memory)">编辑</button><button type="button" title="忘记" @click="context.archiveStructuredMemory(memory)"><Trash2 :size="14" /></button></div></article></section></div>
+      <div v-if="groupedMemories.length" class="memory-category-grid"><section v-for="group in groupedMemories" :key="group.id"><header><strong>{{ group.label }}</strong><span>{{ group.items.length }}</span></header><article v-for="memory in group.items" :key="memory.id"><p>{{ memory.content }}</p><small>{{ memoryTimeLabel(memory) }}</small><div class="memory-item-actions"><details><summary>查看依据</summary><span>来源：{{ memory.source_conversation_id || '手动记录' }}<template v-if="memory.source_message_id"> · 消息 #{{ memory.source_message_id }}</template><br />置信度：{{ Math.round(Number(memory.confidence || 0) * 100) }}% · 时间置信度：{{ Math.round(Number(memory.time_confidence || 0) * 100) }}% · {{ context.memoryLayerLabel(memory.layer) }}</span></details><button type="button" @click="context.editStructuredMemory(memory)">编辑</button><button type="button" title="忘记" @click="context.archiveStructuredMemory(memory)"><Trash2 :size="14" /></button></div></article></section></div>
       <div v-else class="reader-empty compact-reader-empty"><Archive :size="30" /><strong>{{ context.mioDisplayName }}还没有形成长期记忆</strong></div>
       <details v-if="restorableMemoryHistory.length" class="memory-version-history">
         <summary><History :size="15" />历史版本 <span>{{ restorableMemoryHistory.length }}</span></summary>
@@ -271,3 +297,17 @@ async function saveDiaryEdit() {
     </section>
   </section>
 </template>
+
+<style scoped>
+.records-hub { display: flex; flex-direction: column; }
+.record-mode-tabs { flex-shrink: 0; }
+.record-reader-layout, .period-record-layout { flex: 1; height: auto; min-height: 0; }
+.auto-diary-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 18px; border-bottom: 1px solid var(--border-color, #e7dfe4); font-size: 12px; flex-shrink: 0; }
+.auto-diary-status > div:first-child { flex: 1; min-width: 180px; overflow-wrap: anywhere; }
+.auto-diary-status p { margin: 5px 0; }
+.auto-diary-status small { display: block; margin-top: 4px; opacity: .8; }
+.auto-diary-status.error { background: #fff3f0; color: #8d3c30; }
+.auto-diary-actions { display: flex; gap: 8px; }
+.auto-diary-actions button { padding: 6px 10px; border: 1px solid var(--border-color, #e7dfe4); border-radius: 6px; background: var(--surface-color, #fff); color: inherit; cursor: pointer; }
+.auto-diary-actions button:disabled { opacity: .5; cursor: default; }
+</style>

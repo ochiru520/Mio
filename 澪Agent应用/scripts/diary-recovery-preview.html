@@ -1,0 +1,20 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>日记恢复验收</title></head><body><div id="app"></div><script type="module">
+import {createApp,h,reactive} from 'vue'
+import Records from '../src/components/RecordsPage.vue'
+import Settings from '../src/components/SettingsPage.vue'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+const context=reactive({
+ activeView:'diaries',diaries:[{date:'2026-09-04',title:'验收日记',markdown_content:'保留的内容',daily_thirty_status:'done'}],selectedDiary:null,diarySearch:'',
+ autoDiaryStatus:{enabled:true,result:'error',error:'模型供应商鉴权失败（HTTP 401），请检查该供应商的 API Key 和模型访问权限；备用路线也未返回有效回复。',retry_after_seconds:300,pending_dates:['2026-09-05'],busy:false},
+ autoDiaryStatusLabel:'09-05 自动生成失败', statusLabel:()=> '已完成',
+ activeSettingsSection:'diary',activeSettingsItem:{label:'日记与成长',description:'日记设置'},settingsFeedback:{section:''},runtimeSettingsReady:true,runtimeSettingsDraft:{daily_diary_model_id:'',daily_diary_auto_enabled:true,daily_diary_check_seconds:60},
+ modelOptions:[{id:'model-a',provider_name:'供应商甲',display_name:'模型 A'},{id:'model-b',provider_name:'供应商乙',display_name:'模型 B'}],
+ isSettingsSectionDirty:()=>true,saveActiveSettings:()=>{window.savedModel=context.runtimeSettingsDraft.daily_diary_model_id},resetActiveSettings:()=>{},
+ openDiarySettings:()=>{context.activeView='settings'},retryAutoDiary:()=>{window.retryCount=(window.retryCount||0)+1;context.autoDiaryStatus.busy=true;context.autoDiaryStatus.error='';context.autoDiaryStatus.result='generating';context.autoDiaryStatusLabel='正在补写 09-05 的日记'},
+ scheduleDiarySearch:()=>{},openDiary:()=>{},
+})
+window.diaryContext=context
+createApp({render:()=>h('div',{class:'app-shell integrated-shell',style:'height:100vh;display:block;padding:32px 24px'},[h('main',{style:'height:100%;overflow:auto'},[h(context.activeView==='settings'?Settings:Records)])])})
+.provide('mio-records-page',context).provide('mio-settings-page',context).mount('#app')
+</script></body></html>

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Agent UI verification</title></head>
+<body><div id="app"></div><script type="module">
+import { createApp, h, reactive } from 'vue'
+import Settings from '../src/components/AgentSettingsPage.vue'
+import Tasks from '../src/components/AgentTasksPage.vue'
+import Home from '../src/components/AgentHomePage.vue'
+import Creation from '../src/components/CreationPage.vue'
+import Dependencies from '../src/components/DependencyCenter.vue'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+const view = new URLSearchParams(location.search).get('view') || 'settings'
+const components = { settings: Settings, tasks: Tasks, home: Home, creation: Creation, dependencies: Dependencies }
+const context = reactive({ selectedModel: 'test-model', modelGroups: [{ provider_id: 'test', provider: 'Test', models: [{ id: 'test-model', display_name: 'Agent 验证模型' }] }], reasoningLevel: 'high', activeReasoningOptions: [{ id: 'high', label: '高' }, { id: 'medium', label: '中' }] })
+context.chooseModel = value => { context.selectedModel = value }
+context.chooseReasoning = value => { context.reasoningLevel = value }
+createApp({
+  render: () => h('div', { class: `app-shell integrated-shell agent-workspace-shell active-view-${view}` }, [
+    h('header', { class: 'integrated-titlebar' }, [h('strong', { style: 'grid-column:2;padding:12px' }, 'Mio Agent')]),
+    h('aside', { class: 'integrated-sidebar', style: 'padding-top:16px' }, [h('img', { src: '/mio-avatar.png', alt: 'Mio', style: 'width:38px;height:38px;border-radius:50%;margin:auto' })]),
+    h('main', { class: 'workspace integrated-workspace' }, [h(components[view], { onNavigate: value => { window.lastNavigation = value }, onOpenSettings: () => { window.lastNavigation = 'settings' } })]),
+    h('aside', { class: 'integrated-right-rail' }),
+  ]),
+}).provide('mio-chat-page', context).mount('#app')
+</script></body></html>

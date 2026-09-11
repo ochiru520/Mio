@@ -32,6 +32,10 @@ TOOL_TASK_RE = re.compile(
 WEB_TASK_RE = re.compile(
     r"(?:联网|上网|搜索|搜一下|查一下|查查|官网|网页|新闻|热搜|天气|汇率|股价|票价|实时|最新)"
 )
+CREATION_TASK_RE = re.compile(
+    r"(?:生成|画|绘制|制作|做|让).{0,24}(?:图片|图像|立绘|插画|头像|视频|动画)|"
+    r"(?:图片|图像|立绘|插画|视频|动画).{0,12}(?:生成|绘制|制作|做|动起来)"
+)
 HIGH_RISK_RE = re.compile(r"删除|覆盖|公开|发送给|修改人格|供应商|启动观察|持续监听")
 
 
@@ -153,13 +157,15 @@ def build_task_profile(
         text_attachment_chars=text_attachment_chars,
     )
     lower = topic.lower()
-    requires_tools = bool(TOOL_TASK_RE.search(topic) or WEB_TASK_RE.search(topic))
+    requires_tools = bool(TOOL_TASK_RE.search(topic) or WEB_TASK_RE.search(topic) or CREATION_TASK_RE.search(topic))
     if image_count:
         task_type = "vision"
     elif text_attachment_chars:
         task_type = "document"
     elif any(marker in lower for marker in CODE_MARKERS) or any(item in topic for item in ("代码", "调试", "架构", "数据库", "接口")):
         task_type = "technical"
+    elif CREATION_TASK_RE.search(topic):
+        task_type = "creation"
     elif requires_tools:
         task_type = "agent_tool"
     elif any(item in topic for item in ("分析", "比较", "区别", "判断", "评估", "建议", "计划", "总结", "解释")):

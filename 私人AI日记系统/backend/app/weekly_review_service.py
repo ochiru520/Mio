@@ -8,6 +8,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import db
+from .model_runtime import operation, OperationStopped
 from .config import settings
 from .llm import call_chat_completion
 from .prompts import build_weekly_review_messages
@@ -82,6 +83,7 @@ def _build_day_sections(week_start: str) -> tuple[str, int]:
     return "\n\n".join(sections), diary_count
 
 
+@operation("record", automatic=True)
 async def generate_weekly_review(week_start: str, overwrite: bool = True) -> WeeklyReviewResult:
     week_end = week_end_for(week_start)
     existing = db.get_weekly_review(week_start)
@@ -100,6 +102,9 @@ async def generate_weekly_review(week_start: str, overwrite: bool = True) -> Wee
     messages = build_weekly_review_messages(week_start, week_end, day_sections)
     markdown_content = await call_chat_completion(messages, temperature=0.35)
     markdown_content = markdown_content.replace("**", "").strip()
+    existing = db.get_weekly_review(week_start)
+    if not overwrite and existing is not None:
+        return WeeklyReviewResult(week_start, week_end, str(existing["markdown_content"]), False)
     db.upsert_weekly_review(week_start, markdown_content)
     return WeeklyReviewResult(
         week_start=week_start,
@@ -155,6 +160,8 @@ async def weekly_review_loop() -> None:
     while True:
         try:
             await run_weekly_review_once()
+        except OperationStopped:
+            pass
         except asyncio.CancelledError:
             raise
         except Exception:

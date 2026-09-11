@@ -49,6 +49,13 @@ class StructuredMemoryRequest(BaseModel):
     content: str = Field(min_length=1, max_length=800)
     confidence: float = Field(default=1.0, ge=0, le=1)
     conversation_id: str = Field(default="default", max_length=120)
+    occurred_at: str = Field(default="", max_length=40)
+    learned_at: str = Field(default="", max_length=40)
+    valid_from: str = Field(default="", max_length=40)
+    valid_until: str = Field(default="", max_length=40)
+    last_confirmed_at: str = Field(default="", max_length=40)
+    time_confidence: float = Field(default=0.0, ge=0, le=1)
+    temporal_status: str = Field(default="", max_length=20)
 
 
 def _normalize_follow_up(value: str) -> str:
@@ -168,6 +175,13 @@ async def api_create_memory_item(payload: StructuredMemoryRequest):
             content=payload.content,
             source_conversation_id=payload.conversation_id.strip() or "default",
             confidence=payload.confidence,
+            occurred_at=payload.occurred_at,
+            learned_at=payload.learned_at,
+            valid_from=payload.valid_from,
+            valid_until=payload.valid_until,
+            last_confirmed_at=payload.last_confirmed_at,
+            time_confidence=payload.time_confidence,
+            temporal_status=payload.temporal_status,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

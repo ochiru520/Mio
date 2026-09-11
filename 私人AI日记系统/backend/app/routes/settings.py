@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from .. import companion_service
-from ..config import load_runtime_settings, save_runtime_settings, settings
+from ..config import load_runtime_settings, save_runtime_settings, settings, runtime_settings_snapshot, update_runtime_settings_snapshot, SettingsConflictError
 from ..documents import load_manual_statuses
 from ..llm import config_status
 from ..mio_profile import load_mio_profile, save_mio_profile_from_settings
@@ -29,18 +29,20 @@ class WebSearchTestRequest(BaseModel):
 
 @router.get("/api/settings/runtime")
 async def runtime_settings_api():
-    return {"settings": await asyncio.to_thread(load_runtime_settings)}
+    return await asyncio.to_thread(runtime_settings_snapshot)
 
 
 @router.patch("/api/settings/runtime")
-async def update_runtime_settings_api(changes: dict[str, object]):
+async def update_runtime_settings_api(changes: dict[str, object], request: Request):
     try:
-        values = await asyncio.to_thread(save_runtime_settings, changes)
+        result = await asyncio.to_thread(update_runtime_settings_snapshot, changes, request.headers.get("if-match"))
+    except SettingsConflictError as exc:
+        raise HTTPException(status_code=409, detail={"code": "settings_conflict", "message": str(exc)}) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"运行设置保存失败：{exc}") from exc
-    return {"settings": values}
+    return result
 
 
 @router.post("/api/settings/web-search/test")

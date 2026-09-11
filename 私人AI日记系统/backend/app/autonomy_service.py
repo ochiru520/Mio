@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from contextlib import closing
 import logging
 import random
 import uuid
@@ -10,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import db
+from .model_runtime import operation, OperationStopped
 from .config import settings
 
 
@@ -261,6 +263,13 @@ def collect_scheduled_proactive_events(now: datetime | None = None) -> int:
             next_prompt_at = _parse_time(state["next_prompt_at"]) or (last_message_at + _proactive_interval())
             last_prompt_at = str(state["last_prompt_at"] or "")
         if current < next_prompt_at:
+            continue
+        with closing(db.get_conn()) as conn, conn:
+            outstanding = conn.execute(
+                "SELECT 1 FROM agent_events WHERE event_type='proactive_checkin_due' AND conversation_id=? AND status IN ('pending','claimed') LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+        if outstanding:
             continue
         idle_minutes = max(0, int((current - last_message_at).total_seconds() // 60))
         if idle_minutes < max(1, int(settings.qq_proactive_min_idle_minutes)):
@@ -573,6 +582,14 @@ def _decision(event: dict[str, object], goal: dict[str, object], current: dateti
             return {"decision": "ignore", "reason": "夜间收尾事件已经错过有效时段。"}
         if event_logical_date and event_logical_date != current_logical_date:
             return {"decision": "ignore", "reason": "夜间收尾事件属于上一记录日，已经过期。"}
+    if event.get("event_type") == "proactive_checkin_due":
+        if not _in_proactive_window(current):
+            return {"decision": "ignore", "reason": "主动联系事件已经错过允许时段。"}
+        scheduled_user_at = _parse_time(str(payload.get("last_user_message_at") or ""))
+        latest = db.get_last_message(conversation_id=str(event.get("conversation_id") or ""), role="user")
+        latest_at = _parse_time(str(latest["created_at"])) if latest is not None else None
+        if scheduled_user_at and latest_at and latest_at > scheduled_user_at:
+            return {"decision": "ignore", "reason": "用户已继续聊天，原来的安静时段联系已失效。"}
     if (
         capability == "proactive_checkin"
         and settings.qq_bot_enabled
@@ -757,6 +774,7 @@ async def _generate_scheduled_behavior(event: dict[str, object]):
     )
 
 
+@operation("proactive", automatic=True)
 async def process_claimed_event(row: object, now: datetime | None = None) -> dict[str, object]:
     current = now or _now()
     event = public_event(row)
@@ -805,6 +823,19 @@ async def process_claimed_event(row: object, now: datetime | None = None) -> dic
         generated = await _generate_scheduled_behavior(event)
     except Exception as exc:
         reason = f"到点后模型生成主动消息失败：{exc}"
+        payload = dict(event.get("payload") or {})
+        failures = int(payload.get("generation_failures") or 0) + 1
+        if failures < 3:
+            payload["generation_failures"] = failures
+            retry_at = (current + timedelta(minutes=5 * failures)).isoformat(timespec="seconds")
+            with closing(db.get_conn()) as conn, conn:
+                changed = conn.execute(
+                    "UPDATE agent_events SET status='pending',available_at=?,payload_json=?,error=?,decision_reason=?,claim_token='',claimed_at='',updated_at=? WHERE id=? AND status='claimed'",
+                    (retry_at, json.dumps(payload, ensure_ascii=False), str(exc)[:1000], reason[:2000], db.now_iso(), int(event["id"])),
+                ).rowcount
+            if changed:
+                logger.warning("主动消息生成失败，已安排有限重试：event_id=%s retry_at=%s", event["id"], retry_at)
+                return {"event_id": event["id"], "decision": "retry", "reason": reason, "available_at": retry_at}
         db.finish_agent_event(int(event["id"]), "failed", reason=reason, error=str(exc)[:1000])
         logger.exception("主动消息模型生成失败：event_id=%s", event["id"])
         return {"event_id": event["id"], "decision": "failed", "reason": reason}
@@ -875,6 +906,9 @@ async def process_claimed_event(row: object, now: datetime | None = None) -> dic
 
 
 async def process_once(now: datetime | None = None, *, limit: int = 20) -> list[dict[str, object]]:
+    from .model_runtime import privacy_blocked
+    if privacy_blocked():
+        return []
     current = now or _now()
     results: list[dict[str, object]] = []
     stale_before = current - timedelta(minutes=5)
@@ -889,6 +923,9 @@ async def process_once(now: datetime | None = None, *, limit: int = 20) -> list[
             break
         try:
             results.append(await process_claimed_event(row, current))
+        except OperationStopped:
+            db.reschedule_agent_event(int(row["id"]), (current + timedelta(minutes=5)).isoformat(timespec="seconds"), "操作已停止，恢复后重新检查。")
+            break
         except Exception as exc:
             db.finish_agent_event(int(row["id"]), "failed", error=str(exc)[:1000])
             logger.exception("自主事件处理失败：event_id=%s", row["id"])
@@ -943,6 +980,8 @@ async def autonomy_loop() -> None:
             await proactive_service.maintain_qq_connection_once()
             if proactive_service.desktop_app_is_active():
                 await run_autonomy_cycle()
+        except OperationStopped:
+            pass
         except asyncio.CancelledError:
             raise
         except Exception:

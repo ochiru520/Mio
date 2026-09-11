@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from .config import settings
 from .model_registry import list_model_profiles
 from .napcat_service import _incomplete_napcat_shells, _napcat_launchers
+from .ollama_model_files import manifest_complete as _ollama_manifest_complete
 
 
 MINIMUM_FREE_BYTES = 1024**3
@@ -570,39 +571,9 @@ def _memory_bytes() -> int:
     return int(status.total_physical) if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) else 0
 
 
-def _ollama_manifest_complete(manifest: Path, models_root: Path) -> bool:
-    if not manifest.is_file():
-        return False
-    try:
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
-        return False
-    items: list[object] = [payload.get("config")]
-    layers = payload.get("layers")
-    if isinstance(layers, list):
-        items.extend(layers)
-    checked = 0
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        digest = str(item.get("digest") or "")
-        if not digest.startswith("sha256:"):
-            return False
-        blob = models_root / "blobs" / digest.replace(":", "-")
-        try:
-            expected_size = max(0, int(item.get("size") or 0))
-            if not blob.is_file() or (expected_size and blob.stat().st_size != expected_size):
-                return False
-        except (OSError, TypeError, ValueError):
-            return False
-        checked += 1
-    return checked > 0
-
-
 def _ollama_model_ready(models_root: Path) -> bool:
-    base = models_root / "manifests" / "registry.ollama.ai" / "library" / "qwen2.5vl"
-    candidates = (base / "3b", base / "latest")
-    return any(_ollama_manifest_complete(candidate, models_root) for candidate in candidates)
+    manifest = models_root / "manifests" / "registry.ollama.ai" / "library" / "qwen2.5vl" / "3b"
+    return _ollama_manifest_complete(manifest, models_root)
 
 
 def _windows_label() -> str:
@@ -793,32 +764,12 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
     profiles = list_model_profiles()
     vision_profiles = [profile for profile in profiles if profile.supports_vision]
 
-    # —— 本地视觉：自动探测 ollama.exe + qwen2.5vl 模型 ——
-    ollama_exes = _find_ollama_executables()
-    ollama = ollama_exes[0] if ollama_exes else None
-    ollama_home = (
-        settings.local_vision_dir
-        if (settings.local_vision_dir / "models").is_dir()
-        else (ollama.parent / ".." if ollama else settings.local_vision_dir)
-    )
-    model_ready = _ollama_model_ready(settings.local_vision_dir / "models")
-    if not model_ready:
-        # 在常见 Ollama 模型目录里验证 manifest 引用的每个 blob 都完整存在。
-        for probe in (ollama_home / "models", Path(os.getenv("USERPROFILE", "")) / ".ollama" / "models"):
-            if _ollama_model_ready(probe):
-                model_ready = True
-            if model_ready:
-                break
-    local_vision_probe: dict[str, object] = {}
-    try:
-        from . import local_vision_service
+    # Installation and runtime readiness are separate; discovery never runs inference.
+    from . import local_vision_service
 
-        # Do not start Ollama during onboarding. If it is already running,
-        # perform a bounded real inference check; otherwise report unverified.
-        local_vision_probe = local_vision_service.probe_inference(force=True)
-    except (ImportError, OSError, ValueError, RuntimeError) as exc:
-        local_vision_probe = {"ready": False, "state": "failed", "error": str(exc)}
-    local_vision_ready = ollama is not None and model_ready and bool(local_vision_probe.get("ready"))
+    local_vision = local_vision_service.dependency_status()
+    local_vision_state = str(local_vision["status"])
+    local_recommendation = str(local_vision["detail"])
 
     # —— 本地语音：优先探测 Genie ONNX，兼容旧 GPT-SoVITS ——
     voice_roots = _find_voice_roots()
@@ -885,26 +836,6 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
     else:
         audio_detail = "尚未找到可运行的 faster-whisper 环境与完整本地模型"
 
-    gpu_memory = max((int(item.get("memory_mb") or 0) for item in system.get("gpus", [])), default=0)
-    local_recommendation = "当前已经可以使用"
-    probe_state = str(local_vision_probe.get("state") or "unverified")
-    probe_error = str(local_vision_probe.get("error") or "")
-    if not model_ready:
-        local_recommendation = "模型文件未完整安装，不能进行真实推理"
-    elif probe_state == "oom":
-        local_recommendation = "模型已安装，但当前系统提交内存不足，真实推理会 OOM"
-    elif probe_state == "unverified":
-        local_recommendation = "模型已安装，但 Ollama 未运行，尚未完成真实推理验证"
-    elif not local_vision_ready:
-        local_recommendation = "模型已安装，但真实推理探针失败"
-    if not local_vision_ready and probe_error:
-        local_recommendation += f"：{probe_error[:240]}"
-    if not local_vision_ready:
-        local_recommendation = (
-            "显存达到 6 GB，可按需安装；不会自动下载"
-            if gpu_memory >= 6144
-            else "建议先使用云端视觉；本地视觉需要额外显存与磁盘"
-        )
 
     return [
         _item(
@@ -924,9 +855,9 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
         _item(
             "local_vision",
             "本地视觉模型",
-            "available" if local_vision_ready else ("degraded" if model_ready else "unconfigured"),
+            local_vision_state,
             f"Qwen2.5-VL 3B：{local_recommendation}",
-            action="稍后在屏幕观察设置中安装或选择目录" if not local_vision_ready else "",
+            action="在环境与模型中心安装、启动或验证" if local_vision_state != "available" else "",
         ),
         _item(
             "voice",

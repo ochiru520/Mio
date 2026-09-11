@@ -53,6 +53,14 @@ $runtimeUiKeys = @(
         ForEach-Object { $_.Groups['key'].Value } |
         Sort-Object -Unique
 )
+# Agent creation settings save through their dedicated environment/default APIs.
+$creationSettings = Get-Content -LiteralPath (Join-Path $AgentRoot 'src\components\AgentCreationSettings.vue') -Raw -Encoding UTF8
+$runtimeUiKeys += @(
+    [regex]::Matches($creationSettings, 'v-model="environment\.(?<key>comfyui_root|comfyui_base_url)"') |
+        ForEach-Object { $_.Groups['key'].Value }
+    [regex]::Matches($creationSettings, 'v-model="defaults\.(?<key>image_workflow_id|video_workflow_id)"') |
+        ForEach-Object { 'creation_' + $_.Groups['key'].Value }
+)
 $privateRuntimePathKeys = @(
     [regex]::Match(
         $appContent,

@@ -1,4 +1,6 @@
 <script setup>
+import AgentTasksPage from './components/AgentTasksPage.vue'
+import { executionStatus } from './agentTaskState.js'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
@@ -9,15 +11,31 @@ import OnboardingPage from './components/OnboardingPage.vue'
 const ChatPage = defineAsyncComponent(() => import('./components/ChatPage.vue'))
 const CompanionPage = defineAsyncComponent(() => import('./components/CompanionPage.vue'))
 const HomePage = defineAsyncComponent(() => import('./components/HomePage.vue'))
+const AgentHomePage = defineAsyncComponent(() => import('./components/AgentHomePage.vue'))
+const AgentRightRail = defineAsyncComponent(() => import('./components/AgentRightRail.vue'))
+const AgentSettingsPage = defineAsyncComponent(() => import('./components/AgentSettingsPage.vue'))
 const RecordsPage = defineAsyncComponent(() => import('./components/RecordsPage.vue'))
 const SettingsPage = defineAsyncComponent(() => import('./components/SettingsPage.vue'))
 const TasksPage = defineAsyncComponent(() => import('./components/TasksPage.vue'))
 import { buildTurnVoicePayload, voiceLanguageLabel } from './chatVoice.js'
+import { normalizeLoadedChatSettings } from './chatSettingsState.js'
 import { ACTIVE_VIEW_HEARTBEAT_MS, buildActiveViewReport } from './activeViewState.js'
+import {
+  creationCostLabel,
+  creationLoras,
+  creationProgressPercent,
+  creationPrompt,
+  creationSamplerLabel,
+  creationStatusLabel,
+  creationWorkflowSnapshot,
+  findCreationJob,
+  formatCreationElapsed,
+} from './agentCreationState.js'
 import { bargeInThreshold, bytesToBase64, encodePcmWav } from './petCallAudio.js'
 import { apiRequest } from './services/api.js'
 import { focusModal, restoreModalFocus, trapModalFocus } from './modalFocus.js'
 import * as chatApi from './services/chatApi.js'
+import { filterConversationsForWorkspace, normalizeAgentView } from './workspaceState.js'
 import * as autonomyApi from './services/autonomyApi.js'
 import * as diaryApi from './services/diaryApi.js'
 import * as memoryApi from './services/memoryApi.js'
@@ -32,7 +50,9 @@ import {
   loadOnboardingStatus,
 } from './services/onboardingApi.js'
 import {
+  cleanupAutomaticBackups,
   createCompleteBackup,
+  deleteCompleteBackup,
   importCompleteBackup,
   loadDataPrivacy,
   restoreCompleteBackup,
@@ -57,11 +77,11 @@ import {
   Feather,
   FileText,
   FilePenLine,
+  Film,
   FolderOpen,
   Gamepad2,
   Heart,
   History,
-  ImagePlus,
   LogIn,
   MessageSquareText,
   Maximize2,
@@ -97,6 +117,11 @@ import {
   Wrench,
   X,
 } from '@lucide/vue'
+
+const workspaceSearchParams = new URLSearchParams(window.location.search)
+const workspaceMode = workspaceSearchParams.get('workspace') === 'agent' ? 'agent' : 'main'
+const isAgentWorkspace = workspaceMode === 'agent'
+const conversationStorageKey = isAgentWorkspace ? 'mio_agent_conversation_id' : 'mio_conversation_id'
 
 const THEME_OPTIONS = [
   { id: 'mist', label: '柔雾', description: '淡粉与雾灰', colors: ['#f2f0f1', '#c7849c', '#4f927b'] },
@@ -243,7 +268,7 @@ function readAppPreferences() {
       home_widgets: { ...DEFAULT_APP_PREFERENCES.home_widgets, ...(source.home_widgets || {}) },
     }
     if (!VALID_THEME_IDS.has(merged.theme)) merged.theme = 'mist'
-    if (!['home', 'chat', 'diaries', 'memory', 'tasks', 'companion'].includes(merged.default_open_page)) {
+    if (!['home', 'chat', 'diaries', 'memory', 'tasks', 'companion', 'creation', 'creation-image', 'creation-video'].includes(merged.default_open_page)) {
       merged.default_open_page = 'home'
     }
     if (!Object.prototype.hasOwnProperty.call(DISPLAY_MODE_PRESETS, merged.display_mode)) merged.display_mode = 'full'
@@ -277,7 +302,7 @@ function applyStoredAppPreferences() {
   savedAppPreferences.value = next
   appPreferencesDraft.value = cloneAppPreferences(next)
   leftSidebarVisible.value = next.focus_mode ? false : next.left_sidebar_visible !== false
-  rightSidebarVisible.value = next.focus_mode ? false : next.right_sidebar_visible !== false
+  if (!isAgentWorkspace) rightSidebarVisible.value = next.focus_mode ? false : next.right_sidebar_visible !== false
 }
 
 function handleAppPreferencesStorage(event) {
@@ -286,10 +311,13 @@ function handleAppPreferencesStorage(event) {
 
 const initialAppPreferences = readAppPreferences()
 const validInitialViews = new Set(['home', 'chat', 'diaries', 'memory', 'tasks', 'companion'])
-const activeView = ref(validInitialViews.has(initialAppPreferences.default_open_page) ? initialAppPreferences.default_open_page : 'home')
+const storedAgentView = localStorage.getItem('mio_agent_active_view') || 'home'
+const activeView = ref(isAgentWorkspace
+  ? normalizeAgentView(storedAgentView)
+  : (validInitialViews.has(initialAppPreferences.default_open_page) ? initialAppPreferences.default_open_page : 'home'))
 const settingsReturnView = ref(activeView.value)
 const activeCompanionSection = ref('pet-panel')
-const settingsSectionFromUrl = new URLSearchParams(window.location.search).get('settings-section')
+const settingsSectionFromUrl = workspaceSearchParams.get('settings-section')
 const activeSettingsSection = ref(settingsSectionFromUrl || localStorage.getItem('mio_settings_section') || 'general')
 const settingsSearch = ref('')
 const settingsFeedback = ref({ section: '', type: '', message: '' })
@@ -297,6 +325,8 @@ const savedAppPreferences = ref(cloneAppPreferences(initialAppPreferences))
 const appPreferencesDraft = ref(cloneAppPreferences(savedAppPreferences.value))
 const chatSettingsDraft = ref({ model_id: '', reasoning_level: '', voice_language: 'auto' })
 const savedChatSettings = ref('')
+const latestTaskHandoff = ref(null)
+let handoffLoadVersion = 0
 const savedStartupGreeting = ref(true)
 const desktopPreferencesDraft = ref({ close_to_background: true, background_notifications: true, windows_startup: false })
 const savedDesktopPreferences = ref('')
@@ -308,6 +338,7 @@ const savedGroupChatSettings = ref('')
 const savedCompanionSettings = ref({ pet: '', voice: '', observation: '' })
 const runtimeSettingsDraft = ref({})
 const savedRuntimeSettings = ref('')
+const runtimeSettingsRevision = ref('')
 const runtimeSettingsReady = ref(false)
 const runtimeSettingsBusy = ref(false)
 const webSearchTestQuery = ref('帮我查一下 DeepSeek 最新消息')
@@ -327,9 +358,12 @@ const chatBackgroundNonce = ref(Date.now())
 const chatBackgroundCustom = ref(false)
 const standalonePetChat = window.location.hash === '#pet-chat-window'
 const leftSidebarVisible = ref(savedAppPreferences.value.left_sidebar_visible !== false)
-const rightSidebarVisible = ref(savedAppPreferences.value.right_sidebar_visible !== false)
+const rightSidebarVisible = ref(isAgentWorkspace
+  ? localStorage.getItem('mio_agent_right_sidebar_visible') !== 'false'
+  : savedAppPreferences.value.right_sidebar_visible !== false)
 const leftSidebarPinned = ref(localStorage.getItem('mio_left_sidebar_pinned') === 'true')
-const rightSidebarPinned = ref(localStorage.getItem('mio_right_sidebar_pinned') === 'true')
+const rightSidebarPinned = ref(localStorage.getItem(isAgentWorkspace ? 'mio_agent_right_sidebar_pinned' : 'mio_right_sidebar_pinned') === 'true')
+const agentRightSidebarHoverExpand = ref(localStorage.getItem('mio_agent_right_sidebar_hover_expand') !== 'false')
 const leftSidebarHovered = ref(false)
 const rightSidebarHovered = ref(false)
 const bootstrap = ref(null)
@@ -338,7 +372,7 @@ const onboardingBusy = ref(false)
 const onboardingError = ref('')
 const onboardingEnvironment = ref(null)
 const onboardingEnvironmentBusy = ref(false)
-const dataPrivacyState = ref({ backups: [], privacy: { paused: false, capabilities: [] }, migrations: {} })
+const dataPrivacyState = ref({ backups: [], backupStorage: {}, privacy: { paused: false, capabilities: [] }, migrations: {} })
 const dataPrivacyLoading = ref(false)
 const dataPrivacyBusy = ref('')
 const appDialog = reactive({
@@ -405,10 +439,23 @@ function cancelAppDialog() {
 
 const messages = ref([])
 const conversations = ref([])
-const selectedConversationId = ref(localStorage.getItem('mio_conversation_id') || '')
+const selectedConversationId = ref(workspaceSearchParams.get('conversation_id') || localStorage.getItem(conversationStorageKey) || '')
+watch(selectedConversationId, async (conversationId) => {
+  const version = ++handoffLoadVersion
+  latestTaskHandoff.value = null
+  if (!conversationId || isAgentWorkspace) return
+  try {
+    const result = await request(`/api/agent/work/handoff/source/${encodeURIComponent(conversationId)}`)
+    if (version === handoffLoadVersion) latestTaskHandoff.value = result.handoff || null
+  } catch {
+    // A missing historical notice must not prevent loading the conversation.
+  }
+}, { immediate: true })
 const diaries = ref([])
 const selectedDiary = ref(null)
 const diarySearch = ref('')
+let diarySearchTimer = null
+let diarySearchRequestId = 0
 const statsData = ref({ summary: {}, calendar: [], mood_trend: [], year: 0, month: 0, logical_date: '' })
 const statsLoading = ref(false)
 const statsLoaded = ref(false)
@@ -448,13 +495,15 @@ const fileInput = ref(null)
 const modelPicker = ref(null)
 const tokenUsageDialog = ref(null)
 const providerDialog = ref(null)
-if (localStorage.getItem('mio_auto_router_version') !== '1') {
+const modelStorageKey = isAgentWorkspace ? 'mio_agent_model_id' : 'mio_model_id'
+const reasoningStorageKey = isAgentWorkspace ? 'mio_agent_reasoning_level' : 'mio_reasoning_level'
+if (!isAgentWorkspace && localStorage.getItem('mio_auto_router_version') !== '1') {
   localStorage.setItem('mio_model_id', 'auto')
   localStorage.setItem('mio_reasoning_level', 'auto')
   localStorage.setItem('mio_auto_router_version', '1')
 }
-const reasoningLevel = ref(localStorage.getItem('mio_reasoning_level') || 'auto')
-const selectedModel = ref(localStorage.getItem('mio_model_id') || 'auto')
+const reasoningLevel = ref(localStorage.getItem(reasoningStorageKey) || 'auto')
+const selectedModel = ref(localStorage.getItem(modelStorageKey) || 'auto')
 const chatVoiceLanguage = ref('auto')
 const showModelMenu = ref(false)
 const modelMenuSection = ref('root')
@@ -759,22 +808,32 @@ function onProviderDialogKeydown(event) {
   trapModalFocus(event, providerDialog.value)
 }
 
+const mainNavItems = [
+  { id: 'home', label: '首页', icon: Sparkles },
+  { id: 'chat', label: '对话', icon: MessageSquareText },
+  { id: 'diaries', label: '日记', icon: BookOpen },
+  { id: 'memory', label: '记忆', icon: Archive },
+  { id: 'tasks', label: '任务', icon: ListChecks },
+  { id: 'companion', label: '桌宠', icon: Gamepad2 },
+  { id: 'settings', label: '设置', icon: Settings },
+]
+const agentNavItems = [
+  { id: 'home', label: '首页', icon: Sparkles },
+  { id: 'chat', label: '对话', icon: MessageSquareText },
+  { id: 'tasks', label: '任务', icon: ListChecks },
+  { id: 'settings', label: '设置', icon: Settings },
+]
 const navGroups = [{
-  label: 'Mio 的空间',
-  items: [
-    { id: 'home', label: '首页', icon: Sparkles },
-    { id: 'chat', label: '对话', icon: MessageSquareText },
-    { id: 'diaries', label: '日记', icon: BookOpen },
-    { id: 'memory', label: '记忆', icon: Archive },
-    { id: 'tasks', label: '任务', icon: ListChecks },
-    { id: 'companion', label: '桌宠', icon: Gamepad2 },
-    { id: 'settings', label: '设置', icon: Settings },
-  ],
+  label: isAgentWorkspace ? 'Agent 工作台' : 'Mio 的空间',
+  items: isAgentWorkspace ? agentNavItems : mainNavItems,
 }]
 const navItems = [
   ...navGroups.flatMap((group) => group.items),
   { id: 'stats', label: '统计', icon: ChartNoAxesCombined },
 ]
+function isPrimaryNavActive(itemId) {
+  return activeView.value === itemId
+}
 const settingsNavigation = [{
   label: '设置',
   items: [
@@ -976,10 +1035,11 @@ const runtimeSettingKeysBySection = {
     'web_search_enabled', 'web_search_max_results', 'web_search_timeout_seconds', 'web_page_max_chars',
   ],
   diary: [
-    'daily_diary_auto_enabled', 'daily_diary_check_seconds', 'weekly_review_enabled',
+    'daily_diary_auto_enabled', 'daily_diary_check_seconds', 'daily_diary_model_id', 'weekly_review_enabled',
     'weekly_review_hour', 'weekly_review_notify_qq', 'weekly_review_check_seconds',
     'monthly_review_enabled', 'monthly_review_hour', 'monthly_review_notify_qq', 'monthly_review_check_seconds',
-    'backup_enabled', 'backup_keep_count', 'backup_check_seconds', 'day_boundary_hour',
+    'daily_review_auto_enabled', 'daily_review_auto_hour', 'daily_review_auto_minute', 'daily_review_auto_notify_qq', 'daily_review_check_seconds',
+    'backup_enabled', 'backup_keep_count', 'backup_max_total_mb', 'backup_check_seconds', 'day_boundary_hour',
     'night_close_enabled', 'night_close_start_hour', 'night_close_end_hour', 'night_close_min_quiet_minutes',
   ],
   qq: [
@@ -1086,6 +1146,7 @@ const contextUsageLabel = computed(() => {
 })
 const selectedConversation = computed(() => conversations.value.find((item) => item.id === selectedConversationId.value) || null)
 const chatSubtitle = computed(() => {
+  if (isAgentWorkspace) return '独立 Agent 工作对话 · 模型负责规划，运行层负责验证'
   if (selectedConversation.value?.kind === 'qq') return `${logicalDate.value} · 与QQ共享上下文`
   if (selectedConversation.value?.kind === 'pet') return `${logicalDate.value} · 桌宠独立上下文 · 自动语音回复`
   return `${logicalDate.value} · 独立桌面对话`
@@ -1159,7 +1220,7 @@ const activeViewSubtitle = computed(() => ({
   stats: '看看最近走过的路',
   memory: 'Mio 记得的事情都在这里',
   tasks: '一起把想法变成行动',
-  companion: '让 Mio 来到你的桌面',
+    companion: '让 Mio 来到你的桌面',
   settings: activeSettingsItem.value.description,
 }[activeView.value] || '今天也陪你一起生活'))
 const stateHistory = computed(() => bootstrap.value?.state_history || [])
@@ -1217,6 +1278,9 @@ const autoDiaryStatusLabel = computed(() => {
     no_content: `${date} 没有可生成的内容`,
     skipped: `${date} 已跳过重复生成`,
     error: `${date} 自动生成失败`,
+    generating: `正在补写 ${date} 的日记`,
+    paused: '隐私暂停中，自动日记已停止',
+    cancelled: '本次日记生成已取消，稍后重新检查',
     not_checked: '等待首次自动检查',
   }[status.result] || `${date} 自动检查完成`
 })
@@ -1609,6 +1673,20 @@ const toolReceiptLabels = {
   search_web: '联网查证',
   search_memory: '检索记忆',
   get_diary: '读取日记',
+  creation_list_presets: '读取创作预设',
+  creation_list_loras: '读取 LoRA 用途',
+  creation_list_assets: '读取参考素材',
+  creation_check_workflow: '检查创作工作流',
+  creation_inspect_workflow: '研究工作流与节点',
+  creation_read_workflow_source: '读取节点说明与源码',
+  creation_read_workflow_reference: '查阅工作流参考文档',
+  creation_remember_workflow: '保存工作流理解',
+  comfyui_generate_image: '创建图片任务',
+  comfyui_generate_video: '创建视频任务',
+  remote_generate_image: '创建远程图片任务',
+  creation_get_job: '读取创作任务',
+  creation_get_output: '读取创作结果',
+  creation_cancel_job: '取消创作任务',
   add_diary_material: '添加日记素材',
   set_daily_thirty: '更新每日三十',
   set_daily_mood: '更新今日情绪',
@@ -1626,6 +1704,46 @@ function turnToolReceipts(turn) {
     ? turn.tool_receipts
     : turn?.parts?.find((part) => Array.isArray(part.tool_receipts))?.tool_receipts
   return Array.isArray(receipts) ? receipts : []
+}
+
+function turnCreationJob(turn) {
+  return findCreationJob(turnToolReceipts(turn))
+}
+
+function turnCreationPrompt(turn) {
+  return creationPrompt(turnCreationJob(turn))
+}
+
+function turnCreationLoras(turn) {
+  return creationLoras(turnCreationJob(turn))
+}
+
+function turnCreationSampler(turn) {
+  return creationSamplerLabel(turnCreationJob(turn))
+}
+
+function turnCreationWorkflow(turn) {
+  return creationWorkflowSnapshot(turnCreationJob(turn))
+}
+
+function agentExecutionStatus(turn) {
+  return executionStatus(turnToolReceipts(turn), turnCreationJob(turn)) ?? creationStatusLabel(turnCreationJob(turn), turnToolReceipts(turn))
+}
+
+function agentExecutionProgress(turn) {
+  return creationProgressPercent(turnCreationJob(turn))
+}
+
+function agentExecutionElapsed(turn) {
+  return formatCreationElapsed(turnCreationJob(turn)?.elapsed_seconds)
+}
+
+function agentCreationCost(turn) {
+  return creationCostLabel(turnCreationJob(turn))
+}
+
+function turnTokenCount(turn) {
+  return Number(turn?.prompt_tokens || 0) + Number(turn?.completion_tokens || 0)
 }
 
 function toolReceiptLabel(receipt) {
@@ -1782,6 +1900,48 @@ async function restoreDataBackup(name) {
   }
 }
 
+async function deleteDataBackup(name) {
+  const confirmed = await showAppConfirm({
+    title: '删除本地备份',
+    message: `确定删除“${name}”吗？删除后只能依靠其他备份恢复。`,
+    confirmText: '删除备份',
+    danger: true,
+  })
+  if (!confirmed) return
+  dataPrivacyBusy.value = `delete:${name}`
+  try {
+    const result = await deleteCompleteBackup(name)
+    await refreshDataPrivacy({ quiet: true })
+    const reclaimedMb = (Number(result.reclaimed_bytes || 0) / 1048576).toFixed(2)
+    settingsFeedback.value = { section: 'data', type: 'success', message: `已删除备份，释放 ${reclaimedMb} MB` }
+  } catch (error) {
+    settingsFeedback.value = { section: 'data', type: 'error', message: error.message }
+  } finally {
+    dataPrivacyBusy.value = ''
+  }
+}
+
+async function cleanupDataBackups() {
+  const storage = dataPrivacyState.value.backupStorage || {}
+  const confirmed = await showAppConfirm({
+    title: '清理旧自动备份',
+    message: `将按照“最多 ${storage.keep_count || 14} 份、总量不超过 ${Math.round(Number(storage.max_total_bytes || 0) / 1048576) || 1024} MB”清理旧自动备份。手动和导入备份不会删除。`,
+    confirmText: '开始清理',
+  })
+  if (!confirmed) return
+  dataPrivacyBusy.value = 'cleanup'
+  try {
+    const result = await cleanupAutomaticBackups()
+    await refreshDataPrivacy({ quiet: true })
+    const reclaimedMb = (Number(result.reclaimed_bytes || 0) / 1048576).toFixed(2)
+    settingsFeedback.value = { section: 'data', type: 'success', message: `清理完成：删除 ${result.deleted_count || 0} 份，释放 ${reclaimedMb} MB` }
+  } catch (error) {
+    settingsFeedback.value = { section: 'data', type: 'error', message: error.message }
+  } finally {
+    dataPrivacyBusy.value = ''
+  }
+}
+
 async function togglePrivacyPause() {
   dataPrivacyBusy.value = 'privacy'
   try {
@@ -1897,7 +2057,11 @@ async function loadBootstrap({ quiet = false } = {}) {
         savedGroupChatSettings.value = normalizedGroupChatSnapshot()
       }
     }
-    conversations.value = data.conversations || []
+    conversations.value = filterConversationsForWorkspace(data.conversations, workspaceMode)
+    if (isAgentWorkspace && !conversations.value.length) {
+      const created = await chatApi.createConversation('Agent 创作对话', 'agent')
+      conversations.value = [created]
+    }
     const availableModelIds = new Set(['auto', ...(data.models || []).map((item) => item.id)])
     if (!availableModelIds.has(selectedModel.value)) selectedModel.value = 'auto'
     ensureReasoningForActiveModel()
@@ -1911,10 +2075,10 @@ async function loadBootstrap({ quiet = false } = {}) {
     }
     const availableConversationIds = new Set(conversations.value.map((item) => item.id))
     if (!availableConversationIds.has(selectedConversationId.value)) {
-      selectedConversationId.value = data.conversation_id
-      localStorage.setItem('mio_conversation_id', selectedConversationId.value)
+      selectedConversationId.value = isAgentWorkspace ? conversations.value[0]?.id || '' : data.conversation_id
+      localStorage.setItem(conversationStorageKey, selectedConversationId.value)
     }
-    if (selectedConversationId.value === data.conversation_id) {
+    if (selectedConversationId.value === data.conversation_id && !isAgentWorkspace) {
       messages.value = data.messages || []
       contextUsage.value = data.context_usage || contextUsage.value
     } else {
@@ -2073,6 +2237,16 @@ function createClientRequestId() {
   return `desktop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`
 }
 
+function openAgentHandoff() {
+  const target = latestTaskHandoff.value?.conversation_id
+  if (!target) return
+  localStorage.setItem('mio_agent_active_view', 'chat')
+  const next = new URL(window.location.href)
+  next.searchParams.set('workspace', 'agent')
+  next.searchParams.set('conversation_id', target)
+  window.location.href = next.toString()
+}
+
 async function sendMessage() {
   const content = draft.value.trim()
   if ((!content && !attachments.value.length) || sending.value) return
@@ -2127,6 +2301,9 @@ async function sendMessage() {
           model_id: selectedModel.value,
           conversation_id: conversationId,
           attachments: outgoingAttachments,
+          creation_tools_enabled: isAgentWorkspace,
+          agent_workspace: isAgentWorkspace,
+          mode: isAgentWorkspace ? 'agent' : 'companion',
           client_request_id: clientRequestId,
         }
     const controller = new AbortController()
@@ -2144,6 +2321,10 @@ async function sendMessage() {
     })
     if (result.context_usage && selectedConversationId.value === conversationId) {
       contextUsage.value = result.context_usage
+    }
+    if (result.task_handoff?.task_id && selectedConversationId.value === conversationId) {
+      ++handoffLoadVersion
+      latestTaskHandoff.value = result.task_handoff
     }
     await refreshMessages()
     if (result.request_id && selectedConversationId.value === conversationId) {
@@ -2203,7 +2384,10 @@ async function cancelActiveChat() {
 
 async function refreshConversations() {
   try {
-    conversations.value = await chatApi.listConversations()
+    conversations.value = filterConversationsForWorkspace(
+      await chatApi.listConversations(),
+      workspaceMode,
+    )
   } catch {
     // The message view remains usable if only the sidebar refresh fails.
   }
@@ -2220,7 +2404,7 @@ async function selectConversation(conversationId) {
   errorMessage.value = ''
   selectedConversationId.value = conversationId
   const loadVersion = ++conversationLoadVersion
-  localStorage.setItem('mio_conversation_id', conversationId)
+  localStorage.setItem(conversationStorageKey, conversationId)
   try {
     const [selectedMessages, selectedUsage] = await Promise.all([
       request(`/api/agent/messages?limit=120&conversation_id=${encodeURIComponent(conversationId)}`),
@@ -2244,10 +2428,13 @@ async function createNewConversation() {
   activeView.value = 'chat'
   errorMessage.value = ''
   try {
-    const conversation = await chatApi.createConversation('新对话')
+    const conversation = await chatApi.createConversation(
+      isAgentWorkspace ? '新建创作对话' : '新对话',
+      isAgentWorkspace ? 'agent' : 'main',
+    )
     conversations.value = [conversation, ...conversations.value]
     selectedConversationId.value = conversation.id
-    localStorage.setItem('mio_conversation_id', conversation.id)
+    localStorage.setItem(conversationStorageKey, conversation.id)
     messages.value = []
     contextUsage.value = { used_chars: 0, max_chars: contextUsage.value.max_chars || 18000, percent: 0, has_summary: false }
     await nextTick()
@@ -2302,11 +2489,42 @@ async function deleteConversation(conversation) {
         await selectConversation(nextConversation.id)
       } else {
         messages.value = []
-        localStorage.removeItem('mio_conversation_id')
+        localStorage.removeItem(conversationStorageKey)
+        if (isAgentWorkspace) await createNewConversation()
       }
     }
   } catch (error) {
     errorMessage.value = error.message
+  }
+}
+
+async function deleteConversationMessages(conversation, messageIds) {
+  const normalizedIds = [...new Set(messageIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))]
+  if (conversation?.kind !== 'qq' || !normalizedIds.length) return false
+  const confirmed = await showAppConfirm({
+    title: `清理选中的 ${normalizedIds.length} 句消息？`,
+    message: '选中的消息会从 QQ 共享上下文中删除，旧会话摘要会立即失效，之后只会根据剩余消息重新生成。未选择的消息、人格、日记、今日状态和独立长期记忆不会删除。',
+    confirmText: '清理消息',
+    danger: true,
+  })
+  if (!confirmed) return false
+  errorMessage.value = ''
+  try {
+    await chatApi.deleteConversationMessages(conversation.id, normalizedIds)
+    const [updatedMessages, updatedUsage] = await Promise.all([
+      chatApi.loadMessages(conversation.id),
+      chatApi.loadContextUsage(conversation.id),
+    ])
+    if (selectedConversationId.value === conversation.id) {
+      messages.value = updatedMessages
+      contextUsage.value = updatedUsage
+      await settleChatScrollToBottom()
+    }
+    await refreshConversations()
+    return true
+  } catch (error) {
+    errorMessage.value = `清理 QQ 消息失败：${error.message}`
+    return false
   }
 }
 
@@ -2417,11 +2635,11 @@ async function settleChatScrollToBottom() {
 }
 
 function persistReasoning() {
-  localStorage.setItem('mio_reasoning_level', reasoningLevel.value)
+  localStorage.setItem(reasoningStorageKey, reasoningLevel.value)
 }
 
 function persistSelectedModel() {
-  localStorage.setItem('mio_model_id', selectedModel.value)
+  localStorage.setItem(modelStorageKey, selectedModel.value)
 }
 
 function toggleModelMenu() {
@@ -2437,14 +2655,25 @@ function closeModelMenu() {
 async function loadSharedChatSettings() {
   try {
     const saved = await voiceApi.loadVoiceSettings()
-    chatVoiceLanguage.value = saved.voice_language || 'auto'
-    chatSettingsDraft.value.voice_language = chatVoiceLanguage.value
-    savedChatSettings.value = serializeSettings(chatSettingsDraft.value)
-    // 以后端保存的思考档位为准，避免本机残留旧值（如 high）每次启动覆盖回去
-    if (saved.reasoning_level) {
-      reasoningLevel.value = saved.reasoning_level
-      persistReasoning()
+    const loaded = normalizeLoadedChatSettings(
+      saved,
+      modelOptions.value.map((item) => item.id),
+    )
+    // 启动时以后端保存值为准；localStorage 只作为后端暂时不可读时的兜底。
+    if (!isAgentWorkspace) {
+      selectedModel.value = loaded.model_id
+      reasoningLevel.value = loaded.reasoning_level
     }
+    chatVoiceLanguage.value = loaded.voice_language
+    ensureReasoningForActiveModel()
+    persistSelectedModel()
+    persistReasoning()
+    chatSettingsDraft.value = {
+      model_id: selectedModel.value,
+      reasoning_level: reasoningLevel.value,
+      voice_language: chatVoiceLanguage.value,
+    }
+    savedChatSettings.value = serializeSettings(chatSettingsDraft.value)
     if (companionStatus.value.pet?.settings) {
       companionStatus.value.pet.settings.gpt_sovits_text_language = chatVoiceLanguage.value
     }
@@ -2479,14 +2708,14 @@ function chooseModel(modelId) {
   persistSelectedModel()
   ensureReasoningForActiveModel()
   persistReasoning()
-  void syncSharedChatSettings()
+  if (!isAgentWorkspace) void syncSharedChatSettings()
   modelMenuSection.value = 'root'
 }
 
 function chooseReasoning(level) {
   reasoningLevel.value = level
   persistReasoning()
-  void syncSharedChatSettings()
+  if (!isAgentWorkspace) void syncSharedChatSettings()
   modelMenuSection.value = 'root'
 }
 
@@ -3139,17 +3368,31 @@ function openStatsDiary(cell) {
 }
 
 async function loadDiaries() {
+  void refreshDayDashboard()
+  const requestId = ++diarySearchRequestId
+  const query = diarySearch.value.trim()
   try {
-    const loadedDiaries = await request(`/api/diaries?q=${encodeURIComponent(diarySearch.value.trim())}`)
+    const loadedDiaries = await request(`/api/diaries?q=${encodeURIComponent(query)}`)
+    if (requestId !== diarySearchRequestId || query !== diarySearch.value.trim()) return
     diaries.value = loadedDiaries
     if (!loadedDiaries.length) {
       selectedDiary.value = null
     } else if (!selectedDiary.value || !loadedDiaries.some((item) => item.date === selectedDiary.value.date)) {
-      selectedDiary.value = await request(`/api/diaries/${loadedDiaries[0].date}`)
+      const firstDiary = await request(`/api/diaries/${loadedDiaries[0].date}`)
+      if (requestId !== diarySearchRequestId || query !== diarySearch.value.trim()) return
+      selectedDiary.value = firstDiary
     }
   } catch (error) {
-    errorMessage.value = error.message
+    if (requestId === diarySearchRequestId) errorMessage.value = error.message
   }
+}
+
+function scheduleDiarySearch() {
+  if (diarySearchTimer) window.clearTimeout(diarySearchTimer)
+  diarySearchTimer = window.setTimeout(() => {
+    diarySearchTimer = null
+    void loadDiaries()
+  }, 250)
 }
 
 async function openDiary(date) {
@@ -3406,6 +3649,13 @@ async function editStructuredMemory(memory) {
         content: content.trim(),
         confidence: 1,
         conversation_id: selectedConversationId.value || 'default',
+        occurred_at: memory.occurred_at || '',
+        learned_at: memory.learned_at || '',
+        valid_from: memory.valid_from || '',
+        valid_until: memory.valid_until || '',
+        last_confirmed_at: memory.last_confirmed_at || '',
+        time_confidence: Number(memory.time_confidence || 0),
+        temporal_status: memory.temporal_status || '',
       }),
     })
     await loadMemoryHub({ quiet: true })
@@ -4877,6 +5127,7 @@ async function loadRuntimeSettings({ quiet = false } = {}) {
   try {
     const result = await settingsApi.loadRuntimeSettings()
     runtimeSettingsDraft.value = { ...(result.settings || {}) }
+    runtimeSettingsRevision.value = result.revision || ''
     savedRuntimeSettings.value = serializeSettings(runtimeSettingsDraft.value)
     runtimeSettingsReady.value = true
   } catch (error) {
@@ -4891,16 +5142,24 @@ async function saveRuntimeSettings() {
   runtimeSettingsBusy.value = true
   errorMessage.value = ''
   try {
-    const payload = { ...runtimeSettingsDraft.value }
+    const baseline = savedRuntimeSettingsSource()
+    const payload = Object.fromEntries((runtimeSettingKeysBySection[activeSettingsSection.value] || [])
+      .filter(key => JSON.stringify(runtimeSettingsDraft.value[key]) !== JSON.stringify(baseline[key]))
+      .map(key => [key, runtimeSettingsDraft.value[key]]))
     for (const key of privateRuntimePathKeys) delete payload[key]
     const result = await request('/api/settings/runtime', {
       method: 'PATCH',
+      headers: runtimeSettingsRevision.value ? { 'If-Match': runtimeSettingsRevision.value } : {},
       body: JSON.stringify(payload),
     })
     runtimeSettingsDraft.value = { ...(result.settings || {}) }
+    runtimeSettingsRevision.value = result.revision || ''
     savedRuntimeSettings.value = serializeSettings(runtimeSettingsDraft.value)
     await loadBootstrap({ quiet: true })
-    showSettingsFeedback(activeSettingsSection.value, 'success', `${activeSettingsItem.value.label}设置已保存并生效`)
+    const pendingRestart = result.application?.restart_required?.length
+    showSettingsFeedback(activeSettingsSection.value, 'success', pendingRestart
+      ? `${activeSettingsItem.value.label}设置已保存，组件路径需重启应用后生效`
+      : `${activeSettingsItem.value.label}设置已保存并生效`)
     return true
   } catch (error) {
     errorMessage.value = error.message
@@ -5204,7 +5463,12 @@ async function openSettingsSection(sectionId) {
 }
 
 async function navigatePrimaryView(view) {
+  if (isAgentWorkspace) view = normalizeAgentView(view)
   if (view === 'settings') {
+    if (isAgentWorkspace) {
+      activeView.value = 'settings'
+      return
+    }
     await openSettingsSection('general')
     return
   }
@@ -5251,6 +5515,10 @@ function toggleLeftSidebar() {
 
 function toggleRightSidebar() {
   rightSidebarVisible.value = !rightSidebarVisible.value
+  if (isAgentWorkspace) {
+    localStorage.setItem('mio_agent_right_sidebar_visible', String(rightSidebarVisible.value))
+    return
+  }
   localStorage.setItem('mio_right_sidebar_visible', String(rightSidebarVisible.value))
   savedAppPreferences.value = { ...savedAppPreferences.value, right_sidebar_visible: rightSidebarVisible.value }
   appPreferencesDraft.value = { ...appPreferencesDraft.value, right_sidebar_visible: rightSidebarVisible.value }
@@ -5264,7 +5532,13 @@ function toggleLeftSidebarPinned() {
 
 function toggleRightSidebarPinned() {
   rightSidebarPinned.value = !rightSidebarPinned.value
-  localStorage.setItem('mio_right_sidebar_pinned', String(rightSidebarPinned.value))
+  localStorage.setItem(isAgentWorkspace ? 'mio_agent_right_sidebar_pinned' : 'mio_right_sidebar_pinned', String(rightSidebarPinned.value))
+}
+
+function applyAgentPreferences(preferences = {}) {
+  if (!isAgentWorkspace) return
+  if (typeof preferences.rightSidebarVisible === 'boolean') rightSidebarVisible.value = preferences.rightSidebarVisible
+  if (typeof preferences.rightSidebarHoverExpand === 'boolean') agentRightSidebarHoverExpand.value = preferences.rightSidebarHoverExpand
 }
 
 async function controlDesktopWindow(action) {
@@ -5275,6 +5549,24 @@ async function controlDesktopWindow(action) {
   } catch (error) {
     errorMessage.value = `窗口操作失败：${error.message}`
   }
+}
+
+async function switchDesktopWorkspace(target) {
+  const switcher = window.pywebview?.api?.switch_workspace
+  if (switcher) {
+    try {
+      const result = await switcher(target)
+      if (result?.ok === false) throw new Error(result.error || '窗口切换失败')
+      return
+    } catch (error) {
+      errorMessage.value = `窗口切换失败：${error.message}`
+      return
+    }
+  }
+  const next = new URL(window.location.href)
+  if (target === 'agent') next.searchParams.set('workspace', 'agent')
+  else next.searchParams.delete('workspace')
+  window.location.href = next.toString()
 }
 
 function resizeDesktopWindow(direction, event) {
@@ -5311,6 +5603,8 @@ provide('mio-settings-page', reactive({
   dataPrivacyLoading,
   dataPrivacyState,
   createDataBackup,
+  cleanupDataBackups,
+  deleteDataBackup,
   importDataBackup,
   deleteProvider,
   deleteProviderGroup,
@@ -5426,6 +5720,11 @@ provide('mio-companion-page', reactive({
 }))
 
 provide('mio-chat-page', reactive({
+  isAgentWorkspace,
+  agentCreationCost,
+  agentExecutionElapsed,
+  agentExecutionProgress,
+  agentExecutionStatus,
   activeModelSupportsVision,
   activeReasoningOptions,
   analyzeTodayState,
@@ -5441,6 +5740,8 @@ provide('mio-chat-page', reactive({
   compactActiveModelLabel,
   messageModelLabel,
   compactCurrentReasoningLabel,
+  latestTaskHandoff,
+  openAgentHandoff,
   conversations,
   createNewConversation,
   contextPercent,
@@ -5472,6 +5773,7 @@ provide('mio-chat-page', reactive({
   handleFileSelection,
   isAutoRouting,
   isFileDragging,
+  isAgentWorkspace,
   loading,
   logicalDate,
   agentRuntimeLabel,
@@ -5497,6 +5799,7 @@ provide('mio-chat-page', reactive({
   rightSidebarVisible,
   sendMessage,
   selectConversation,
+  selectedModel,
   selectedConversationId,
   sending,
   showModelMenu,
@@ -5514,6 +5817,12 @@ provide('mio-chat-page', reactive({
   toolReceiptLabel,
   toolReceiptStatus,
   toolReceiptTitle,
+  turnCreationJob,
+  turnCreationLoras,
+  turnCreationPrompt,
+  turnCreationSampler,
+  turnCreationWorkflow,
+  turnTokenCount,
   turnVoiceLanguageLabel,
   visibleMessages,
   voiceLoadingPartId,
@@ -5521,11 +5830,23 @@ provide('mio-chat-page', reactive({
   userAvatarUrl,
   chatScroll,
   deleteConversation,
+  deleteConversationMessages,
   formatSidebarTime,
 }))
 
 provide('mio-records-page', reactive({
   activeView,
+  autoDiaryStatus,
+  autoDiaryStatusLabel,
+  async retryAutoDiary() {
+    try {
+      await request('/api/diary/automatic/check', { method: 'POST', body: '{}' })
+      await refreshDayDashboard()
+    } catch (error) { errorMessage.value = error.message }
+  },
+  openDiarySettings() {
+    return openSettingsSection('diary')
+  },
   addConversationSummary,
   addMemoryThread,
   addProfileNote,
@@ -5554,6 +5875,7 @@ provide('mio-records-page', reactive({
   deleteProfileNote,
   diaries,
   diaryBusy,
+  diarySearch,
   filteredAgentTasks,
   formatRealTime,
   formatShortTime,
@@ -5565,6 +5887,7 @@ provide('mio-records-page', reactive({
   loadAutonomy,
   loadAgentTasks,
   loadDiaries,
+  scheduleDiarySearch,
   loadMemoryHub,
   loadStats,
   logicalDate,
@@ -5641,6 +5964,7 @@ function markAppReady() {
   // WebView loaded event alone as proof that the current screen is interactive.
   document.documentElement.dataset.mioReady = 'true'
   window.dispatchEvent(new CustomEvent('mio:app-ready'))
+  if (isAgentWorkspace) return
   void request('/api/companion/app-ready', { method: 'POST' }).catch(() => {
     // UI readiness must not be blocked by optional local-voice warm-up.
   })
@@ -5651,7 +5975,7 @@ async function syncActiveViewState(
   section = activeSettingsSection.value,
   visible = document.visibilityState === 'visible',
 ) {
-  if (standalonePetChat) return
+  if (standalonePetChat || isAgentWorkspace) return
   try {
     await selfStateApi.reportActiveView(buildActiveViewReport(view, section, visible))
   } catch {
@@ -5693,33 +6017,37 @@ onMounted(async () => {
   await syncActiveViewState()
   markAppReady()
   await loadSharedChatSettings()
-  void loadMioProfileSettings({ quiet: true })
-  await loadStartupGreetingSetting()
-  await loadDesktopPreferences({ quiet: true })
-  await loadQqStartupSetting()
-  await syncSharedChatSettings()
-  if (activeView.value === 'home') {
-    void loadMemoryHub()
-    void loadCompanionStatus({ quiet: true })
+  if (!isAgentWorkspace) {
+    void loadMioProfileSettings({ quiet: true })
+    await loadStartupGreetingSetting()
+    await loadDesktopPreferences({ quiet: true })
+    await loadQqStartupSetting()
+    if (activeView.value === 'home') {
+      void loadMemoryHub()
+      void loadCompanionStatus({ quiet: true })
+    }
+    void requestStartupGreeting()
   }
-  void requestStartupGreeting()
   if (window.location.hash === '#desktop-pet-chat') focusDesktopPetChat()
   pollTimer = window.setInterval(refreshMessages, 5000)
-  dashboardPollTimer = window.setInterval(refreshDayDashboard, 15000)
-  qqStatusPollTimer = window.setInterval(refreshQqStatus, 10000)
-  activeViewHeartbeatTimer = window.setInterval(() => {
-    void syncActiveViewState()
-  }, ACTIVE_VIEW_HEARTBEAT_MS)
-  companionPollTimer = window.setInterval(() => {
-    if (activeView.value === 'companion') loadCompanionStatus({ quiet: true, preserveSettings: true })
-  }, 3000)
+  if (!isAgentWorkspace) {
+    dashboardPollTimer = window.setInterval(refreshDayDashboard, 15000)
+    qqStatusPollTimer = window.setInterval(refreshQqStatus, 10000)
+    activeViewHeartbeatTimer = window.setInterval(() => {
+      void syncActiveViewState()
+    }, ACTIVE_VIEW_HEARTBEAT_MS)
+    companionPollTimer = window.setInterval(() => {
+      if (activeView.value === 'companion') loadCompanionStatus({ quiet: true, preserveSettings: true })
+    }, 3000)
+  }
 })
 
 watch(activeView, async (view) => {
+  if (isAgentWorkspace) localStorage.setItem('mio_agent_active_view', normalizeAgentView(view))
   void syncActiveViewState(view)
   closeModelMenu()
   if (view !== 'settings') showProviderPanel.value = false
-  if (view === 'home') {
+  if (view === 'home' && !isAgentWorkspace) {
     if (!memoryLoaded.value) loadMemoryHub()
     await loadCompanionStatus({ quiet: true })
   }
@@ -5764,6 +6092,7 @@ onBeforeUnmount(() => {
   if (qqStatusPollTimer) window.clearInterval(qqStatusPollTimer)
   if (companionPollTimer) window.clearInterval(companionPollTimer)
   if (activeViewHeartbeatTimer) window.clearInterval(activeViewHeartbeatTimer)
+  if (diarySearchTimer) window.clearTimeout(diarySearchTimer)
   clearQqQrImage()
   stopMessageVoice()
   void syncActiveViewState(activeView.value, activeSettingsSection.value, false)
@@ -5822,16 +6151,20 @@ async function setPetChatWindowState(open) {
     @refresh-environment="refreshOnboardingEnvironment"
   />
 
-  <div v-else :class="['app-shell', 'integrated-shell', appThemeClass, `font-${savedAppPreferences.font_size || 'medium'}`, `active-view-${activeView}`, `display-mode-${displayMode}`, { 'left-sidebar-hidden': !leftSidebarVisible, 'right-sidebar-hidden': !rightSidebarVisible, 'reduce-motion': savedAppPreferences.light_animations === false, 'focus-mode': savedAppPreferences.focus_mode }]">
+  <div v-else :class="['app-shell', 'integrated-shell', appThemeClass, `font-${savedAppPreferences.font_size || 'medium'}`, `active-view-${activeView}`, `display-mode-${displayMode}`, { 'agent-workspace-shell': isAgentWorkspace, 'left-sidebar-hidden': !leftSidebarVisible, 'right-sidebar-hidden': !rightSidebarVisible, 'reduce-motion': savedAppPreferences.light_animations === false, 'focus-mode': savedAppPreferences.focus_mode }]">
     <span v-for="direction in ['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-right', 'bottom-left']" :key="direction" :class="['window-resize-handle', direction]" aria-hidden="true" @pointerdown="resizeDesktopWindow(direction, $event)"></span>
     <header class="window-titlebar integrated-titlebar">
-      <button v-if="activeView !== 'settings'" class="shell-toggle" type="button" :title="leftSidebarVisible ? '隐藏左侧栏' : '显示左侧栏'" @click="toggleLeftSidebar">
+      <button v-if="activeView !== 'settings'" class="shell-toggle shell-toggle-left" type="button" :title="leftSidebarVisible ? '隐藏左侧栏' : '显示左侧栏'" @click="toggleLeftSidebar">
         <component :is="leftSidebarVisible ? PanelLeftClose : PanelLeftOpen" :size="17" />
       </button>
       <div class="window-drag-zone pywebview-drag-region" @dblclick="controlDesktopWindow('maximize')">
-        <strong>{{ activeView === 'settings' ? '设置' : navItems.find((item) => item.id === activeView)?.label }}</strong>
+        <strong>{{ isAgentWorkspace ? `Mio Agent · ${agentNavItems.find((item) => item.id === activeView)?.label || '工作台'}` : activeView === 'settings' ? '设置' : navItems.find((item) => item.id === activeView)?.label }}</strong>
       </div>
-      <button v-if="activeView !== 'settings'" class="shell-toggle" type="button" :title="rightSidebarVisible ? '隐藏右侧栏' : '显示右侧栏'" @click="toggleRightSidebar">
+      <button v-if="activeView !== 'settings'" class="workspace-title-switch" type="button" :title="isAgentWorkspace ? '返回 Mio 主窗口' : '打开 Mio Agent'" @click="switchDesktopWorkspace(isAgentWorkspace ? 'main' : 'agent')">
+        <ArrowLeft v-if="isAgentWorkspace" :size="15" /><Bot v-else :size="15" />
+        <span>{{ isAgentWorkspace ? '返回 Mio' : 'Mio Agent' }}</span>
+      </button>
+      <button v-if="activeView !== 'settings'" class="shell-toggle shell-toggle-right" type="button" :title="rightSidebarVisible ? '隐藏右侧栏' : '显示右侧栏'" @click="toggleRightSidebar">
         <component :is="rightSidebarVisible ? PanelRightClose : PanelRightOpen" :size="17" />
       </button>
       <div class="window-controls" aria-label="窗口控制">
@@ -5849,30 +6182,38 @@ async function setPetChatWindowState(open) {
     >
       <div class="brand-block">
         <img class="brand-avatar" :src="avatarUrl" :alt="mioDisplayName" />
-        <div><strong>{{ mioDisplayName }}</strong><span>私人空间</span></div>
+        <div><strong>{{ isAgentWorkspace ? 'Mio Agent' : mioDisplayName }}</strong><span>{{ isAgentWorkspace ? '智能工作台' : '私人空间' }}</span></div>
         <button class="sidebar-pin" type="button" :title="leftSidebarPinned ? '取消固定展开' : '固定展开'" @click="toggleLeftSidebarPinned">
           <component :is="leftSidebarPinned ? PinOff : Pin" :size="14" />
         </button>
       </div>
       <nav class="main-nav" aria-label="主要导航">
-        <button v-for="item in navGroups[0].items" :key="item.id" type="button" :class="['nav-item', { active: activeView === item.id }]" :title="item.label" @click="navigatePrimaryView(item.id)">
+        <button v-for="item in navGroups[0].items" :key="item.id" type="button" :class="['nav-item', { active: isPrimaryNavActive(item.id) }]" :title="item.label" @click="navigatePrimaryView(item.id)">
           <component :is="item.icon" :size="18" /><span>{{ item.label }}</span>
         </button>
       </nav>
-      <div class="sidebar-footer pet-launcher">
+      <div v-if="!isAgentWorkspace" class="sidebar-footer pet-launcher">
         <button type="button" :title="companionStatus.pet?.running ? '停止桌宠' : '启动桌宠'" :disabled="Boolean(companionBusy)" @click="controlCompanion(companionStatus.pet?.running ? 'stop' : 'start')">
           <component :is="companionStatus.pet?.running ? Power : Play" :size="17" />
           <span><strong>桌宠</strong><small>{{ companionStatus.pet?.running ? '运行中' : '未启动' }}</small></span>
           <i :class="{ online: companionStatus.pet?.running }" />
         </button>
       </div>
+      <div v-else class="sidebar-footer workspace-launcher">
+        <button type="button" title="返回 Mio 主窗口" @click="switchDesktopWorkspace('main')">
+          <ArrowLeft :size="17" /><span><strong>返回 Mio</strong><small>私人空间</small></span>
+        </button>
+      </div>
     </aside>
 
     <main :class="['workspace', 'integrated-workspace', { 'has-error': errorMessage, 'view-settings': activeView === 'settings' }]">
       <div v-if="errorMessage" class="error-banner"><span>{{ errorMessage }}</span><button type="button" title="关闭" @click="errorMessage = ''"><X :size="16" /></button></div>
-      <HomePage v-if="activeView === 'home'" :logical-date="logicalDate" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="Boolean(companionStatus.pet?.running)" @navigate="activeView = $event" @open-diary="openDiary" />
+      <AgentHomePage v-if="isAgentWorkspace && activeView === 'home'" @navigate="navigatePrimaryView" />
+      <AgentSettingsPage v-else-if="isAgentWorkspace && activeView === 'settings'" @preferences-change="applyAgentPreferences" @return="returnToApp" />
+      <HomePage v-else-if="activeView === 'home'" :logical-date="logicalDate" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="Boolean(companionStatus.pet?.running)" @navigate="activeView = $event" @open-diary="openDiary" />
       <ChatPage v-else-if="activeView === 'chat'" />
       <RecordsPage v-else-if="['diaries', 'stats', 'memory'].includes(activeView)" />
+      <AgentTasksPage v-else-if="isAgentWorkspace && activeView === 'tasks'" @open-settings="activeView = 'settings'" />
       <TasksPage v-else-if="activeView === 'tasks'" />
       <section v-else-if="activeView === 'settings'" class="settings-window-shell embedded-settings-shell">
         <header class="settings-window-topbar">
@@ -5899,10 +6240,12 @@ async function setPetChatWindowState(open) {
 
     <aside
       v-if="rightSidebarVisible"
-      :class="['integrated-right-rail', { expanded: rightSidebarPinned || (savedAppPreferences.right_sidebar_hover_expand && rightSidebarHovered), pinned: rightSidebarPinned }]"
+      :class="['integrated-right-rail', { 'agent-right-rail': isAgentWorkspace, expanded: rightSidebarPinned || ((isAgentWorkspace ? agentRightSidebarHoverExpand : savedAppPreferences.right_sidebar_hover_expand) && rightSidebarHovered), pinned: rightSidebarPinned }]"
       @mouseenter="rightSidebarHovered = true"
       @mouseleave="rightSidebarHovered = false"
     >
+      <AgentRightRail v-if="isAgentWorkspace" :pinned="rightSidebarPinned" @toggle-pin="toggleRightSidebarPinned" @navigate="navigatePrimaryView" />
+      <template v-else>
       <header class="rail-mood">
         <div><Heart :size="18" /><span><small>现在的心情</small><strong>{{ statusMoodLabel }}</strong></span></div>
         <button type="button" :title="rightSidebarPinned ? '取消固定展开' : '固定展开'" @click="toggleRightSidebarPinned"><component :is="rightSidebarPinned ? PinOff : Pin" :size="14" /></button>
@@ -5923,6 +6266,7 @@ async function setPetChatWindowState(open) {
       </section>
       <button class="rail-token" type="button" title="查看 Token 统计" @click="openTokenUsagePanel"><Activity :size="17" /><span><small>今日 Token</small><strong>{{ todayTokenUsage.toLocaleString('zh-CN') }}</strong></span></button>
       <section v-if="latestAssistantNotice" class="rail-notice"><MessageSquareText :size="17" /><span><small>最近消息 · {{ formatShortTime(latestAssistantNotice.created_at) }}</small><p>{{ latestAssistantNotice.content }}</p></span></section>
+      </template>
     </aside>
 
     <AppDialog

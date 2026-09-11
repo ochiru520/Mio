@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
       - name: 安装前端依赖
         run: npm ci
@@ -20,7 +20,7 @@ jobs:
         run: |
           $hits = @(git grep -I -n -E 'sk-[A-Za-z0-9_-]{24,}' -- .)
           if ($LASTEXITCODE -eq 0 -and $hits.Count) {
-            $hits | Write-Host
+            Write-Host "疑似密钥命中数：$($hits.Count)，请在本地检查；不输出匹配内容。"
             throw '发现疑似 API Key'
           }
           if ($LASTEXITCODE -notin @(0, 1)) { throw '密钥扫描执行失败' }
@@ -28,6 +28,8 @@ jobs:
         run: npm audit --audit-level=high
       - name: 构建前端
         run: npm run build
+      - name: 前端测试
+        run: npm test
       - name: 安装桌宠依赖
         working-directory: live2d-desktop
         run: npm ci

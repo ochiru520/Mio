@@ -1044,8 +1044,9 @@ async def companion_chat(payload: CompanionChatRequest):
                 fallback_reasoning_level=str(getattr(route, "fallback_reasoning_level", "") or ""),
                 capture_follow_ups=True,
                 request_id=claim.client_request_id,
-                agent_tools_enabled=not use_fast_chat,
+                agent_tools_enabled=False,
                 fast_path=use_fast_chat,
+                handoff_enabled=True,
             )
     except ValueError as exc:
         detail = normalize_error_detail(
@@ -1168,6 +1169,7 @@ async def companion_chat(payload: CompanionChatRequest):
         "tool_receipts": list(getattr(result, "tool_receipts", ()) or ()),
         "route_candidate_model_ids": list(getattr(result, "route_candidate_model_ids", ()) or ()),
         "route_escalated_from_model_id": str(getattr(result, "route_escalated_from_model_id", "") or ""),
+        "task_handoff": dict(getattr(result, "task_handoff", {}) or {}),
     }
     db.complete_chat_request(claim.client_request_id, response)
     if not screen_follow_up:

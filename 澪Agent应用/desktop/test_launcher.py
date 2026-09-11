@@ -17,6 +17,47 @@ from desktop import launcher
 
 
 class WebViewRecoveryTests(unittest.TestCase):
+    def test_workspace_controller_switches_between_main_and_agent(self):
+        controller = launcher.WorkspaceWindowController()
+        main_window = unittest.mock.Mock()
+        agent_window = unittest.mock.Mock()
+        controller.attach("main", main_window)
+        controller.attach("agent", agent_window)
+
+        self.assertEqual(controller.switch("agent"), {"ok": True, "workspace": "agent"})
+        main_window.hide.assert_called_once_with()
+        agent_window.show.assert_called_once_with()
+        agent_window.restore.assert_called_once_with()
+
+    def test_workspace_controller_closes_each_window_only_once(self):
+        controller = launcher.WorkspaceWindowController()
+        main_window = unittest.mock.Mock()
+        agent_window = unittest.mock.Mock()
+        controller.attach("main", main_window)
+        controller.attach("agent", agent_window)
+
+        controller.destroy_all()
+        controller.destroy_all()
+
+        main_window.destroy.assert_called_once_with()
+        agent_window.destroy.assert_called_once_with()
+        self.assertEqual(controller.switch("main"), {"ok": False, "error": "应用正在退出"})
+
+    def test_desktop_bridge_routes_workspace_switches_through_controller(self):
+        controller = unittest.mock.Mock()
+        controller.switch.return_value = {"ok": True, "workspace": "agent"}
+        bridge = launcher.DesktopBridge("main", controller)
+
+        self.assertEqual(bridge.switch_workspace("agent"), {"ok": True, "workspace": "agent"})
+        controller.switch.assert_called_once_with("agent")
+
+    def test_window_launcher_builds_a_hidden_agent_workspace(self):
+        source = Path(launcher.__file__).read_text(encoding="utf-8")
+
+        self.assertIn('"Mio Agent",', source)
+        self.assertIn("?workspace=agent&v=", source)
+        self.assertRegex(source, r"agent_window = webview\.create_window\([\s\S]+?hidden=True,")
+
     def test_state_json_retries_when_windows_temporarily_locks_destination(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "state.json"
@@ -86,10 +127,7 @@ class WebViewRecoveryTests(unittest.TestCase):
                 patch.object(launcher, "_installed_state_dir", return_value=None),
                 patch.dict(os.environ, {"MIO_DESKTOP_STATE_DIR": ""}, clear=False),
             ):
-                self.assertEqual(
-                    launcher._desktop_state_dir().resolve(),
-                    (executable.parent / "Data").resolve(),
-                )
+                self.assertEqual(launcher._desktop_state_dir(), executable.parent / "Data")
 
     def test_bundled_default_voice_seeds_only_empty_runtime(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -947,7 +985,7 @@ class WebViewRecoveryTests(unittest.TestCase):
             backend_root = Path(__file__).resolve().parents[2] / "私人AI日记系统" / "backend"
 
             def import_package(path, *, progress):
-                self.assertEqual(path.resolve(), source_path.resolve())
+                self.assertEqual(path, source_path)
                 progress({"phase": "extracting", "message": "正在复制音色模型", "percent": 55})
                 return {"id": "voice-1", "name": "测试音色"}
 
@@ -991,7 +1029,7 @@ class WebViewRecoveryTests(unittest.TestCase):
                 return real_write(path, payload, **kwargs)
 
             def import_package(path, *, progress):
-                self.assertEqual(path.resolve(), source_path.resolve())
+                self.assertEqual(path, source_path)
                 for percent in range(1, 100):
                     progress({"phase": "extracting", "message": "正在复制音色模型", "percent": percent})
                 return {"id": "voice-1", "name": "测试音色"}

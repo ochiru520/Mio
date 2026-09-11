@@ -539,7 +539,7 @@ class AutonomyServiceTests(unittest.IsolatedAsyncioTestCase):
             ):
                 result = await autonomy_service.process_once(self.now)
 
-            self.assertEqual(result[0]["decision"], "failed")
+            self.assertEqual(result[0]["decision"], "retry")
             self.assertIn("invalid token", result[0]["reason"])
             self.assertEqual(db.list_autonomy_behaviors(), [])
             messages = db.get_recent_messages(10, conversation_id)

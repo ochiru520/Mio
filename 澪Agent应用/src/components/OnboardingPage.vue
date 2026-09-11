@@ -75,6 +75,9 @@ function environmentStatusLabel(status) {
     available: '可以使用',
     configured: '已经配置',
     unconfigured: '尚未配置',
+    installed: '已安装，未启动',
+    unverified: '已启动，待验证',
+    degraded: '暂不可用',
     missing: '需要处理',
     unsupported: '环境不满足',
   }[status] || '尚未检查'

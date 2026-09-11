@@ -9,6 +9,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import db
+from .model_runtime import operation
 from .config import settings
 from .llm import call_chat_completion
 from .prompts import build_monthly_review_messages
@@ -93,7 +94,31 @@ def _build_day_sections(month: str) -> tuple[str, int]:
     return "\n\n".join(sections), diary_count
 
 
+_active_generations: set[asyncio.Task] = set()
+
+
+async def cancel_active() -> None:
+    pending = [task for task in _active_generations if not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+@operation("record", automatic=True)
 async def generate_monthly_review(month: str, overwrite: bool = True) -> MonthlyReviewResult:
+    from .agent_task_service import automatic_work_paused
+    if automatic_work_paused():
+        raise ValueError("敏感能力已暂停，月记生成已停止。")
+    task = asyncio.create_task(_generate_monthly_review(month, overwrite))
+    _active_generations.add(task)
+    try:
+        return await task
+    finally:
+        _active_generations.discard(task)
+
+
+async def _generate_monthly_review(month: str, overwrite: bool = True) -> MonthlyReviewResult:
     normalized = normalize_month(month)
     month_start, month_end = month_bounds(normalized)
     existing = db.get_monthly_review(normalized)
@@ -113,6 +138,9 @@ async def generate_monthly_review(month: str, overwrite: bool = True) -> Monthly
     messages = build_monthly_review_messages(normalized, month_start, month_end, day_sections)
     markdown_content = await call_chat_completion(messages, temperature=0.3)
     markdown_content = markdown_content.replace("**", "").strip()
+    existing = db.get_monthly_review(normalized)
+    if not overwrite and existing is not None:
+        return MonthlyReviewResult(normalized, month_start, month_end, str(existing["markdown_content"]), False)
     db.upsert_monthly_review(normalized, markdown_content)
     return MonthlyReviewResult(
         month=normalized,
@@ -142,7 +170,8 @@ async def _notify_monthly_review_ready(month: str) -> None:
 
 
 async def run_monthly_review_once(now: datetime | None = None) -> int:
-    if not settings.monthly_review_enabled:
+    from .agent_task_service import automatic_work_paused
+    if automatic_work_paused() or not settings.monthly_review_enabled:
         return 0
     current = now or _now()
     if current.hour < settings.monthly_review_hour:
@@ -157,7 +186,12 @@ async def run_monthly_review_once(now: datetime | None = None) -> int:
     if diary_count == 0:
         return 0
 
-    result = await generate_monthly_review(month, overwrite=False)
+    try:
+        result = await generate_monthly_review(month, overwrite=False)
+    except asyncio.CancelledError:
+        if automatic_work_paused() and not getattr(asyncio.current_task(), 'cancelling', lambda: 0)():
+            return 0
+        raise
     if result.created:
         await _notify_monthly_review_ready(month)
         return 1

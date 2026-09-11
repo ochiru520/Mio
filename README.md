@@ -1,12 +1,8 @@
-﻿# Mio
+# Mio
 
-<p align="center">
-  <img src="澪Agent应用/desktop/mio-icon.png" width="180" alt="Mio 项目图标" />
-</p>
+<p align="center"><img src="澪Agent应用/desktop/mio-icon.png" width="180" alt="Mio" /></p>
 
-<p align="center">
-  中文 | <a href="README_EN.md">English</a>
-</p>
+<p align="center">中文 | <a href="README_EN.md">English</a></p>
 
 > Windows 本地优先的个人 AI Agent：让对话、长期记忆、日记、主动联系、QQ、语音、Live2D 与屏幕观察共享同一个角色和数据闭环。
 
@@ -20,9 +16,16 @@ Mio 不是单独的聊天网页，也不是把许多 AI 功能堆在一起的启
 
 ## 核心能力
 
+### 0.2 更新
+
+新增独立 Agent 工作区、可恢复的多步骤任务、ComfyUI 自定义工作流、本机工具与文件选择、工作流自主研究，以及分模式模型策略。日常聊天与任务执行分开，Agent 设置统一归类，任务状态改为输入框上方单行，图片采用完整显示与虚化背景。
+
+本版还修复了自动日记漏写、主动聊天未跟随所选模型、本地视觉与已有 Ollama 冲突，以及任务取消、上下文转交和设置并发保存等问题。完整对比、升级方式与能力边界见 [0.2 更新日志](CHANGELOG.md)。
+
 | 方向 | 能力 |
 |---|---|
 | 对话与模型 | 多会话、OpenAI 兼容供应商、Responses / Chat Completions、思考档位、Token 与费用记录、图片/PDF/Word/文本附件 |
+| Agent 与创作 | 独立任务工作区、多步骤工具调用、暂停/恢复/取消、授权文件读写、ComfyUI 工作流发现/导入/研究/执行 |
 | 长期记录 | SQLite 对话、结构化记忆、今日状态、日记、周记、月记、回顾、导出与完整备份恢复 |
 | 主动性 | 可配置的主动消息、未完成话题跟进、定时日记与回顾；默认关闭高费用或敏感自动能力 |
 | 桌面角色 | Vue 主应用、独立 Live2D 桌宠、文字气泡、动作/表情、语音口型和播放队列 |
@@ -77,7 +80,6 @@ Mio/
 ├─ 澪Agent应用/          # Vue 主界面、Windows 启动器、Electron Live2D
 ├─ README.md
 ├─ README_EN.md
-├─ THIRD_PARTY_NOTICES.md
 ├─ CONTRIBUTING.md
 ├─ SECURITY.md
 └─ LICENSE
@@ -176,7 +178,7 @@ npm run test:model
 
 ## 当前状态
 
-- 当前预览版本：`0.1.0`
+- 当前预览版本：`0.7.0`
 - 当前主要平台：Windows
 - 已完成自动化回归、构建、隔离数据测试和多轮正式运行验收；真人麦克风、QQ 登录、第三方模型下载、不同显卡/声卡与长时间自然使用仍可能受环境影响。
 - Mio 目前适合愿意自行配置模型和可选能力的开发者或体验者，不应被视为无需维护的成熟商业产品。
@@ -197,10 +199,6 @@ npm run test:model
 ## 许可证
 
 原创源代码与文档使用 [MIT License](LICENSE)。Live2D Cubism、示例模型、第三方库、角色图片、音色、训练数据和用户自行导入的资产遵循各自许可证，不因本仓库采用 MIT 而自动获得重新分发权。
-
-## 开源组件与致谢
-
-Mio 建立在 FastAPI、Vue、Electron、pywebview、faster-whisper、NapCat、Genie-TTS、GPT-SoVITS、PixiJS、pixi-live2d-display 等项目之上。主要项目、用途、源码链接和许可边界见 [第三方组件与致谢](THIRD_PARTY_NOTICES.md)；随安装包分发的 Live2D 组件许可原文保存在 `澪Agent应用/public/live2d-pet/licenses/`。
 
 ## 贡献
 

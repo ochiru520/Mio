@@ -62,6 +62,7 @@ from ..qq_group_service import (
     save_group_config,
 )
 from ..tool_registry import tool_registry
+from ..runtime_profiles import resolve_runtime_profile
 from .onebot import active_websocket_count, connected_self_ids, send_private_message_receipt
 from .conversations import (
     ConversationUpdateRequest,
@@ -76,9 +77,11 @@ from .models import (
     remove_model_profile,
 )
 from . import conversations as conversation_routes, models as model_routes, self_state as self_state_routes
+from . import agent_tasks
 
 
 router = APIRouter(prefix="/api/agent")
+router.include_router(agent_tasks.router)
 router.include_router(conversation_routes.router, prefix="")
 router.include_router(model_routes.router, prefix="")
 router.include_router(self_state_routes.router, prefix="")
@@ -141,6 +144,14 @@ class AgentChatRequest(BaseModel):
     conversation_id: str = ""
     attachments: list[AgentAttachmentRequest] = Field(default_factory=list)
     client_request_id: str = Field(default="", max_length=80, pattern=r"^[A-Za-z0-9._:-]*$")
+    creation_tools_enabled: bool = False
+    agent_workspace: bool = False
+    mode: str = ""
+
+
+# Keep this exported for the desktop client and older tests.  It now means
+# the complete Agent capability surface rather than a creation-only subset.
+AGENT_WORKSPACE_TOOL_NAMES = frozenset(item.name for item in tool_registry.list())
 
 
 class AgentChatCancelRequest(BaseModel):
@@ -749,6 +760,10 @@ async def agent_chat(payload: AgentChatRequest):
         selected_conversation = _conversation_id(payload.conversation_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    profile = resolve_runtime_profile(payload.mode, agent_workspace=payload.agent_workspace)
+    agent_workspace = profile.mode == "agent"
+    if agent_workspace and not selected_conversation.startswith("desktop_agent_"):
+        raise HTTPException(status_code=400, detail="Mio Agent 工作台需要使用独立的 Agent 对话。")
 
     attachment_fingerprints = [
         {
@@ -770,6 +785,9 @@ async def agent_chat(payload: AgentChatRequest):
                 "message": message,
                 "model_id": payload.model_id,
                 "reasoning_level": payload.reasoning_level,
+                "creation_tools_enabled": payload.creation_tools_enabled,
+                "agent_workspace": agent_workspace,
+                "mode": profile.mode,
                 "attachments": attachment_fingerprints,
             }),
             conversation_id=selected_conversation,
@@ -789,14 +807,17 @@ async def agent_chat(payload: AgentChatRequest):
         if not message and not images and not text_files:
             raise ValueError("消息或附件不能为空。")
         # 跨天后首次对话：确保今天有状态记录（未确认），避免把昨天的状态当成今天的。
-        try:
-            db.ensure_daily_state_today()
-        except Exception:
-            logger.warning("今日状态初始化失败", exc_info=True)
+        if not agent_workspace:
+            try:
+                db.ensure_daily_state_today()
+            except Exception:
+                logger.warning("今日状态初始化失败", exc_info=True)
         routing_history = list(
             db.get_recent_messages(limit=12, conversation_id=selected_conversation)
         )
         screen_follow_up = bool(
+            not agent_workspace
+            and
             not images
             and not text_files
             and screen_observation_service.is_screen_chat_follow_up(message, routing_history)
@@ -837,6 +858,8 @@ async def agent_chat(payload: AgentChatRequest):
             # 普通聊天（简单难度、无附件）跳过 Agent 规划循环，直达回复，响应更快。
             # 记忆保存、日记素材、今日状态等动作仍由后台异步完成，不阻塞、不显示。
             use_fast_chat = bool(
+                not agent_workspace
+                and
                 not task_profile.requires_tools
                 and task_profile.task_type in {"conversation", "analysis"}
                 and not images
@@ -857,10 +880,12 @@ async def agent_chat(payload: AgentChatRequest):
                 fallback_reasoning_level=(
                     automatic_route.fallback_reasoning_level if automatic_route is not None else ""
                 ),
-                capture_follow_ups=True,
+                capture_follow_ups=not agent_workspace,
                 request_id=claim.client_request_id,
-                agent_tools_enabled=not use_fast_chat,
+                agent_tools_enabled=profile.allow_agent_loop and agent_workspace and not use_fast_chat,
                 fast_path=use_fast_chat,
+                allowed_tool_names=profile.allowed_tool_names,
+                handoff_enabled=not agent_workspace,
             )
     except ValueError as exc:
         detail = normalize_error_detail(
@@ -935,10 +960,11 @@ async def agent_chat(payload: AgentChatRequest):
 
     # 聊天成功后，若当天状态仍是“未判定”且今天已有聊天/素材，后台自动完成今日状态判定写入，
     # 不依赖 agent 是否主动调用写入工具，也不阻塞本轮回复。
-    try:
-        _schedule_today_state_analysis()
-    except Exception:
-        logger.warning("后台今日状态判定调度失败", exc_info=True)
+    if not agent_workspace:
+        try:
+            _schedule_today_state_analysis()
+        except Exception:
+            logger.warning("后台今日状态判定调度失败", exc_info=True)
 
     response = {
         "reply": result.reply,
@@ -964,9 +990,13 @@ async def agent_chat(payload: AgentChatRequest):
         "total_latency_ms": result.total_latency_ms,
         "agent_run_id": result.agent_run_id,
         "agent_run_status": result.agent_run_status,
+        "runtime_mode": profile.mode,
+        "show_execution_trace": profile.show_execution_trace,
+        "show_cost": profile.show_cost,
         "tool_receipts": list(result.tool_receipts),
         "route_candidate_model_ids": list(result.route_candidate_model_ids),
         "route_escalated_from_model_id": result.route_escalated_from_model_id,
+        "task_handoff": result.task_handoff,
         "context_usage": _context_usage(selected_conversation),
         "auto_routing": automatic_route.public_dict() if automatic_route is not None else None,
     }

@@ -19,7 +19,23 @@ MEMORY_CATEGORIES = {
     "person",
     "other",
 }
+MEMORY_TEMPORAL_STATUSES = {"current", "historical", "planned", "enduring", "time_unknown"}
+DURABLE_CORE_CATEGORIES = {"identity", "preference", "relationship", "person"}
 PRIVATE_MEMORY_PREFIXES = ("qq_private_", "desktop_", "default")
+
+
+def source_window_for_conversation(conversation_id: str) -> str:
+    """Map an origin conversation to a shared-memory source window."""
+    value = str(conversation_id or "").strip().lower()
+    if value.startswith("desktop_agent_"):
+        return "agent"
+    if value.startswith("qq_group_"):
+        return "qq_group"
+    if value.startswith("qq_"):
+        return "companion"
+    if value == "desktop_pet" or value.startswith("desktop_"):
+        return "companion"
+    return "companion"
 
 
 def is_group_conversation(conversation_id: str) -> bool:
@@ -38,6 +54,70 @@ def _memory_key(value: object, category: str, content: str) -> str:
     return f"{category}:{compact}"
 
 
+def _iso_time(value: object) -> str:
+    clean = _clean(value, 40)
+    if not clean:
+        return ""
+    try:
+        return datetime.fromisoformat(clean.replace("Z", "+00:00")).isoformat(timespec="seconds")
+    except ValueError:
+        try:
+            return datetime.fromisoformat(clean + "T00:00:00").date().isoformat()
+        except ValueError as exc:
+            raise ValueError("记忆时间必须是明确的 ISO 日期或时间，不能保存“明天”等相对时间。") from exc
+
+
+def _temporal_fields(
+    *,
+    category: str,
+    source_message_id: int,
+    occurred_at: str,
+    learned_at: str,
+    valid_from: str,
+    valid_until: str,
+    last_confirmed_at: str,
+    time_confidence: float,
+    temporal_status: str,
+) -> dict[str, object]:
+    source = db.get_message_by_id(int(source_message_id or 0)) if source_message_id else None
+    learned = _iso_time(learned_at or (str(source["created_at"] or "") if source is not None else db.now_iso()))
+    occurred = _iso_time(occurred_at)
+    valid_start = _iso_time(valid_from)
+    valid_end = _iso_time(valid_until)
+    confirmed = _iso_time(last_confirmed_at)
+    confidence = max(0.0, min(1.0, float(time_confidence or 0.0)))
+    status = str(temporal_status or "").strip().lower()
+    if status not in MEMORY_TEMPORAL_STATUSES:
+        status = ""
+    if not status:
+        if category in DURABLE_CORE_CATEGORIES:
+            status = "enduring"
+        elif category == "plan" and (occurred or valid_start):
+            status = "planned"
+        elif category in {"current_state", "project"}:
+            status = "current"
+        elif category == "experience" and occurred:
+            status = "historical"
+        else:
+            status = "time_unknown"
+    if status == "current" and not valid_start:
+        valid_start = learned
+    if status == "historical" and occurred and not valid_start:
+        valid_start = occurred
+        valid_end = valid_end or occurred
+    if status in {"current", "planned"} and not confirmed:
+        confirmed = learned
+    return {
+        "occurred_at": occurred,
+        "learned_at": learned,
+        "valid_from": valid_start,
+        "valid_until": valid_end,
+        "last_confirmed_at": confirmed,
+        "time_confidence": confidence,
+        "temporal_status": status,
+    }
+
+
 def save_memory_item(
     *,
     layer: str,
@@ -47,6 +127,14 @@ def save_memory_item(
     source_conversation_id: str,
     source_message_id: int = 0,
     confidence: float = 0.0,
+    occurred_at: str = "",
+    learned_at: str = "",
+    valid_from: str = "",
+    valid_until: str = "",
+    last_confirmed_at: str = "",
+    time_confidence: float = 0.0,
+    temporal_status: str = "",
+    source_window: str = "",
 ) -> dict[str, object]:
     if is_group_conversation(source_conversation_id):
         raise ValueError("群聊内容不能写入私人记忆。")
@@ -67,6 +155,17 @@ def save_memory_item(
         raise ValueError("记忆证据不足。")
 
     key = _memory_key(memory_key, normalized_category, normalized_content)
+    temporal = _temporal_fields(
+        category=normalized_category,
+        source_message_id=source_message_id,
+        occurred_at=occurred_at,
+        learned_at=learned_at,
+        valid_from=valid_from,
+        valid_until=valid_until,
+        last_confirmed_at=last_confirmed_at,
+        time_confidence=time_confidence,
+        temporal_status=temporal_status,
+    )
     memory_id, outcome = db.save_structured_memory(
         normalized_layer,
         normalized_category,
@@ -75,6 +174,8 @@ def save_memory_item(
         source_conversation_id,
         source_message_id,
         normalized_confidence,
+        source_window=source_window or source_window_for_conversation(source_conversation_id),
+        **temporal,
     )
     return {"id": memory_id, "outcome": outcome, "layer": normalized_layer, "memory_key": key}
 
@@ -88,6 +189,14 @@ def save_memory_candidate(
     source_conversation_id: str,
     source_message_id: int = 0,
     confidence: float = 0.0,
+    occurred_at: str = "",
+    learned_at: str = "",
+    valid_from: str = "",
+    valid_until: str = "",
+    last_confirmed_at: str = "",
+    time_confidence: float = 0.0,
+    temporal_status: str = "",
+    source_window: str = "",
 ) -> dict[str, object]:
     """Store an uncertain fact for later confirmation; candidates never enter context."""
     if is_group_conversation(source_conversation_id):
@@ -105,6 +214,17 @@ def save_memory_candidate(
     if normalized_confidence < 0.55:
         raise ValueError("记忆候选置信度过低。")
     key = _memory_key(memory_key, normalized_category, normalized_content)
+    temporal = _temporal_fields(
+        category=normalized_category,
+        source_message_id=source_message_id,
+        occurred_at=occurred_at,
+        learned_at=learned_at,
+        valid_from=valid_from,
+        valid_until=valid_until,
+        last_confirmed_at=last_confirmed_at,
+        time_confidence=time_confidence,
+        temporal_status=temporal_status,
+    )
     memory_id = db.save_structured_memory_candidate(
         normalized_layer,
         normalized_category,
@@ -113,6 +233,8 @@ def save_memory_candidate(
         source_conversation_id,
         source_message_id,
         normalized_confidence,
+        source_window=source_window or source_window_for_conversation(source_conversation_id),
+        **temporal,
     )
     return {"id": memory_id, "outcome": "candidate", "layer": normalized_layer, "memory_key": key}
 
@@ -151,7 +273,10 @@ def retrieve_memory_items(query: str = "", limit: int = 16) -> list[Row]:
         else db.list_structured_memories(status="active", limit=300)
     )
     # L0 is the durable identity/preference layer and must survive topic filtering.
-    core_rows = db.list_structured_memories(status="active", layer="L0", limit=100)
+    core_rows = [
+        row for row in db.list_structured_memories(status="active", layer="L0", limit=100)
+        if str(row["category"] or "") in DURABLE_CORE_CATEGORIES
+    ]
     rows_by_id = {int(row["id"]): row for row in [*matched_rows, *core_rows]}
     rows = list(rows_by_id.values())
     query_terms = _query_terms(query)
@@ -188,18 +313,58 @@ def build_structured_memory_context(conversation_id: str, query: str = "") -> st
         return ""
     labels = {"L0": "核心事实与稳定偏好", "L1": "近期状态", "L2": "长期经历"}
     sections: list[str] = []
+    source_dates: dict[int, str] = {}
+    for row in rows:
+        source_message_id = int(row["source_message_id"] or 0)
+        if source_message_id <= 0 or source_message_id in source_dates:
+            continue
+        source = db.get_message_by_id(source_message_id)
+        if source is None:
+            continue
+        try:
+            source_dates[source_message_id] = db.logical_date_for_datetime(
+                datetime.fromisoformat(str(source["created_at"]))
+            )
+        except (TypeError, ValueError):
+            continue
     for layer in ("L0", "L1", "L2"):
         layer_rows = [row for row in rows if row["layer"] == layer]
         if not layer_rows:
             continue
-        lines = [
-            f"- {row['content']}（置信度 {float(row['confidence'] or 0):.2f}，更新于 {str(row['updated_at'])[:10]}）"
-            for row in layer_rows
-        ]
+        lines: list[str] = []
+        for row in layer_rows:
+            source_message_id = int(row["source_message_id"] or 0)
+            learned_at = str(row["learned_at"] or "")
+            occurred_at = str(row["occurred_at"] or "")
+            valid_from = str(row["valid_from"] or "")
+            valid_until = str(row["valid_until"] or "")
+            temporal_status = str(row["temporal_status"] or "time_unknown")
+            source_window = str(row["source_window"] or "")
+            source_date = source_dates.get(source_message_id, "")
+            if occurred_at:
+                date_note = f"发生时间 {occurred_at[:16]}"
+            elif learned_at:
+                source_note = f"来源记录日 {source_date}，" if source_date else ""
+                date_note = f"{source_note}用户在 {learned_at[:16]} 提到，事情发生时间未确认"
+            elif source_date:
+                date_note = f"来源记录日 {source_date}，事情发生时间未确认"
+            else:
+                date_note = f"记录维护于 {str(row['updated_at'])[:10]}（不是事件日期）"
+            validity = ""
+            if valid_from or valid_until:
+                validity = f"，有效期 {valid_from[:16] or '未知'} 至 {valid_until[:16] or '未结束'}"
+            origin = f"，来源窗口 {source_window}" if source_window else ""
+            lines.append(
+                f"- {row['content']}（时间状态 {temporal_status}，{date_note}{origin}{validity}，"
+                f"置信度 {float(row['confidence'] or 0):.2f}）"
+            )
         sections.append(f"{labels[layer]}：\n" + "\n".join(lines))
     return (
         "以下是有来源证据的分层私人记忆。只在当前话题相关时自然使用，"
-        "不要逐条复述，不要透露数据库、层级或置信度。若与用户本轮原话冲突，以本轮原话为准。\n\n"
+        "不要逐条复述，不要透露数据库、层级或置信度。若与用户本轮原话冲突，以本轮原话为准。"
+        "historical 只能当作过去事件；current 也要服从有效期与最后确认时间；time_unknown 不得说成最近。"
+        "只有“来源记录日”可以帮助解释当时的相对时间；“记录维护于”只是数据库维护时间，"
+        "绝不能据此推断事情发生日期。\n\n"
         + "\n\n".join(sections)
     )
 
@@ -212,8 +377,16 @@ def public_memory_item(row: Row) -> dict[str, object]:
         "memory_key": str(row["memory_key"]),
         "content": str(row["content"]),
         "source_conversation_id": str(row["source_conversation_id"]),
+        "source_window": str(row["source_window"] or ""),
         "source_message_id": int(row["source_message_id"] or 0),
         "confidence": float(row["confidence"] or 0.0),
+        "occurred_at": str(row["occurred_at"] or ""),
+        "learned_at": str(row["learned_at"] or ""),
+        "valid_from": str(row["valid_from"] or ""),
+        "valid_until": str(row["valid_until"] or ""),
+        "last_confirmed_at": str(row["last_confirmed_at"] or ""),
+        "time_confidence": float(row["time_confidence"] or 0.0),
+        "temporal_status": str(row["temporal_status"] or "time_unknown"),
         "status": str(row["status"]),
         "superseded_by": int(row["superseded_by"] or 0),
         "last_seen_at": str(row["last_seen_at"]),
@@ -225,10 +398,12 @@ def public_memory_item(row: Row) -> dict[str, object]:
 __all__ = [
     "MEMORY_CATEGORIES",
     "MEMORY_LAYERS",
+    "MEMORY_TEMPORAL_STATUSES",
     "build_structured_memory_context",
     "is_group_conversation",
     "public_memory_item",
     "retrieve_memory_items",
     "save_memory_candidate",
     "save_memory_item",
+    "source_window_for_conversation",
 ]

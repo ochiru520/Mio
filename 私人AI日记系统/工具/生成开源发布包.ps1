@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Version = "0.1.0",
+    [string]$Version = "",
     [string]$OutputRoot = "",
     [switch]$SkipValidation
 )
@@ -8,6 +8,10 @@ $ErrorActionPreference = "Stop"
 $BackendRoot = Split-Path -Parent $PSScriptRoot
 $WorkspaceRoot = Split-Path -Parent $BackendRoot
 $AgentRoot = Join-Path $WorkspaceRoot "澪Agent应用"
+if (-not $Version) {
+    $Version = (Get-Content -LiteralPath (Join-Path $AgentRoot 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$') { throw 'Invalid source package version.' }
 $BackendPython = Join-Path $BackendRoot "backend\.venv\Scripts\python.exe"
 $PrivateTextValues = [System.Collections.Generic.List[string]]::new()
 foreach ($value in @($env:USERPROFILE, $WorkspaceRoot)) {
@@ -169,8 +173,11 @@ function New-PlaceholderPng {
 }
 
 function Write-PackageReadme {
-    param([string]$Path)
-    $content = Get-Content -LiteralPath (Join-Path $BackendRoot "文档\GitHub项目介绍.md") -Raw -Encoding UTF8
+    param(
+        [string]$Path,
+        [string]$SourceName = "GitHub项目介绍.md"
+    )
+    $content = Get-Content -LiteralPath (Join-Path $BackendRoot "文档\$SourceName") -Raw -Encoding UTF8
     $content = $content.Replace('(../LICENSE)', '(LICENSE)')
     $content = $content.Replace('(../SECURITY.md)', '(SECURITY.md)')
     $content = $content.Replace('(隐私说明.md)', '(私人AI日记系统/文档/隐私说明.md)')
@@ -223,7 +230,7 @@ function Assert-CleanPackage {
         throw "Forbidden runtime or private files remain in the source package: $($forbiddenPaths[0].FullName)"
     }
 
-    $textExtensions = @('.ps1', '.py', '.js', '.vue', '.css', '.html', '.json', '.md', '.txt', '.yml', '.yaml', '.toml', '.ini', '.iss', '.spec', '.bat', '.example')
+    $textExtensions = @('.ps1', '.py', '.js', '.cjs', '.mjs', '.vue', '.css', '.html', '.json', '.md', '.txt', '.yml', '.yaml', '.toml', '.ini', '.iss', '.spec', '.bat', '.example')
     $secretPattern = 'sk-[A-Za-z0-9_-]{24,}|(?im)^[ \t]*(OPENAI_API_KEY|QQ_ONEBOT_TOKEN|OBS_WEBSOCKET_PASSWORD)[ \t]*=[ \t]*(?!replace-with|your-|$)\S+'
     foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File) {
         if ($textExtensions -notcontains $file.Extension.ToLowerInvariant()) { continue }
@@ -231,7 +238,7 @@ function Assert-CleanPackage {
         catch { continue }
         if ($content -match $secretPattern) { throw "Potential secret found in $($file.FullName)" }
         foreach ($privateValue in $PrivateTextValues) {
-            if ($privateValue -and $content.Contains($privateValue)) {
+            if ($privateValue -and $content.Replace('\', '/').Contains($privateValue.Replace('\', '/'))) {
                 throw "Private machine or identity data found in $($file.FullName)"
             }
         }
@@ -307,6 +314,7 @@ $publicDefaultsPath = Join-Path $BackendDestination "backend\app\public_distribu
 [System.IO.File]::WriteAllText($publicDefaultsPath, $publicDefaults, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-PackageReadme -Path (Join-Path $PackageRoot "README.md")
+Write-PackageReadme -Path (Join-Path $PackageRoot "README_EN.md") -SourceName "GitHub项目介绍_EN.md"
 Write-PackageRootFiles -Root $PackageRoot
 New-PlaceholderPng -Path (Join-Path $AgentDestination "public\mio-avatar.png") -Width 512 -Height 512 -Label "MIO" -Avatar
 New-PlaceholderPng -Path (Join-Path $AgentDestination "src\assets\mio-workspace-bg.png") -Width 1600 -Height 1000 -Label "MIO AGENT"
@@ -364,7 +372,7 @@ if (-not $SkipValidation) {
         & $BackendPython -m compileall app
     }
     Invoke-CheckedCommand -Name "Backend tests" -WorkingDirectory (Join-Path $BackendDestination "backend") -Command {
-        & $BackendPython -m unittest discover -s tests
+        & $BackendPython -m pytest -q tests
     }
     foreach ($runtimeDirectory in @(
         (Join-Path $BackendDestination "数据"),

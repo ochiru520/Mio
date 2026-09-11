@@ -9,10 +9,12 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import (
+    agent_task_service,
     backup_service,
     autonomy_service,
     companion_service,
     cost_reconciliation_service,
+    creation_service,
     daily_diary_service,
     daily_review_service,
     db,
@@ -27,6 +29,7 @@ from . import (
     subservice_health,
     weekly_review_service,
 )
+from . import model_runtime
 from .runtime_identity import runtime_identity
 from .config import settings
 from .companion_action_service import backfill_explicit_structured_memories
@@ -38,6 +41,7 @@ from .routes import (
     backup,
     chat,
     companion,
+    creation,
     day,
     dependencies,
     diary,
@@ -58,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 
 BACKGROUND_TASK_FACTORIES = {
+    "agent_task_worker": agent_task_service.task_loop,
     "runtime_diagnostics_task": runtime_diagnostics.monitor_loop,
     "voice_startup_task": companion_service.start_voice_on_app_startup,
     "qq_startup_task": proactive_service.start_qq_on_app_startup,
@@ -78,6 +83,9 @@ def initialize_runtime() -> None:
     settings.ensure_directories()
     companion_service.cleanup_legacy_preview()
     db.init_db()
+    model_runtime.initialize()
+    from . import artifact_service
+    artifact_service.initialize()
     migration_service.run_migrations()
     onboarding_service.prepare_first_launch_defaults()
     db.cleanup_screen_observation_history(
@@ -128,6 +136,8 @@ async def app_lifespan(app: FastAPI):
     maintenance_service.reset_runtime_state()
     companion_service.reset_frontend_ready()
     initialize_runtime()
+    agent_task_service.recover_interrupted()
+    await creation_service.resume_active_jobs()
     await _start_background_tasks(app)
     maintenance_lock = asyncio.Lock()
 
@@ -137,13 +147,16 @@ async def app_lifespan(app: FastAPI):
         try:
             maintenance_service.begin(reason)
             maintenance_started = True
+            await model_runtime.cancel_operations(reason="maintenance")
+            await creation_service.shutdown()
             await _stop_background_tasks(app, exclude={"runtime_diagnostics_task"})
             await onebot.disconnect_all_connections(reason="Mio 正在执行数据维护")
             await asyncio.to_thread(maintenance_service.wait_for_quiescence, 30)
             return maintenance_service.status()
-        except Exception:
+        except BaseException:
             if maintenance_started:
                 maintenance_service.finish("maintenance_failed", keep_blocked=False)
+                await creation_service.resume_active_jobs()
                 await _start_background_tasks(app, exclude={"runtime_diagnostics_task"})
             if maintenance_lock.locked():
                 maintenance_lock.release()
@@ -153,6 +166,7 @@ async def app_lifespan(app: FastAPI):
         try:
             maintenance_service.finish(status, keep_blocked=not resume)
             if resume:
+                await creation_service.resume_active_jobs()
                 await _start_background_tasks(app, exclude={"runtime_diagnostics_task"})
             return maintenance_service.status()
         finally:
@@ -164,7 +178,9 @@ async def app_lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await model_runtime.cancel_operations(reason="shutdown")
         await _stop_background_tasks(app)
+        await creation_service.shutdown()
         try:
             await onebot.disconnect_all_connections(reason="Mio 后端正在关闭")
         except Exception:
@@ -178,6 +194,14 @@ async def app_lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="私人 AI 日记系统", lifespan=app_lifespan)
+    from .routes.runtime import router as runtime_router
+    app.include_router(runtime_router)
+    from .routes.artifacts import router as artifacts_router
+    app.include_router(artifacts_router)
+
+    @app.exception_handler(model_runtime.OperationBlocked)
+    async def operation_blocked(_request, error):
+        return JSONResponse(status_code=409, content={"detail": {"code": "operation_blocked", "message": str(error)}})
     app.add_middleware(LocalControlMiddleware)
 
     @app.middleware("http")
@@ -233,6 +257,7 @@ def create_app() -> FastAPI:
     app.include_router(autonomy.router)
     app.include_router(backup.router)
     app.include_router(companion.router)
+    app.include_router(creation.router)
     app.include_router(dependencies.router)
     app.include_router(diary.router)
     app.include_router(day.router)

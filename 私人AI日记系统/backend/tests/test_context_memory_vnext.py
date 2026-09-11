@@ -11,10 +11,17 @@ from app import db
 from app.context_service import (
     build_chat_context,
     build_fast_chat_context_snapshot,
+    build_recent_user_timeline_context,
+    build_temporal_evidence_context,
     estimate_tokens,
     preview_chat_context_usage,
 )
-from app.memory_service import retrieve_memory_items, save_memory_candidate, save_memory_item
+from app.memory_service import (
+    build_structured_memory_context,
+    retrieve_memory_items,
+    save_memory_candidate,
+    save_memory_item,
+)
 
 
 class ContextAndMemoryVNextTests(unittest.TestCase):
@@ -95,6 +102,132 @@ class ContextAndMemoryVNextTests(unittest.TestCase):
         self.assertLessEqual(len(context.raw_messages), 6)
         self.assertLessEqual(context.used_tokens, 900)
         self.assertFalse(context.compression_triggered)
+
+    def test_fast_chat_keeps_complete_user_turn_when_reply_has_many_bubbles(self) -> None:
+        conversation_id = "desktop_turn_context"
+        for turn in range(9):
+            db.save_message("user", f"用户第{turn}轮", conversation_id=conversation_id)
+            for bubble in range(5):
+                db.save_message("assistant", f"第{turn}轮回复气泡{bubble}", conversation_id=conversation_id)
+        db.save_message("user", "还在做呢", conversation_id=conversation_id)
+        rows = list(db.get_recent_messages(limit=96, conversation_id=conversation_id))
+
+        context = build_fast_chat_context_snapshot(
+            conversation_id,
+            rows,
+            recent_turns=8,
+            max_tokens=6000,
+        )
+
+        contents = [str(row["content"]) for row in context.raw_messages]
+        self.assertIn("用户第2轮", contents)
+        self.assertIn("还在做呢", contents)
+        self.assertNotIn("用户第1轮", contents)
+        first_user = next(row for row in context.raw_messages if row["role"] == "user")
+        self.assertEqual(first_user["content"], "用户第2轮")
+
+    def test_recent_user_timeline_reads_today_and_yesterday_with_record_dates(self) -> None:
+        conversation_id = "desktop_today_yesterday"
+        today = datetime.fromisoformat(db.logical_day_bounds(db.today_string())[0])
+        yesterday = today - timedelta(days=1)
+        older = today - timedelta(days=2)
+        with db.get_conn() as conn:
+            for content, created_at in (
+                ("更早的事情", (older + timedelta(hours=8)).isoformat()),
+                ("昨天刚说的安排", (yesterday + timedelta(hours=8)).isoformat()),
+                ("今天刚说的进度", (today + timedelta(hours=8)).isoformat()),
+            ):
+                conn.execute(
+                    "INSERT INTO messages(role, content, source, conversation_id, created_at) "
+                    "VALUES ('user', ?, 'desktop', ?, ?)",
+                    (content, conversation_id, created_at),
+                )
+
+        context = build_recent_user_timeline_context(conversation_id)
+
+        self.assertIn(f"今天（记录日 {db.today_string()}）", context)
+        self.assertIn("今天刚说的进度", context)
+        self.assertIn("昨天刚说的安排", context)
+        self.assertNotIn("更早的事情", context)
+
+    def test_fast_chat_reads_recent_diary_index_and_dates_temporal_evidence(self) -> None:
+        conversation_id = "qq_private_time_test"
+        with db.get_conn() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO messages (role, content, source, conversation_id, created_at)
+                VALUES ('user', ?, 'qq', ?, ?)
+                """,
+                (
+                    "不嘛，我现在就要测，明天异环更新，我得休息一天爽玩游戏",
+                    conversation_id,
+                    "2026-08-13T00:51:29+08:00",
+                ),
+            )
+            source_message_id = int(cursor.lastrowid)
+        db.upsert_diary(
+            "2026-08-12",
+            "异环更新前夜",
+            "# 记录\n明天异环更新，计划休息一天玩游戏。",
+        )
+        today = db.today_string()
+        db.upsert_diary(today, "最近开发记录", "# 今天\n继续修复 Mio 的记忆日期。")
+        query = "提问，异环更新，我说要玩一天是什么时候的事？"
+        db.save_message("user", query, conversation_id=conversation_id)
+        rows = list(db.get_recent_messages(limit=20, conversation_id=conversation_id))
+
+        context = build_fast_chat_context_snapshot(conversation_id, rows)
+
+        self.assertIn("最近 7 天日记索引", context.system_context)
+        self.assertIn("最近开发记录", context.system_context)
+        self.assertIn("来源记录日=2026-08-12", context.system_context)
+        self.assertIn("“明天”=2026-08-13", context.system_context)
+        self.assertIn("异环更新", context.system_context)
+        self.assertLessEqual(context.used_tokens, context.max_tokens)
+        self.assertGreater(source_message_id, 0)
+
+        db.save_message("user", "具体几月几号？", conversation_id=conversation_id)
+        follow_up_rows = list(db.get_recent_messages(limit=20, conversation_id=conversation_id))
+        follow_up_context = build_fast_chat_context_snapshot(conversation_id, follow_up_rows)
+
+        self.assertIn("来源记录日=2026-08-12", follow_up_context.system_context)
+        self.assertIn("“明天”=2026-08-13", follow_up_context.system_context)
+
+    def test_temporal_evidence_is_not_exposed_to_group_chat(self) -> None:
+        db.upsert_diary("2026-08-12", "私人日记", "明天异环更新。")
+
+        context = build_temporal_evidence_context(
+            "qq_group_123",
+            "异环更新是什么时候的事？",
+        )
+
+        self.assertEqual(context, "")
+
+    def test_structured_memory_uses_source_date_instead_of_update_date(self) -> None:
+        conversation_id = "desktop_memory_date"
+        with db.get_conn() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO messages (role, content, source, conversation_id, created_at)
+                VALUES ('user', ?, 'desktop', ?, ?)
+                """,
+                ("明天休息", conversation_id, "2026-08-13T00:30:00+08:00"),
+            )
+            source_message_id = int(cursor.lastrowid)
+        save_memory_item(
+            layer="L1",
+            category="plan",
+            memory_key="rest_plan",
+            content="用户说明天休息",
+            source_conversation_id=conversation_id,
+            source_message_id=source_message_id,
+            confidence=0.90,
+        )
+
+        context = build_structured_memory_context(conversation_id, "休息")
+
+        self.assertIn("来源记录日 2026-08-12", context)
+        self.assertNotIn("更新于", context)
 
     def test_fts_retrieves_chinese_memory(self) -> None:
         save_memory_item(

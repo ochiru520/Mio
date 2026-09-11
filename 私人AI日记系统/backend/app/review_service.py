@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import db
+from .model_runtime import operation
 from .llm import call_chat_completion
 from .prompts import build_review_messages
 
@@ -26,6 +27,7 @@ def _material_log_for_rows(rows) -> str:
     return "\n".join(f"- {row['content']}" for row in rows)
 
 
+@operation("record", automatic=True)
 async def generate_review_for_date(date: str, overwrite: bool = True) -> ReviewResult:
     existing = db.get_daily_review(date)
     if existing is not None and not overwrite:
@@ -44,5 +46,8 @@ async def generate_review_for_date(date: str, overwrite: bool = True) -> ReviewR
     )
     markdown_content = await call_chat_completion(messages, temperature=0.35)
     markdown_content = markdown_content.replace("**", "").strip()
+    existing = db.get_daily_review(date)
+    if not overwrite and existing is not None:
+        return ReviewResult(date, str(existing["markdown_content"]), False)
     db.upsert_daily_review(date, markdown_content)
     return ReviewResult(date=date, markdown_content=markdown_content, created=True)

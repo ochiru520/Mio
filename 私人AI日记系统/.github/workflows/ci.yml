@@ -16,12 +16,14 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: 安装依赖
         run: python -m pip install -r backend/requirements.txt
+      - name: 安装测试依赖
+        run: python -m pip install pytest==9.1.1
       - name: 扫描高置信度密钥
         shell: pwsh
         run: |
           $hits = @(git grep -I -n -E 'sk-[A-Za-z0-9_-]{24,}' -- .)
           if ($LASTEXITCODE -eq 0 -and $hits.Count) {
-            $hits | Write-Host
+            Write-Host "疑似密钥命中数：$($hits.Count)，请在本地检查；不输出匹配内容。"
             throw '发现疑似 API Key'
           }
           if ($LASTEXITCODE -notin @(0, 1)) { throw '密钥扫描执行失败' }
@@ -30,4 +32,4 @@ jobs:
         run: python -m compileall app
       - name: 运行测试
         working-directory: backend
-        run: python -m unittest discover -s tests
+        run: python -m pytest -q tests

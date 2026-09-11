@@ -2,19 +2,64 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from math import ceil
 from sqlite3 import Row
 
 from . import db
+from .model_runtime import operation, OperationStopped
 from .config import settings
 from .llm import call_chat_completion
-from .memory_service import build_structured_memory_context
+from .memory_service import build_structured_memory_context, is_group_conversation
 from .life_loop_service import build_follow_up_result_context
 
 
 SUMMARY_TYPE = "conversation_summary"
 SUMMARY_MARKER_RE = re.compile(r"<!--\s*last_message_id:(\d+)\s*-->")
+TEMPORAL_LOOKUP_RE = re.compile(
+    r"什么时候|什么时间|几月几号|哪一天|哪天|何时|多久前|前几天|"
+    r"之前.*(?:说|提|聊|发生)|(?:说|提|聊).*(?:哪天|日期|时候)|具体日期"
+)
+TEMPORAL_QUERY_NOISE = (
+    "什么时候",
+    "什么时间",
+    "几月几号",
+    "哪一天",
+    "哪天",
+    "何时",
+    "多久前",
+    "前几天",
+    "具体日期",
+    "提问",
+    "请问",
+    "我说过",
+    "你说过",
+    "我说",
+    "你说",
+    "发生的事",
+    "的事情",
+    "的事",
+)
+TEMPORAL_GENERIC_TERMS = {
+    "什么",
+    "时候",
+    "时间",
+    "几月",
+    "月几",
+    "几号",
+    "哪天",
+    "哪一",
+    "一天",
+    "多久",
+    "前几",
+    "之前",
+    "具体",
+    "日期",
+    "提问",
+    "请问",
+    "事情",
+    "的事",
+}
 
 
 @dataclass(frozen=True)
@@ -70,6 +115,171 @@ def _compact_text(text: str, max_chars: int) -> str:
     return cleaned[: max_chars - 1].rstrip() + "…"
 
 
+def _trim_text_to_token_budget(text: str, max_tokens: int) -> str:
+    clean = str(text or "").strip()
+    if not clean or max_tokens <= 0:
+        return ""
+    if estimate_tokens(clean) <= max_tokens:
+        return clean
+    low, high = 1, len(clean)
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = clean[:middle].rstrip() + "…"
+        if estimate_tokens(candidate) <= max_tokens:
+            low = middle
+        else:
+            high = middle - 1
+    return clean[:low].rstrip() + "…"
+
+
+def _recent_diary_context(conversation_id: str, *, limit: int = 3) -> str:
+    if is_group_conversation(conversation_id):
+        return ""
+    today = date.fromisoformat(db.today_string())
+    start_date = (today - timedelta(days=6)).isoformat()
+    rows = list(db.list_diaries_since(start_date))[-max(1, min(int(limit), 5)) :]
+    if not rows:
+        return ""
+    lines = [
+        f"- {row['date']}《{row['title'] or row['date']}》："
+        f"{_compact_text(str(row['markdown_content'] or ''), 110)}"
+        for row in reversed(rows)
+    ]
+    return (
+        "最近 7 天日记索引（日期是记录日，不代表事情仍在今天发生）：\n"
+        + "\n".join(lines)
+    )
+
+
+def _temporal_query_terms(query: str) -> list[str]:
+    cleaned = str(query or "").casefold()
+    for phrase in TEMPORAL_QUERY_NOISE:
+        cleaned = cleaned.replace(phrase, " ")
+    chunks = re.findall(r"[a-z0-9][a-z0-9_.+-]{1,}|[\u3400-\u4dbf\u4e00-\u9fff]{2,}", cleaned)
+    terms: set[str] = set()
+    for chunk in chunks:
+        if len(chunk) <= 12 and chunk not in TEMPORAL_GENERIC_TERMS:
+            terms.add(chunk)
+        if re.fullmatch(r"[\u3400-\u4dbf\u4e00-\u9fff]+", chunk):
+            for size in range(min(4, len(chunk)), 1, -1):
+                for index in range(len(chunk) - size + 1):
+                    term = chunk[index : index + size]
+                    if term not in TEMPORAL_GENERIC_TERMS:
+                        terms.add(term)
+    return sorted(terms, key=lambda item: (-len(item), item))[:32]
+
+
+def _temporal_lookup_query(query: str, history_rows: list[Row] | None = None) -> str:
+    current = str(query or "").strip()
+    if not TEMPORAL_LOOKUP_RE.search(current) or _temporal_query_terms(current):
+        return current
+    for row in reversed(history_rows or []):
+        if row["role"] != "user":
+            continue
+        previous = _row_content(row)
+        if not previous or previous == current:
+            continue
+        combined = f"{previous}\n{current}"
+        if _temporal_query_terms(combined):
+            return combined
+    return current
+
+
+def _evidence_score(text: object, terms: list[str]) -> int:
+    haystack = str(text or "").casefold()
+    return sum(len(term) * len(term) for term in terms if term in haystack)
+
+
+def _evidence_excerpt(text: object, terms: list[str], max_chars: int = 190) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(clean) <= max_chars:
+        return clean
+    positions = [clean.casefold().find(term) for term in terms if term in clean.casefold()]
+    positions = [position for position in positions if position >= 0]
+    start = max(0, (min(positions) if positions else 0) - 45)
+    excerpt = clean[start : start + max_chars]
+    if start:
+        excerpt = "…" + excerpt
+    if start + max_chars < len(clean):
+        excerpt += "…"
+    return excerpt
+
+
+def _relative_date_note(text: object, logical_date: str) -> str:
+    content = str(text or "")
+    try:
+        anchor = date.fromisoformat(logical_date)
+    except ValueError:
+        return ""
+    notes: list[str] = []
+    for label, delta in (("昨天", -1), ("今天", 0), ("明天", 1)):
+        if label in content:
+            notes.append(f"“{label}”={anchor + timedelta(days=delta)}")
+    return "；".join(notes)
+
+
+def build_temporal_evidence_context(
+    conversation_id: str,
+    query: str,
+    *,
+    before_message_id: int = 0,
+) -> str:
+    if is_group_conversation(conversation_id) or not TEMPORAL_LOOKUP_RE.search(str(query or "")):
+        return ""
+    terms = _temporal_query_terms(query)
+    if not terms:
+        return ""
+
+    message_candidates: list[tuple[int, Row]] = []
+    for row in db.list_recent_private_user_messages(limit=2000):
+        if before_message_id and int(row["id"]) >= before_message_id:
+            continue
+        score = _evidence_score(row["content"], terms)
+        if score:
+            same_conversation_bonus = 25 if str(row["conversation_id"]) == conversation_id else 0
+            message_candidates.append((score + same_conversation_bonus, row))
+    message_candidates.sort(key=lambda item: (item[0], int(item[1]["id"])), reverse=True)
+
+    diary_candidates: list[tuple[int, Row]] = []
+    for row in db.list_diaries():
+        score = _evidence_score(f"{row['title']} {row['markdown_content']}", terms)
+        if score:
+            diary_candidates.append((score, row))
+    diary_candidates.sort(key=lambda item: (item[0], str(item[1]["date"])), reverse=True)
+
+    lines: list[str] = []
+    for _, row in message_candidates[:2]:
+        try:
+            written_at = datetime.fromisoformat(str(row["created_at"]))
+            logical_date = db.logical_date_for_datetime(written_at)
+            actual_time = written_at.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            logical_date = str(row["created_at"])[:10]
+            actual_time = str(row["created_at"])[:16]
+        relative_note = _relative_date_note(row["content"], logical_date)
+        suffix = f"（{relative_note}）" if relative_note else ""
+        lines.append(
+            f"- 用户原话，来源记录日={logical_date}，实际写入时间={actual_time}{suffix}："
+            f"{_evidence_excerpt(row['content'], terms)}"
+        )
+    for _, row in diary_candidates[:1]:
+        logical_date = str(row["date"])
+        relative_note = _relative_date_note(row["markdown_content"], logical_date)
+        suffix = f"（{relative_note}）" if relative_note else ""
+        lines.append(
+            f"- 日记《{row['title'] or logical_date}》，记录日={logical_date}{suffix}："
+            f"{_evidence_excerpt(row['markdown_content'], terms)}"
+        )
+    if not lines:
+        return ""
+    return (
+        "本轮在询问过去事件的日期。以下是按关键词找到的带日期证据，不代表这些计划现在仍有效：\n"
+        "回答日期时只依据这些来源日期。相对时间按每条的来源记录日换算；"
+        "记录维护时间不能当作事件日期。证据不足时直接说不确定，不得根据当前日期猜测。\n"
+        + "\n".join(lines)
+    )
+
+
 def _strip_summary_marker(content: str) -> str:
     return SUMMARY_MARKER_RE.sub("", content).strip()
 
@@ -116,6 +326,77 @@ def _trim_rows_to_token_budget(rows: list[Row], max_tokens: int) -> list[Row]:
             break
         selected.append(row)
     return list(reversed(selected))
+
+
+def _rows_by_recent_user_turns(rows: list[Row], recent_turns: int) -> list[Row]:
+    """Keep complete conversational turns so assistant bubbles cannot evict the user prompt."""
+    user_indexes = [index for index, row in enumerate(rows) if row["role"] == "user"]
+    if not user_indexes:
+        return rows[-max(2, int(recent_turns)) :]
+    start = user_indexes[max(0, len(user_indexes) - max(1, int(recent_turns)))]
+    return rows[start:]
+
+
+def _trim_turn_rows_to_token_budget(rows: list[Row], max_tokens: int) -> list[Row]:
+    """Trim oldest whole turns first, never leaving reply bubbles without their user message."""
+    turns: list[list[Row]] = []
+    for row in rows:
+        if row["role"] == "user" or not turns:
+            turns.append([row])
+        else:
+            turns[-1].append(row)
+    selected: list[list[Row]] = []
+    used = 0
+    for turn in reversed(turns):
+        turn_tokens = sum(_row_token_count(row) for row in turn)
+        if selected and used + turn_tokens > max_tokens:
+            break
+        selected.append(turn)
+        used += turn_tokens
+    return [row for turn in reversed(selected) for row in turn]
+
+
+def build_recent_user_timeline_context(conversation_id: str) -> str:
+    """Expose today's and yesterday's user originals with explicit record dates."""
+    if is_group_conversation(conversation_id) or conversation_id.startswith("desktop_agent_"):
+        return ""
+    today = date.fromisoformat(db.today_string())
+    yesterday = today - timedelta(days=1)
+    rows = db.get_messages_since(yesterday.isoformat(), conversation_id=conversation_id, limit=1000)
+    by_day: dict[str, list[Row]] = {yesterday.isoformat(): [], today.isoformat(): []}
+    for row in rows:
+        if row["role"] != "user":
+            continue
+        try:
+            logical_day = db.logical_date_for_datetime(datetime.fromisoformat(str(row["created_at"])))
+        except (TypeError, ValueError):
+            continue
+        if logical_day in by_day:
+            by_day[logical_day].append(row)
+    sections: list[str] = []
+    for logical_day, label, limit in (
+        (today.isoformat(), "今天", 24),
+        (yesterday.isoformat(), "昨天", 16),
+    ):
+        day_rows = by_day[logical_day][-limit:]
+        if not day_rows:
+            continue
+        lines: list[str] = []
+        for row in day_rows:
+            try:
+                written = datetime.fromisoformat(str(row["created_at"])).astimezone(db._local_timezone())
+                time_label = written.strftime("%H:%M")
+            except (TypeError, ValueError):
+                time_label = str(row["created_at"])[11:16] or "时间未知"
+            lines.append(f"- {time_label} 用户：{_compact_text(_row_content(row), 180)}")
+        sections.append(f"{label}（记录日 {logical_day}）：\n" + "\n".join(lines))
+    if not sections:
+        return ""
+    return (
+        "今昨用户原话时间线：行首时间是消息写入时间，不自动等于事情发生时间。"
+        "相对时间只按对应记录日解释；昨天说的“今天”属于昨天，旧事不得说成刚发生。\n"
+        + "\n".join(sections)
+    )
 
 
 def _select_raw_messages(
@@ -172,7 +453,11 @@ def _context_thresholds(used_tokens: int) -> tuple[bool, bool]:
 
 def preview_chat_context_usage(conversation_id: str, history_rows: list[Row]) -> dict[str, object]:
     """Return the next-turn context budget without triggering a model compression call."""
-    periodic_context = build_periodic_memory_context(conversation_id, _latest_user_query(history_rows))
+    periodic_context = build_periodic_memory_context(
+        conversation_id,
+        _latest_user_query(history_rows),
+        history_rows,
+    )
     summary_row = db.get_latest_memory(SUMMARY_TYPE, tags=conversation_id)
     summary_content = str(summary_row["content"] or "") if summary_row else ""
     summary_text = _strip_summary_marker(summary_content)
@@ -214,7 +499,11 @@ def preview_chat_context_usage(conversation_id: str, history_rows: list[Row]) ->
 
 def build_chat_context_snapshot(conversation_id: str, history_rows: list[Row]) -> ChatContext:
     """Build context from stored memory without triggering an LLM compression call."""
-    periodic_context = build_periodic_memory_context(conversation_id, _latest_user_query(history_rows))
+    periodic_context = build_periodic_memory_context(
+        conversation_id,
+        _latest_user_query(history_rows),
+        history_rows,
+    )
     summary_row = db.get_latest_memory(SUMMARY_TYPE, tags=conversation_id)
     summary_content = str(summary_row["content"] or "") if summary_row else ""
     summary_text = _strip_summary_marker(summary_content)
@@ -268,38 +557,57 @@ def build_fast_chat_context_snapshot(
     conversation_id: str,
     history_rows: list[Row],
     *,
-    recent_messages: int = 6,
-    max_tokens: int = 1800,
+    recent_messages: int | None = None,
+    recent_turns: int = 8,
+    max_tokens: int = 3600,
 ) -> ChatContext:
     """Build a bounded context for ordinary chat without model compression or broad diary scans."""
     query = _latest_user_query(history_rows)
+    temporal_query = _temporal_lookup_query(query, history_rows)
+    current_user_message_id = next(
+        (int(row["id"]) for row in reversed(history_rows) if row["role"] == "user"),
+        0,
+    )
+    temporal_evidence = _compact_text(
+        build_temporal_evidence_context(
+            conversation_id,
+            temporal_query,
+            before_message_id=current_user_message_id,
+        ),
+        900,
+    )
+    recent_timeline = _compact_text(build_recent_user_timeline_context(conversation_id), 1900)
+    recent_diaries = _compact_text(_recent_diary_context(conversation_id), 420)
     memory_context = _compact_text(
         build_structured_memory_context(conversation_id, query),
         800,
     )
-    follow_up_context = _compact_text(build_follow_up_result_context(conversation_id), 360)
     summary_row = db.get_latest_memory(SUMMARY_TYPE, tags=conversation_id)
     summary_content = str(summary_row["content"] or "") if summary_row else ""
     summary_text = _compact_text(_strip_summary_marker(summary_content), 520)
 
-    raw_messages = list(history_rows[-max(2, int(recent_messages)):])
-    reserved_tokens = (
-        estimate_tokens(memory_context)
-        + estimate_tokens(follow_up_context)
-        + estimate_tokens(summary_text)
-    )
-    raw_messages = _trim_rows_to_token_budget(
-        raw_messages,
-        max(512, int(max_tokens) - reserved_tokens),
-    )
     context_parts: list[str] = []
+    if temporal_evidence:
+        context_parts.append(temporal_evidence)
+    if recent_timeline:
+        context_parts.append(recent_timeline)
+    if recent_diaries:
+        context_parts.append(recent_diaries)
     if summary_text:
         context_parts.append("较早聊天摘要：\n" + summary_text)
     if memory_context:
         context_parts.append(memory_context)
-    if follow_up_context:
-        context_parts.append(follow_up_context)
-    system_context = "\n\n---\n\n".join(context_parts)
+    system_context = _trim_text_to_token_budget(
+        "\n\n---\n\n".join(context_parts),
+        max(700, int(max_tokens) - 1500),
+    )
+    raw_messages = _rows_by_recent_user_turns(list(history_rows), recent_turns)
+    if recent_messages is not None:
+        raw_messages = raw_messages[-max(2, int(recent_messages)) :]
+    raw_messages = _trim_turn_rows_to_token_budget(
+        raw_messages,
+        max(256, int(max_tokens) - estimate_tokens(system_context)),
+    )
     used_tokens = estimate_tokens(system_context) + sum(_row_token_count(row) for row in raw_messages)
     used_chars = len(system_context) + sum(_row_char_count(row) for row in raw_messages)
     return ChatContext(
@@ -320,9 +628,27 @@ def _start_date_for_memory() -> str:
     return (today - timedelta(days=days - 1)).isoformat()
 
 
-def build_periodic_memory_context(conversation_id: str, query: str = "") -> str:
+def build_periodic_memory_context(
+    conversation_id: str,
+    query: str = "",
+    history_rows: list[Row] | None = None,
+) -> str:
     start_date = _start_date_for_memory()
     sections: list[str] = []
+
+    latest_user = db.get_last_message(conversation_id=conversation_id, role="user")
+    latest_user_id = (
+        int(latest_user["id"])
+        if latest_user is not None and _row_content(latest_user) == str(query or "").strip()
+        else 0
+    )
+    temporal_evidence = build_temporal_evidence_context(
+        conversation_id,
+        _temporal_lookup_query(query, history_rows),
+        before_message_id=latest_user_id,
+    )
+    if temporal_evidence:
+        sections.append(temporal_evidence)
 
     structured_memory = build_structured_memory_context(conversation_id, query)
     if structured_memory:
@@ -402,6 +728,7 @@ def build_periodic_memory_context(conversation_id: str, query: str = "") -> str:
     return _compact_text(prefix + context, settings.memory_context_max_chars)
 
 
+@operation("memory", automatic=True)
 async def _compress_old_messages(
     conversation_id: str,
     previous_summary: str,
@@ -437,7 +764,11 @@ async def build_chat_context(
     conversation_id: str,
     history_rows: list[Row],
 ) -> ChatContext:
-    periodic_context = build_periodic_memory_context(conversation_id, _latest_user_query(history_rows))
+    periodic_context = build_periodic_memory_context(
+        conversation_id,
+        _latest_user_query(history_rows),
+        history_rows,
+    )
     summary_row = db.get_latest_memory(SUMMARY_TYPE, tags=conversation_id)
     summary_content = str(summary_row["content"] or "") if summary_row else ""
     summary_text = _strip_summary_marker(summary_content)
@@ -467,6 +798,8 @@ async def build_chat_context(
                     importance=4,
                     tags=conversation_id,
                 )
+            except OperationStopped:
+                pass
             except Exception:
                 # 压缩失败时不影响正常聊天，只少带一些旧原文。
                 pass

@@ -4317,6 +4317,10 @@ class CompanionConfigTests(unittest.TestCase):
                 return_value=reaction_completion,
             ) as model_call,
             patch("app.screen_observation_service.companion_service.pet_running", return_value=True),
+            patch(
+                "app.screen_observation_service.companion_service.speak_text",
+                return_value=True,
+            ) as speak_text,
         ):
             companion_service.window_observer.select_screen("primary")
             replied = asyncio.run(screen_observation_service.analyze_once(force=True, wake=True))
@@ -4327,6 +4331,7 @@ class CompanionConfigTests(unittest.TestCase):
         self.assertIn("陪你", saved["content"])
         wake_prompt = model_call.call_args.args[0][1]["content"]
         self.assertIn("随桌宠窗口一起醒来", wake_prompt)
+        speak_text.assert_called_once()
 
     def test_pet_start_and_stop_link_screen_observation(self) -> None:
         background_tasks = BackgroundTasks()

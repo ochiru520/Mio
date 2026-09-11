@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
+import threading
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -155,6 +158,7 @@ RUNTIME_SETTING_SPECS: dict[str, tuple[str, float | int | None, float | int | No
     "qq_proactive_check_seconds": ("int", 30, 3600),
     "daily_diary_auto_enabled": ("bool", None, None),
     "daily_diary_check_seconds": ("int", 30, 3600),
+    "daily_diary_model_id": ("str", 0, 200),
     "daily_review_auto_enabled": ("bool", None, None),
     "daily_review_auto_hour": ("int", 0, 23),
     "daily_review_auto_minute": ("int", 0, 59),
@@ -170,6 +174,7 @@ RUNTIME_SETTING_SPECS: dict[str, tuple[str, float | int | None, float | int | No
     "monthly_review_check_seconds": ("int", 30, 86400),
     "backup_enabled": ("bool", None, None),
     "backup_keep_count": ("int", 1, 365),
+    "backup_max_total_mb": ("int", 64, 102400),
     "backup_check_seconds": ("int", 60, 86400),
     "night_close_enabled": ("bool", None, None),
     "night_close_start_hour": ("int", 0, 23),
@@ -195,6 +200,10 @@ RUNTIME_SETTING_SPECS: dict[str, tuple[str, float | int | None, float | int | No
     "napcat_webui_url": ("url", 0, 500),
     "voice_training_dir": ("path", 1, 1000),
     "local_vision_dir": ("path", 1, 1000),
+    "comfyui_root": ("path", 1, 1000),
+    "comfyui_base_url": ("url", 1, 500),
+    "creation_image_workflow_id": ("str", 1, 100),
+    "creation_video_workflow_id": ("str", 1, 100),
 }
 
 RUNTIME_PATH_FIELDS = frozenset(
@@ -322,8 +331,10 @@ class Settings:
     daily_review_check_seconds: int = _env_int("DAILY_REVIEW_CHECK_SECONDS", 600)
     daily_diary_auto_enabled: bool = _env_bool("DAILY_DIARY_AUTO_ENABLED", False)
     daily_diary_check_seconds: int = _env_int("DAILY_DIARY_CHECK_SECONDS", 60)
+    daily_diary_model_id: str = os.getenv("DAILY_DIARY_MODEL_ID", "").strip()
     backup_enabled: bool = _env_bool("BACKUP_ENABLED", True)
     backup_keep_count: int = _env_int("BACKUP_KEEP_COUNT", 14)
+    backup_max_total_mb: int = _env_int("BACKUP_MAX_TOTAL_MB", 1024)
     backup_check_seconds: int = _env_int("BACKUP_CHECK_SECONDS", 3600)
     weekly_review_enabled: bool = _env_bool("WEEKLY_REVIEW_ENABLED", False)
     weekly_review_hour: int = _env_int("WEEKLY_REVIEW_HOUR", 9)
@@ -340,6 +351,9 @@ class Settings:
     photo_archive_enabled: bool = _env_bool("PHOTO_ARCHIVE_ENABLED", True)
     photo_dir: Path = PROJECT_ROOT / "数据" / "照片"
     agent_attachment_dir: Path = PROJECT_ROOT / "数据" / "Agent附件"
+    creation_dir: Path = PROJECT_ROOT / "数据" / "创作"
+    creation_asset_dir: Path = PROJECT_ROOT / "数据" / "创作" / "素材"
+    creation_output_dir: Path = PROJECT_ROOT / "数据" / "创作" / "输出"
     model_profiles_path: Path = PROJECT_ROOT / "数据" / "模型供应商.json"
     agent_attachment_max_count: int = _env_int("AGENT_ATTACHMENT_MAX_COUNT", 5)
     agent_text_attachment_max_chars: int = _env_int("AGENT_TEXT_ATTACHMENT_MAX_CHARS", 200000)
@@ -359,12 +373,25 @@ class Settings:
     local_vision_dir: Path = Path(
         _env("MIO_LOCAL_VISION_DIR") or WORKSPACE_ROOT / "本地视觉"
     )
+    comfyui_root: Path = Path(_env("MIO_COMFYUI_ROOT") or r"D:\AI\ComfyUI-aki-v1.4")
+    comfyui_base_url: str = _env("MIO_COMFYUI_BASE_URL", "http://127.0.0.1:8188").rstrip("/")
+    creation_image_workflow_id: str = "anima-2.9b-image"
+    creation_video_workflow_id: str = "minimax-h3-video"
+    comfyui_request_timeout_seconds: int = _env_int("MIO_COMFYUI_REQUEST_TIMEOUT_SECONDS", 20)
+    creation_image_timeout_seconds: int = _env_int("MIO_CREATION_IMAGE_TIMEOUT_SECONDS", 1200)
+    creation_video_timeout_seconds: int = _env_int("MIO_CREATION_VIDEO_TIMEOUT_SECONDS", 7200)
+    creation_max_asset_bytes: int = _env_int("MIO_CREATION_MAX_ASSET_BYTES", 50 * 1024 * 1024)
+    creation_remote_max_bytes: int = _env_int("MIO_CREATION_REMOTE_MAX_BYTES", 50 * 1024 * 1024)
+    ffprobe_path: str = _env("MIO_FFPROBE_PATH")
+
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.diary_dir.mkdir(parents=True, exist_ok=True)
         self.site_custom_dir.mkdir(parents=True, exist_ok=True)
         self.photo_dir.mkdir(parents=True, exist_ok=True)
         self.agent_attachment_dir.mkdir(parents=True, exist_ok=True)
+        self.creation_asset_dir.mkdir(parents=True, exist_ok=True)
+        self.creation_output_dir.mkdir(parents=True, exist_ok=True)
         self.companion_dir.mkdir(parents=True, exist_ok=True)
         self.companion_sprite_dir.mkdir(parents=True, exist_ok=True)
         self.local_vision_dir.mkdir(parents=True, exist_ok=True)
@@ -468,7 +495,26 @@ def _apply_runtime_settings(values: dict[str, object]) -> dict[str, Any]:
     return _runtime_settings_payload()
 
 
+_runtime_settings_lock = threading.RLock()
+
+
+class SettingsConflictError(ValueError):
+    pass
+
+
+def runtime_settings_snapshot() -> dict[str, Any]:
+    with _runtime_settings_lock:
+        values = load_runtime_settings()
+        revision = hashlib.sha256(json.dumps(values, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        return {"settings": values, "revision": revision}
+
+
 def load_runtime_settings() -> dict[str, Any]:
+    with _runtime_settings_lock:
+        return _load_runtime_settings()
+
+
+def _load_runtime_settings() -> dict[str, Any]:
     try:
         saved = json.loads(settings.runtime_config_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
@@ -515,12 +561,26 @@ def load_runtime_settings() -> dict[str, Any]:
     return _runtime_settings_payload()
 
 
-def save_runtime_settings(changes: dict[str, object]) -> dict[str, Any]:
+def save_runtime_settings(changes: dict[str, object], *, expected_revision: str | None = None) -> dict[str, Any]:
+    with _runtime_settings_lock:
+        if expected_revision is not None:
+            if expected_revision.strip('"') != runtime_settings_snapshot()["revision"]:
+                raise SettingsConflictError("设置已被其他窗口或后台更新，请重新载入后再保存。")
+        return _save_runtime_settings(changes)
+
+
+def _save_runtime_settings(changes: dict[str, object]) -> dict[str, Any]:
     if not isinstance(changes, dict):
         raise ValueError("运行设置必须是对象。")
     unknown = sorted(set(changes) - set(RUNTIME_SETTING_SPECS))
     if unknown:
         raise ValueError(f"不支持的运行设置：{unknown[0]}")
+    if "daily_diary_model_id" in changes and str(changes.get("daily_diary_model_id") or "").strip():
+        try:
+            from .model_registry import get_model_profile
+            get_model_profile(str(changes["daily_diary_model_id"]))
+        except ValueError as exc:
+            raise ValueError("日记专用模型不可用，请重新选择已配置的模型。") from exc
     proposed: dict[str, object] = _runtime_settings_payload()
     proposed.update(changes)
     normalized = _normalize_runtime_settings(proposed)
@@ -529,10 +589,29 @@ def save_runtime_settings(changes: dict[str, object]) -> dict[str, Any]:
         for key, value in normalized.items()
     }
     settings.runtime_config_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = settings.runtime_config_path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(serializable, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(settings.runtime_config_path)
-    return _apply_runtime_settings(normalized)
+    temporary = settings.runtime_config_path.with_name(f"{settings.runtime_config_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(serializable, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(settings.runtime_config_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    result = _apply_runtime_settings(normalized)
+    if "daily_diary_model_id" in changes:
+        try:
+            from .model_runtime import sync_record_model_policy
+            sync_record_model_policy(str(normalized.get("daily_diary_model_id") or ""))
+        except (ImportError, OSError):
+            pass
+    return result
+
+
+def update_runtime_settings_snapshot(changes: dict[str, object], expected_revision: str | None = None) -> dict[str, Any]:
+    with _runtime_settings_lock:
+        before = _runtime_settings_payload()
+        save_runtime_settings(changes, expected_revision=expected_revision)
+        restart_keys = {"napcat_dir", "voice_training_dir", "local_vision_dir"}
+        pending = sorted(key for key in restart_keys & changes.keys() if before[key] != _runtime_settings_payload()[key])
+        return {**runtime_settings_snapshot(), "application": {"saved": True, "applied": not pending, "restart_required": pending}}
 
 
 load_runtime_settings()

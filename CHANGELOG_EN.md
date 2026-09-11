@@ -30,6 +30,8 @@ Compared with **v0.1.0**, this release adds a dedicated workspace for model-driv
 - Model-policy priority, missing handoff attachments, orphan conversations, and handoff banners leaking across conversations.
 - File boundaries, output validation, concurrent settings updates, maintenance/restore protection, CI coverage, and production-only image-blur CSS behavior.
 
+- Fixed NapCat/QQ status detection for Windows short paths and alternate separators. Workflow regression tests now use independent samples instead of files from the developer's ComfyUI installation.
+
 ### Upgrade and limits
 
 Download `Mio-0.2.0-Windows-x64-Setup.exe` for Windows or `Mio-source-0.2.0.zip` for source. Both have SHA-256 files. Create a full backup before upgrading. To keep your history, select **reuse existing data** in the installer and choose your previous data directory. A new data directory starts fresh. Database structures are upgraded as needed; use a pre-upgrade backup when returning to an older version.

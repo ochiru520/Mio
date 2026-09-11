@@ -60,6 +60,20 @@ PNG_DATA_URL = (
 )
 
 
+
+def _canvas_fixture(specs, wires):
+    nodes = [{"id": node_id, "type": node_type, "mode": 0,
+              "inputs": [], "widgets_values_named": widgets}
+             for node_id, node_type, widgets in specs]
+    by_id = {node["id"]: node for node in nodes}
+    links = []
+    for link_id, (source, target, name) in enumerate(wires, 1):
+        inputs = by_id[target]["inputs"]
+        links.append([link_id, source, 0, target, len(inputs), "*"])
+        inputs.append({"name": name, "link": link_id})
+    return {"nodes": nodes, "links": links}
+
+
 class CreationFeatureTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -383,11 +397,34 @@ class CreationFeatureTests(unittest.TestCase):
 
     def test_selected_workflows_map_prompt_and_output_prefix(self) -> None:
         workflow = require_workflow("anima-2.9b-image", "image")
-        source = Path(r"D:\AI\ComfyUI-aki-v1.4\my_workflows") / workflow.filename
-        canvas = json.loads(source.read_text(encoding="utf-8"))
-        sampler = next(node for node in canvas["nodes"] if node["id"] == 28)
-        sampler["widgets_values"][-1] = 0.36
-        sampler["widgets_values_named"]["denoise"] = 0.36
+        lora_names = [
+            "功能_Anima_加速_Turbo_v0.1.safetensors",
+            "功能_Anima_加速_Turbo_v0.2.safetensors",
+            "功能_Anima_美学增强_HighresBoost.safetensors",
+            "画风_色色_Anima_v5.safetensors",
+            "画风_清晰线稿_Anima_v1.0.safetensors",
+            "画风_柔和赛璐璐粉彩_Anima_v1.1.safetensors",
+        ]
+        canvas = _canvas_fixture([
+            (29, "CR Text", {"text": "old positive"}),
+            (3, "CLIPTextEncode", {}),
+            (4, "CLIPTextEncode", {"text": "old negative"}),
+            (5, "CLIPTextEncode", {"text": "old refinement negative"}),
+            (23, "Power Lora Loader (rgthree)", {
+                f"lora_{index}": {"lora": name, "on": True, "strength": 1.0}
+                for index, name in enumerate(lora_names, 1)
+            }),
+            (16, "EmptyLatentImage", {"width": 512, "height": 512, "batch_size": 1}),
+            (8, "KSampler", {"seed": 1, "steps": 20, "cfg": 7, "denoise": 1.0}),
+            (28, "KSampler", {"seed": 2, "steps": 20, "cfg": 7, "denoise": 0.36}),
+            (21, "VAEDecode", {}),
+            (22, "SaveImage", {"filename_prefix": "old"}),
+        ], [
+            (29, 3, "text"), (3, 8, "positive"), (4, 8, "negative"),
+            (23, 8, "model"), (16, 8, "latent_image"),
+            (3, 28, "positive"), (5, 28, "negative"), (23, 28, "model"),
+            (8, 28, "latent_image"), (28, 21, "samples"), (21, 22, "images"),
+        ])
         root = Path(self.temp_dir.name) / "workflow-mapping"
         (root / "my_workflows").mkdir(parents=True)
         fixture = root / "my_workflows" / workflow.filename
@@ -443,14 +480,32 @@ class CreationFeatureTests(unittest.TestCase):
         ])
 
     def test_selected_video_workflow_prunes_alternate_branches(self) -> None:
-        root = Path(r"D:\AI\ComfyUI-aki-v1.4")
+        root = Path(self.temp_dir.name) / "video-mapping"
         workflow = require_workflow("minimax-h3-video", "video")
+        canvas = _canvas_fixture([
+            (138, "LoadImage", {"image": "old.png"}),
+            (135, "PrimitiveFloat", {"value": 3.0}),
+            (134, "ComfyMathExpression", {"expression": "a * 24"}),
+            (186, "Seed (rgthree)", {"seed": 1}),
+            (133, "MiniMaxH3ImageToVideo", {"prompt": "old prompt", "width": 512, "height": 512}),
+            (187, "KSampler", {"steps": 20}),
+            (188, "CreateVideo", {"fps": 24}),
+            (189, "SaveVideo", {"filename_prefix": "old"}),
+            (362, "OptionalUnusedEncoder", {"model": "not-installed"}),
+        ], [
+            (138, 133, "start_image"), (135, 134, "values.a"),
+            (134, 133, "length"), (133, 187, "positive"),
+            (186, 187, "seed"), (187, 188, "images"), (188, 189, "video"),
+        ])
+        (root / "my_workflows").mkdir(parents=True)
+        fixture = root / "my_workflows" / workflow.filename
+        fixture.write_text(json.dumps(canvas), encoding="utf-8")
+        workflow = replace(workflow, expected_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest())
         prompt, effective = build_workflow_prompt(
             root,
             workflow,
             {"prompt": "a short test", "width": 512, "height": 768, "duration_seconds": 1.5, "fps": 30, "seed": 321},
             job_id="video_unit",
-            object_info=json.loads(Path("object_info_tmp.json").read_text(encoding="utf-8-sig")) if Path("object_info_tmp.json").is_file() else None,
             uploaded_reference="reference.png",
         )
         self.assertEqual(workflow.filename, "黑鹤.json")

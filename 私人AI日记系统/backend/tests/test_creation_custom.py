@@ -116,13 +116,13 @@ class CustomWorkflowTests(unittest.TestCase):
             matches = custom.discover_comfyui()["candidates"]
         finally:
             object.__setattr__(settings, "comfyui_root", original)
-        found = next(item for item in matches if item["root"] == str(root))
+        found = next(item for item in matches if item["root"] == str(root.resolve()))
         self.assertTrue(found["installed"])
         self.assertFalse(found["launchable"])
         python = root.parent / "python_embeded/python.exe"
         python.parent.mkdir(); python.touch()
-        self.assertEqual(custom.python_for(root), python)
-        self.assertEqual(custom.normalize_root(root.parent), root)
+        self.assertEqual(custom.python_for(root), python.resolve())
+        self.assertEqual(custom.normalize_root(root.parent), root.resolve())
 
     def test_environment_url_and_path_validation(self):
         for value in ["http://example.com:8188", "http://127.0.0.1:0", "http://user:pass@localhost:8188", "http://localhost:8188/path", "https://127.0.0.1:8188"]:

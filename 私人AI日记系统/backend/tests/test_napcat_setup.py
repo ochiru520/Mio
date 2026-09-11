@@ -215,6 +215,19 @@ class NapCatSetupTests(unittest.TestCase):
         self.assertTrue(status["qq_process_running"])
         self.assertFalse(status["ordinary_qq_process_running"])
 
+    @unittest.skipUnless(os.name == "nt", "Windows executable path normalization")
+    def test_managed_process_paths_accept_forward_slashes_without_matching_siblings(self) -> None:
+        processes = [
+            (100, 1, "NapCatWinBootMain.exe", (self.root / "bootmain/NapCatWinBootMain.exe").as_posix()),
+            (101, 1, "QQ.exe", (self.root / "QQ.exe").as_posix()),
+            (102, 1, "QQ.exe", (self.root.parent / (self.root.name + "-other") / "QQ.exe").as_posix()),
+        ]
+        with patch("app.napcat_service._running_processes", return_value=processes):
+            status = _process_status()
+        self.assertEqual(status["napcat_process_count"], 1)
+        self.assertEqual(status["qq_process_count"], 1)
+        self.assertEqual(status["ordinary_qq_process_count"], 1)
+
     def test_plain_installed_qq_is_reported_separately_from_managed_qq(self) -> None:
         processes = [
             (101, 1, "QQ.exe", r"C:\Program Files\Tencent\QQNT\QQ.exe"),
@@ -303,7 +316,7 @@ class NapCatSetupTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertLess(elapsed, 5.0)
         self.assertTrue(marker.is_file(), completed.stdout + completed.stderr)
-        self.assertEqual(marker.read_text(encoding="utf-8").strip().casefold(), str(nested).casefold())
+        self.assertEqual(Path(marker.read_text(encoding="utf-8").strip()).resolve(), nested.resolve())
 
     @unittest.skipUnless(os.name == "nt", "只在 Windows 验证旧版 BootMain 启动门禁")
     def test_control_script_rejects_incomplete_legacy_bootmain(self) -> None:

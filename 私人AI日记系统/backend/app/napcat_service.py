@@ -83,10 +83,18 @@ def _process_status() -> dict[str, object]:
     qq_ids: list[int] = []
     ordinary_qq_ids: list[int] = []
     processes = _running_processes()
+    # Resolve both sides: Windows may report a short (8.3) executable path.
+    # Empty/inaccessible paths retain the existing name/ancestry fallback.
+    normalized_paths: dict[int, str] = {}
+    for pid, _parent_pid, _name, path in processes:
+        try:
+            normalized_paths[pid] = str(Path(path).resolve()).casefold() if path else ""
+        except (OSError, RuntimeError, ValueError):
+            normalized_paths[pid] = path.replace("/", "\\").casefold()
     parents = {pid: parent_pid for pid, parent_pid, _name, _path in processes}
     for pid, _parent_pid, name, path in processes:
         normalized_name = name.casefold()
-        normalized_path = path.casefold()
+        normalized_path = normalized_paths[pid]
         managed = bool(root and normalized_path.startswith(root + "\\"))
         if normalized_name == "napcatwinbootmain.exe" and (managed or not path):
             napcat_ids.append(pid)
@@ -94,7 +102,7 @@ def _process_status() -> dict[str, object]:
     for pid, _parent_pid, name, path in processes:
         if name.casefold() != "qq.exe":
             continue
-        normalized_path = path.casefold()
+        normalized_path = normalized_paths[pid]
         managed = bool(root and normalized_path.startswith(root + "\\"))
         ancestor = parents.get(pid, 0)
         visited: set[int] = set()

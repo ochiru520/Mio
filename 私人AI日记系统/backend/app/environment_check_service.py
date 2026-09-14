@@ -304,7 +304,7 @@ def _whisper_model_directory(root: Path) -> Path | None:
             except OSError:
                 candidates = []
             for snapshot in candidates:
-                if all((snapshot / name).is_file() for name in WHISPER_REQUIRED_FILES):
+                if all((snapshot / name).is_file() and (snapshot / name).stat().st_size > 0 for name in WHISPER_REQUIRED_FILES):
                     return snapshot
     bundled_models = root / "GPT-SoVITS" / "tools" / "asr" / "models"
     if bundled_models.is_dir():
@@ -313,7 +313,7 @@ def _whisper_model_directory(root: Path) -> Path | None:
         except OSError:
             candidates = []
         for candidate in candidates:
-            if (candidate / "config.json").is_file() and (candidate / "model.bin").is_file():
+            if all((candidate / name).is_file() and (candidate / name).stat().st_size > 0 for name in WHISPER_REQUIRED_FILES):
                 return candidate
     return None
 

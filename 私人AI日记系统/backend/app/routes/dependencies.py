@@ -59,3 +59,11 @@ async def dependencies_activate_local_vision():
         return await asyncio.to_thread(local_vision_service.activate)
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{dep_id}/verify")
+async def dependencies_verify(dep_id: str):
+    try:
+        return await asyncio.to_thread(dependency_installer.verify_dependency, dep_id)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

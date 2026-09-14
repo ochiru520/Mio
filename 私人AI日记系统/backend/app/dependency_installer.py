@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import threading
@@ -45,7 +46,7 @@ _DEPENDENCY_DEFS: tuple[dict[str, Any], ...] = (
         "kind": "configure",
         "size_label": "无下载",
         "what": "让 Mio 开口说话，火山引擎豆包音色，填一个 API Key 就能用。",
-        "missing_effect": "没有它，回复朗读和桌宠声音都不会出声。",
+        "missing_effect": "没有它不能使用云端朗读；已配置的本地语音不受影响。",
         "how": "在语音设置里选择「云端语音」并填写语音 API Key。",
     },
     {
@@ -53,7 +54,7 @@ _DEPENDENCY_DEFS: tuple[dict[str, Any], ...] = (
         "label": "Genie 本地语音运行引擎",
         "kind": "script",
         "script": "install-genie-runtime.ps1",
-        "size_label": "运行环境按需安装；引擎包约 0.4 GB",
+        "size_label": "运行环境按需安装；引擎数据包约 231 MB，Python 依赖另计",
         "what": "本地语音推理底座，负责 Genie ONNX CPU 运行环境和基础 G2P/Hubert 数据。",
         "missing_effect": "没有它就不能运行本地音色；云端语音和聊天不受影响。",
         "how": "先安装这个运行引擎。完成后再单独安装 Mio 音色包；两个安装项互不重复下载。",
@@ -63,7 +64,7 @@ _DEPENDENCY_DEFS: tuple[dict[str, Any], ...] = (
         "label": "Mio 本地原声音色",
         "kind": "script",
         "script": "install-gpt-sovits.ps1",
-        "size_label": "音色包约 0.1 GB；需先安装 Genie 引擎",
+        "size_label": "音色包约 227 MB；需先安装 Genie 引擎",
         "what": "Mio 的角色音色、参考音频和情绪素材；只负责“声音是谁”，不包含推理引擎。",
         "missing_effect": "没有它就不能使用 Mio 本地原声音色，但 Genie 引擎和云端语音仍可用。",
         "how": "先完成 Genie 引擎，再点击这里下载或查找音色包；安装后会注册、预热并播放试听。",
@@ -222,7 +223,12 @@ def _detect_status(
         )
         if dep_id == "genie_runtime":
             status["status"] = "ready" if engine_ready else "missing"
-            status["detail"] = "Genie ONNX CPU 引擎已就绪" if engine_ready else "尚未安装 Genie 运行引擎"
+            status["detail"] = "Genie 文件已安装，需验证 Python 和模型能否加载。" if engine_ready else "尚未安装 Genie 运行引擎"
+            if engine_ready:
+                from .dependency_probe import cached
+                result = cached(dep_id, genie_python, genie_data / "chinese-hubert-base/chinese-hubert-base.onnx")
+                status["status"] = "ready" if result.get("ok") else ("degraded" if result else "unverified")
+                status["detail"] = result.get("detail") or status["detail"]
             return status
         voice_ready = engine_ready and all(
             path.is_file() and path.stat().st_size > 0
@@ -236,13 +242,15 @@ def _detect_status(
                 voice_root / "emotion-references.json",
             )
         )
-        status["status"] = "ready" if voice_ready else "missing"
-        status["detail"] = "Mio 音色已就绪" if voice_ready else ("请先安装 Genie 引擎" if not engine_ready else "尚未安装 Mio 音色包")
+        status["status"] = "unverified" if voice_ready else "missing"
+        status["detail"] = "音色文件已安装，请在语音设置中预热并试听。" if voice_ready else ("请先安装 Genie 引擎" if not engine_ready else "尚未安装 Mio 音色包")
         return status
 
     if kind == "builtin":
-        status["status"] = "ready"
-        status["detail"] = dep.get("size_label") or "已内置"
+        environment = environment if environment is not None else environment_check_service.environment_status()
+        capture = next((item for item in environment.get("optional", []) if item["id"] == dep_id), {})
+        status["status"] = "ready" if capture.get("status") == "available" else "missing"
+        status["detail"] = str(capture.get("detail") or "未检测到截图组件，请修复应用安装。")
         return status
 
     if kind == "configure":
@@ -250,7 +258,7 @@ def _detect_status(
             profiles = list_model_profiles()
             status["status"] = "configured" if profiles else "unconfigured"
             status["detail"] = (
-                f"已配置 {len(profiles)} 个模型" if profiles else "还没有配置聊天模型"
+                f"已保存 {len(profiles)} 个模型配置；请在模型设置中测试连接" if profiles else "还没有配置聊天模型"
             )
         elif dep_id == "cloud_tts":
             config = companion_service.load_config()
@@ -258,7 +266,7 @@ def _detect_status(
 
             if cloud_tts_configured(config):
                 status["status"] = "configured"
-                status["detail"] = "已经填写语音 API Key"
+                status["detail"] = "已填写语音 API Key；请在语音设置中试听验证"
             else:
                 status["status"] = "unconfigured"
                 status["detail"] = "还没有填写语音 API Key"
@@ -280,7 +288,16 @@ def _detect_status(
         return status
     env_status = str(item.get("status") or "unconfigured")
     status["detail"] = str(item.get("detail") or "")
-    if env_status in {"available", "configured"}:
+    if dep_id == "napcat" and env_status in {"available", "configured"}:
+        status["status"] = "configured"
+        status["detail"] += "；文件已检测，登录和连接状态请到 QQ 设置查看。"
+    elif dep_id == "whisper" and env_status == "available":
+        from .dependency_probe import cached
+        layout = environment_check_service.find_whisper_runtime()
+        result = cached(dep_id, Path(layout["python"]), Path(layout["model"])) if layout and layout.get("model") else {}
+        status["status"] = "ready" if result.get("ok") else ("degraded" if result else "unverified")
+        status["detail"] = result.get("detail") or "检测到本地文件，尚未验证模型加载。"
+    elif env_status in {"available", "configured"}:
         status["status"] = "ready"
     elif dep_id == "ollama_vision" and env_status in {"installed", "unverified", "degraded"}:
         status["status"] = env_status
@@ -296,6 +313,12 @@ def list_dependencies() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for dep in _DEPENDENCY_DEFS:
         entry = dict(dep)
+        if dep["id"] in {"genie_runtime", "gpt_sovits"}:
+            source = _package_source(dep["id"])
+            entry["offline_only"] = not bool(source.get("urls"))
+            entry["package_name"] = source.get("file_name", "")
+            if entry["offline_only"]:
+                entry["how"] = "先安装所需引擎；此版本暂未提供在线包。选择对应离线 ZIP 包安装，音色安装后会预热、试听。"
         entry["install_path"] = _install_path(str(dep["id"]))
         detected = _detect_status(dep, environment)
         entry["status"] = detected["status"]
@@ -307,8 +330,10 @@ def list_dependencies() -> list[dict[str, Any]]:
         progress = _read_status(dep["id"])
         if entry["installing"]:
             entry["progress"] = _progress_payload(progress, installing=True)
-        elif not detected_ready and progress.get("done") and progress.get("error"):
+        elif progress.get("done") and progress.get("error") and entry["status"] != "ready":
             entry["last_error"] = str(progress.get("error") or "")
+        if (_status_dir() / f"{dep['id']}-install.log").is_file():
+            entry["log_path"] = str(_status_dir() / f"{dep['id']}-install.log")
         result.append(entry)
     return result
 
@@ -467,6 +492,11 @@ def _watch_install(dep_id: str, process: subprocess.Popen[Any]) -> None:
         exit_code = process.wait()
         if dep_id == "ollama_vision" and isinstance(exit_code, int):
             _finalize_vision_download(exit_code)
+        progress = _read_status(dep_id)
+        if not progress.get("done") or (isinstance(exit_code, int) and exit_code != 0 and not progress.get("error")):
+            message = f"安装未完成（退出码 {exit_code}），请查看日志：{_status_dir() / (dep_id + '-install.log')}"
+            progress.update(done=True, stage="error", error=message, message=message)
+            _write_status(dep_id, progress)
         _ensure_install_finalized(dep_id)
     finally:
         with _install_lock:
@@ -500,7 +530,7 @@ def _dependency_def(dep_id: str) -> dict[str, Any] | None:
     return None
 
 
-def install_dependency(dep_id: str) -> dict[str, Any]:
+def install_dependency(dep_id: str, package_path: str = "") -> dict[str, Any]:
     dep = _dependency_def(dep_id)
     if dep is None:
         raise ValueError("不认识的依赖项目。")
@@ -516,6 +546,14 @@ def install_dependency(dep_id: str) -> dict[str, Any]:
     if not script.is_file():
         raise FileNotFoundError(f"找不到安装脚本：{script.name}")
 
+    if dep_id in {"genie_runtime", "gpt_sovits"}:
+        source = _package_source(dep_id)
+        if package_path:
+            _validate_package(source, Path(package_path))
+        elif not source.get("urls"):
+            raise ValueError("此组件暂未提供在线包，请选择对应离线 ZIP 包安装。")
+    elif package_path:
+        raise ValueError("此组件不支持音色离线包。")
     status_path = _status_path(dep_id)
     initial_status = {
         "id": dep_id,
@@ -524,7 +562,7 @@ def install_dependency(dep_id: str) -> dict[str, Any]:
         "message": (
             "正在启动后台安装…"
             if dep_id in {"gpt_sovits", "ollama_vision"}
-            else "正在启动安装窗口…"
+            else "正在启动后台安装…"
         ),
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "done": False,
@@ -540,6 +578,8 @@ def install_dependency(dep_id: str) -> dict[str, Any]:
     env["MIO_LOCAL_VISION_DIR"] = str(settings.local_vision_dir.resolve())
     env["MIO_NAPCAT_DIR"] = str(settings.napcat_dir.resolve())
     env["MIO_STATUS_FILE"] = str(status_path.resolve())
+    if package_path:
+        env["MIO_GENIE_PACKAGE" if dep_id == "genie_runtime" else "MIO_VOICE_PACKAGE"] = str(Path(package_path).resolve())
     # 线程锁与命名 Mutex 同时保护“检查 -> 启动 -> 持久化 pid”，可覆盖多后端实例。
     with _cross_process_install_lock(dep_id), _install_lock:
         existing_pid = _running_installs.get(str(dep_id))
@@ -554,16 +594,10 @@ def install_dependency(dep_id: str) -> dict[str, Any]:
             json.dumps(initial_status, ensure_ascii=False),
             encoding="utf-8",
         )
-        creation_flags = (
-            getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            if dep_id in {"gpt_sovits", "genie_runtime", "ollama_vision"}
-            else getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-        )
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         with ExitStack() as stack:
-            output = {}
-            if dep_id == "ollama_vision":
-                log = stack.enter_context((_status_dir() / "ollama_vision-install.log").open("ab"))
-                output = {"stdout": log, "stderr": log}
+            log = stack.enter_context((_status_dir() / f"{dep_id}-install.log").open("ab"))
+            output = {"stdout": log, "stderr": log, "stdin": subprocess.DEVNULL}
             process = subprocess.Popen(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
                 cwd=str(script.parent), env=env, creationflags=creation_flags, **output,
@@ -588,7 +622,7 @@ def install_dependency(dep_id: str) -> dict[str, Any]:
         "message": (
             "正在后台安装，下载与校验进度会持续显示在这里。"
             if dep_id in {"gpt_sovits", "genie_runtime", "ollama_vision"}
-            else "安装窗口已打开，可以在窗口里看到下载进度。"
+            else "正在后台安装，详细错误会保存到安装日志。"
         ),
     }
 
@@ -619,3 +653,39 @@ def install_status(dep_id: str) -> dict[str, Any]:
 
 
 __all__ = ["list_dependencies", "install_dependency", "install_status"]
+
+
+def _package_source(dep_id: str) -> dict:
+    name = {"genie_runtime": "mio-genie-runtime-source.json", "gpt_sovits": "mio-voice-package-source.json"}[dep_id]
+    try:
+        source = json.loads((_scripts_dir() / name).read_text(encoding="utf-8-sig"))
+        source["urls"] = [url for url in source.get("urls", []) if isinstance(url, str) and url.startswith("https://")]
+        return source
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _validate_package(source: dict, path: Path) -> None:
+    if not source.get("sha256") or not source.get("size_bytes"):
+        raise ValueError("安装包缺少有效的校验清单，请修复 Mio 安装。")
+    if not path.is_file() or path.suffix.lower() != ".zip" or path.stat().st_size != int(source["size_bytes"]):
+        raise ValueError("离线包格式或大小不符，请选择 " + str(source.get("file_name", "对应 ZIP 包")))
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    if digest.hexdigest().lower() != str(source["sha256"]).lower():
+        raise ValueError("离线包 SHA-256 校验失败，请重新获取完整的对应版本。")
+
+
+def verify_dependency(dep_id: str) -> dict:
+    from .dependency_probe import verify
+    if dep_id == "genie_runtime":
+        root = settings.voice_training_dir
+        return verify(dep_id, root / ".genie-env/Scripts/python.exe", root / "GenieData/chinese-hubert-base/chinese-hubert-base.onnx")
+    if dep_id == "whisper":
+        layout = environment_check_service.find_whisper_runtime()
+        if not layout:
+            raise ValueError("请先安装完整的语音识别环境和模型。")
+        return verify(dep_id, Path(layout["python"]), Path(layout["model"]))
+    raise ValueError("请到对应设置页面测试模型、语音或 QQ 连接。")

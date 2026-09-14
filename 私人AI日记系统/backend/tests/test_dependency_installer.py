@@ -82,7 +82,9 @@ class DependencyListTests(unittest.TestCase):
                 {"id": "system_audio", "status": "available", "detail": "模型完整"},
             ]
         }
-        with mock.patch(
+        with mock.patch("app.dependency_probe.cached", return_value={"ok": True}), mock.patch(
+            "app.environment_check_service.find_whisper_runtime", return_value={"python": Path("python.exe"), "model": Path("model")}
+        ), mock.patch(
             "app.dependency_installer.environment_check_service.environment_status",
             return_value=environment,
         ):
@@ -98,6 +100,8 @@ class DependencyListTests(unittest.TestCase):
             ]
         }
         with (
+            mock.patch("app.dependency_probe.cached", return_value={"ok": True}),
+            mock.patch("app.environment_check_service.find_whisper_runtime", return_value={"python": Path("python.exe"), "model": Path("model")}),
             mock.patch(
                 "app.dependency_installer.environment_check_service.environment_status",
                 return_value=environment,

@@ -1,5 +1,5 @@
-﻿#define MyAppName "Mio"
-#define MyAppVersion "0.2.0"
+#define MyAppName "Mio"
+#define MyAppVersion "0.2.1"
 #define MyAppPublisher "Mio Project"
 #define MyAppExeName "Mio.exe"
 
@@ -13,7 +13,7 @@ UsePreviousAppDir=no
 DisableDirPage=no
 DefaultGroupName={#MyAppName}
 OutputDir=..\release
-OutputBaseFilename=Mio-0.2.0-Windows-x64-Setup
+OutputBaseFilename=Mio-0.2.1-Windows-x64-Setup
 SetupIconFile=mio.ico
 Compression=lzma2
 SolidCompression=yes
@@ -147,3 +147,4 @@ begin
       RaiseException('无法保存安装来源目录。');
   end;
 end;
+

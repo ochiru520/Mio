@@ -19,6 +19,34 @@ import urllib.request
 
 BASE_URL = "https://modelscope.cn/models/{repo}/resolve/master/{path}"
 
+
+def source_urls(repo: str, name: str) -> list[str]:
+    urls = [BASE_URL.format(repo=repo, path=urllib.parse.quote(name))]
+    if repo == "pengzhendong/faster-whisper-base":
+        urls.append("https://huggingface.co/Systran/faster-whisper-base/resolve/main/" + urllib.parse.quote(name))
+    return urls
+
+
+def download_with_fallback(repo: str, name: str, target: str, **kwargs) -> int:
+    errors = []
+    for url in source_urls(repo, name):
+        # Do not append bytes from different mutable mirrors to one file.
+        import hashlib
+        identity = hashlib.sha256(url.encode()).hexdigest()[:12]
+        source_target = target + ".source-" + identity
+        try:
+            size = download(url, source_target, file_name=name,
+                            expected_file_bytes=content_length(url), **kwargs)
+            if name.endswith(".json"):
+                with open(source_target, encoding="utf-8") as stream:
+                    json.load(stream)
+            os.replace(source_target, target)
+            return size
+        except (OSError, ValueError, RuntimeError) as exc:
+            errors.append(str(exc))
+            print("当前模型源失败，尝试备用源：" + str(exc))
+    raise RuntimeError("所有模型源失败：" + "；".join(errors))
+
 RETRY = 3
 TIMEOUT = 60
 STATUS_FILE = os.environ.get("MIO_STATUS_FILE", "").strip()
@@ -126,6 +154,12 @@ def download(
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
                 partial_response = int(getattr(resp, "status", 200) or 200) == 206
+                if partial_response:
+                    content_range = str(resp.headers.get("Content-Range") or "")
+                    if not content_range.startswith(f"bytes {resume_bytes}-"):
+                        raise RuntimeError("下载源返回了错误的断点范围。")
+                if "text/html" in str(resp.headers.get("Content-Type") or "").lower():
+                    raise RuntimeError("下载源返回了网页，未返回模型文件。")
                 if resume_bytes > 0 and not partial_response:
                     resume_bytes = 0
                 response_bytes = int(resp.headers.get("Content-Length") or 0)
@@ -189,7 +223,7 @@ def download(
             print(f"\n  第 {attempt} 次尝试失败：{exc}")
             if attempt < RETRY:
                 time.sleep(2)
-    raise RuntimeError(f"下载失败：{url}")
+    raise RuntimeError(f"下载失败：{url}；请检查上方网络或文件校验错误。")
 
 
 def main() -> int:
@@ -224,15 +258,14 @@ def main() -> int:
     completed_bytes = 0
     for index, (name, url, target, expected_bytes) in enumerate(plans, start=1):
         print(f"下载 {name} ...")
-        completed_bytes += download(
-            url,
+        completed_bytes += download_with_fallback(
+            repo,
+            name,
             target,
-            file_name=name,
             file_index=index,
             file_count=len(plans),
             completed_bytes=completed_bytes,
             grand_total=grand_total,
-            expected_file_bytes=expected_bytes,
         )
     write_status(
         percent=END_PERCENT,

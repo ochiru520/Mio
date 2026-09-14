@@ -21,7 +21,7 @@ function Test-WhisperModel {
     foreach ($snapshot in Get-ChildItem -LiteralPath $snapshotsDir -Directory -ErrorAction SilentlyContinue) {
         $complete = $true
         foreach ($name in $requiredModelFiles) {
-            if (-not (Test-Path -LiteralPath (Join-Path $snapshot.FullName $name))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $snapshot.FullName $name) -PathType Leaf) -or (Get-Item -LiteralPath (Join-Path $snapshot.FullName $name)).Length -le 0) {
                 $complete = $false
                 break
             }
@@ -69,6 +69,5 @@ try {
     Write-Host "回到澪的界面，点击「重新检查」，屏幕观察就能听懂系统声音了。"
 } catch {
     Write-DepsFail -Message ("系统声音理解安装失败：" + $_.Exception.Message)
-    Write-Host "按任意键关闭窗口..."
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    exit 1
 }

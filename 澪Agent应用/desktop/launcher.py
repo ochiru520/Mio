@@ -1808,6 +1808,25 @@ class DesktopBridge:
         except (OSError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
 
+    def install_dependency_package(self, dep_id: str) -> dict[str, object]:
+        """Only install a fixed dependency package explicitly selected by the user."""
+        if dep_id not in {"genie_runtime", "gpt_sovits"}:
+            return {"ok": False, "error": "不支持的离线包类型。"}
+        if self._window is None:
+            return {"ok": False, "error": "窗口尚未就绪。"}
+        try:
+            import webview
+            from app.dependency_installer import install_dependency
+            selected = self._window.create_file_dialog(
+                webview.OPEN_DIALOG, directory=str(Path.home()), allow_multiple=False,
+                file_types=("Mio 离线模型包 (*.zip)",))
+            if not selected:
+                return {"ok": False, "canceled": True}
+            path = selected[0] if isinstance(selected, (tuple, list)) else selected
+            return {"ok": True, **install_dependency(dep_id, str(path))}
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
     def import_live2d_model(self) -> dict[str, object]:
         if self._window is None:
             return {"ok": False, "error": "主窗口尚未就绪。"}

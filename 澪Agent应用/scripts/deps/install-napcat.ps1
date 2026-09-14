@@ -35,7 +35,7 @@ try {
         Write-DepsStatus -Stage "download" -Percent 15 -Message "正在下载 NapCat（约 50 MB，优先国内通道）"
         $urls = @(
             "https://ghfast.top/https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.zip",
-            "https://github.moeyy.xyz/https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.zip",
+            "https://gh-proxy.com/https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.zip",
             "https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.zip"
         )
         Invoke-Download -Urls $urls -Output $zipPath -Stage "download" -StartPercent 15 -EndPercent 44 -Label " NapCat"
@@ -65,6 +65,5 @@ try {
     Write-Host "国内可访问的官方文档：https://napneko.pages.dev"
     Write-Host "按文档「NapCat.Shell - Win 手动启动教程」下载 NapCat.Shell.zip，解压后放到：$napcatDir"
     Write-Host "放好后回到 Mio 点击「重新检查」。"
-    Write-Host "按任意键关闭窗口..."
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    exit 1
 }

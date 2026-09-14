@@ -41,6 +41,9 @@ try {
     $downloadPath = Join-Path $downloadDir $packageName
     New-Item -ItemType Directory -Force -Path $voiceDir, $downloadDir | Out-Null
 
+    if (-not (Test-GenieRuntimeData) -and -not (Find-MioModelPackage -FileName $packageName -ExplicitPath $env:MIO_GENIE_PACKAGE) -and @($source.urls | Where-Object { ([string]$_).StartsWith("https://") }).Count -eq 0) {
+        throw "此组件暂未提供在线下载包，请返回环境与模型中心，选择对应离线 ZIP 包安装。"
+    }
     $bootstrapPython = Ensure-DepsVenv
     if (-not (Test-Path -LiteralPath $geniePython)) {
         Write-DepsStatus -Stage "python" -Percent 12 -Message ("创建独立 Genie Python 环境：" + $genieEnvDir)
@@ -51,10 +54,8 @@ try {
     $probe = Invoke-Native -FilePath $geniePython -Arguments @("-c", "import importlib.util, jieba, numpy, onnx, onnxruntime; raise SystemExit(0 if importlib.util.find_spec('genie_tts') and int(numpy.__version__.split('.')[0]) < 2 else 1)")
     if ($probe -ne 0) {
         Write-DepsStatus -Stage "pip" -Percent 18 -Message "安装 Genie 2.0.2 运行依赖"
-        $pipCode = Invoke-Native -FilePath $geniePython -Arguments @("-m", "pip", "install", "onnx==1.22.0", "onnxruntime==1.22.1", "transformers==4.50.0", "tokenizers", "numpy==1.26.4", "soundfile", "soxr", "pyyaml", "sounddevice", "pydantic", "fastapi", "uvicorn[standard]", "pyopenjtalk-plus", "nltk", "pypinyin", "g2pM", "jieba", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple")
-        if ($pipCode -ne 0) { throw "Genie 运行依赖安装失败。" }
-        $genieCode = Invoke-Native -FilePath $geniePython -Arguments @("-m", "pip", "install", "--no-deps", "genie-tts==2.0.2", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple")
-        if ($genieCode -ne 0) { throw "Genie 2.0.2 主程序安装失败。" }
+        Invoke-DepsPip -Python $geniePython -Packages @("onnx==1.22.0", "onnxruntime==1.22.1", "transformers==4.50.0", "tokenizers", "numpy==1.26.4", "soundfile", "soxr", "pyyaml", "sounddevice", "pydantic", "fastapi", "uvicorn[standard]", "pyopenjtalk-plus", "nltk", "pypinyin", "g2pM", "jieba") -Message "安装 Genie 运行依赖"
+        Invoke-DepsPip -Python $geniePython -Packages @("--no-deps", "genie-tts==2.0.2") -Message "安装 Genie 主程序"
     }
     $sitePackages = Join-Path $genieEnvDir "Lib\site-packages"
     $patchCode = Invoke-Native -FilePath $geniePython -Arguments @($patchScript, "--site-packages", $sitePackages)

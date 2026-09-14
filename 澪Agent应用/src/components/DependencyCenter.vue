@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Check, CheckCircle2, CircleAlert, CircleHelp, Download, ExternalLink, RefreshCw, RotateCw, Settings2, Wrench } from '@lucide/vue'
-import { activateLocalVision, installDependency, loadDependencies, loadDependencyStatus } from '../services/dependenciesApi.js'
+import { activateLocalVision, verifyDependency, installDependency, loadDependencies, loadDependencyStatus } from '../services/dependenciesApi.js'
 
 const props = defineProps({
   compact: { type: Boolean, default: false },
@@ -22,7 +22,7 @@ const statusMeta = {
   unconfigured: { label: '未配置', icon: CircleHelp, tone: 'hint' },
   missing: { label: '缺失', icon: CircleAlert, tone: 'warn' },
   installed: { label: '已安装 · 未启动', icon: CheckCircle2, tone: 'hint' },
-  unverified: { label: '已启动 · 待验证', icon: CircleHelp, tone: 'hint' },
+  unverified: { label: '文件已安装 · 待验证', icon: CircleHelp, tone: 'hint' },
   degraded: { label: '已安装 · 暂不可用', icon: CircleAlert, tone: 'warn' },
 }
 
@@ -90,14 +90,21 @@ function stopPolling() {
   }
 }
 
-async function install(item) {
+async function install(item, offline = false) {
   if (busy.value || item.installing) return
   busy.value = true
   error.value = ''
   notice.value = ''
   let alreadyInstalled = false
   try {
-    const started = await installDependency(item.id)
+    let started
+    if (offline) {
+      const picker = window.pywebview?.api?.install_dependency_package
+      if (!picker) throw new Error('请在 Mio 桌面窗口中选择离线包。当前版本暂未提供此组件的在线下载包。')
+      started = await picker(item.id)
+      if (started?.canceled) return
+      if (!started?.ok) throw new Error(started?.error || '离线包安装启动失败')
+    } else started = await installDependency(item.id)
     if (started.installing === false) {
       notice.value = started.message
       alreadyInstalled = true
@@ -133,6 +140,18 @@ async function activateVision() {
   }
 }
 
+async function verify(item) {
+  if (busy.value) return
+  busy.value = true
+  error.value = ''
+  notice.value = '正在加载本地模型验证，请稍候…'
+  try {
+    const result = await verifyDependency(item.id)
+    notice.value = result.detail
+  } catch (err) { error.value = err.message || '验证失败' }
+  finally { busy.value = false; await refresh() }
+}
+
 function openUrl(url) {
   if (url) window.open(url, '_blank', 'noopener')
 }
@@ -141,6 +160,11 @@ function actionFor(item) {
   if (item.id === 'ollama_vision' && ['installed', 'unverified', 'degraded'].includes(item.status)) {
     return { kind: 'activate', label: item.status === 'installed' ? '启动并验证' : '重新验证' }
   }
+  if (item.installing) return { kind: 'progress' }
+  if (['genie_runtime', 'whisper'].includes(item.id) && ['unverified', 'degraded'].includes(item.status)) return { kind: 'verify', label: '验证本地模型' }
+  if (item.id === 'gpt_sovits' && item.status === 'unverified') return { kind: 'navigate', label: '去试听', target: 'settings-voice' }
+  if (item.id === 'napcat' && item.status === 'configured') return { kind: 'navigate', label: '连接 QQ', target: 'settings-qq' }
+  if (item.offline_only && item.status === 'missing') return { kind: 'offline', label: '选择离线包安装' }
   if (item.kind === 'builtin') return { kind: 'none' }
   if (item.kind === 'configure') {
     if (item.id === 'cloud_model') return { kind: 'navigate', label: '去配置', target: 'settings-models' }
@@ -181,7 +205,7 @@ onBeforeUnmount(stopPolling)
     <div class="dependency-center-heading">
       <div>
         <strong>环境与模型中心</strong>
-        <small>检查这台电脑上有什么、缺什么；缺的可以一键下载，下载窗口不会挡住后面的设置。</small>
+        <small>检查这台电脑上有什么、缺什么；支持在线安装或离线包导入；本地模型可单独验证。</small>
       </div>
       <button type="button" :disabled="busy" @click="refresh">
         <RefreshCw :class="{ spin: busy }" :size="14" />重新检查
@@ -189,7 +213,7 @@ onBeforeUnmount(stopPolling)
     </div>
 
     <div v-if="dependencies.length" class="dependency-summary">
-      <span><strong>{{ summary.ready }}</strong><small>已就绪 / {{ summary.total }} 项</small></span>
+      <span><strong>{{ summary.ready }}</strong><small>已就绪或已配置 / {{ summary.total }} 项</small></span>
       <span v-for="item in dependencies.filter((entry) => entry.installing)" :key="item.id" class="dependency-summary-installing">
         <RotateCw class="spin" :size="12" /><small>{{ item.label }} {{ percentOf(item) }}%</small>
       </span>
@@ -211,6 +235,8 @@ onBeforeUnmount(stopPolling)
             <small v-if="item.detail" class="dependency-detail">{{ item.detail }}</small>
             <small v-if="item.status !== 'ready' && item.status !== 'configured'">{{ item.missing_effect }}</small>
             <small v-if="!['installed', 'unverified', 'degraded', 'ready', 'configured'].includes(item.status)" class="dependency-how">怎么装：{{ item.how }}</small>
+            <small v-if="item.offline_only" class="dependency-how">暂未提供在线包。对应文件：{{ item.package_name }}</small>
+            <small v-if="item.log_path" class="dependency-path">安装日志：{{ item.log_path }}</small>
             <small v-if="item.size_label" class="dependency-size">体积：{{ item.size_label }}</small>
             <small v-if="item.install_path" class="dependency-path">一键安装位置：{{ item.install_path }}</small>
             <div v-if="item.last_error" class="dependency-last-error">上次安装：{{ item.last_error }}</div>
@@ -218,6 +244,13 @@ onBeforeUnmount(stopPolling)
           <div class="dependency-item-actions">
             <template v-if="actionFor(item).kind === 'activate'">
               <button class="primary" type="button" :disabled="busy || activating" @click="activateVision"><RefreshCw :class="{ spin: activating }" :size="14" />{{ activating ? '正在启动并验证' : actionFor(item).label }}</button>
+            </template>
+            <template v-else-if="actionFor(item).kind === 'verify'">
+              <button type="button" :disabled="busy" @click="verify(item)">{{ actionFor(item).label }}</button>
+              <button type="button" :disabled="busy" @click="install(item, item.offline_only)">修复安装</button>
+            </template>
+            <template v-else-if="actionFor(item).kind === 'offline'">
+              <button type="button" :disabled="busy" @click="install(item, true)">选择离线包安装</button>
             </template>
             <template v-else-if="actionFor(item).kind === 'install'">
               <button class="primary" type="button" :disabled="busy" @click="install(item)"><Download :size="14" />{{ actionFor(item).label }}</button>
@@ -244,6 +277,6 @@ onBeforeUnmount(stopPolling)
       </li>
     </ul>
 
-    <p class="dependency-footnote">自动安装优先使用国内可直连的镜像或通道，失败时会自动尝试官方源；不需要手动配置代理。带「打开官方下载页」的项目是第三方软件，按页面说明安装后回到这里「重新检查」。</p>
+    <p class="dependency-footnote">在线组件会尝试可用下载源，能否连接取决于当前网络。离线组件需选择对应 ZIP 包；“已配置”不代表已连接，文件安装完成后请验证或试听。</p>
   </div>
 </template>

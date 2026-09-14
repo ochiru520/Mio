@@ -127,10 +127,11 @@ function Invoke-OllamaPull {
             }
             Write-DepsStatus -Stage "pull" -Percent $overallPercent -Message $message -FileName "qwen2.5vl-3b" -DownloadedBytes $knownDone -TotalBytes $knownTotal -DownloadPercent $highestPercent -TargetPath $modelsDir -SpeedMbS $speed
         }
-        return 0
+        if (-not (Test-OllamaModel)) { throw "下载流结束但模型文件不完整，可重试续传。" }
+        return
     } catch {
         Write-Host ("模型流式下载失败：" + $_.Exception.Message) -ForegroundColor Yellow
-        return 1
+        throw
     } finally {
         if ($reader) { try { $reader.Close() } catch { } }
         if ($response) { try { $response.Close() } catch { } }
@@ -169,8 +170,16 @@ try {
         $serverProcess = Start-Process -FilePath $ollamaExe -ArgumentList @("serve") -WorkingDirectory $ollamaDir -WindowStyle Hidden -PassThru
         Wait-OllamaReady -Process $serverProcess -HostAddress $env:OLLAMA_HOST
         Write-DepsStatus -Stage "pull" -Percent 34 -Message "正在下载视觉模型 Qwen2.5-VL 3B（约 3 GB，视网速需要几分钟）"
-        $pullCode = Invoke-OllamaPull -HostAddress $env:OLLAMA_HOST -Model "qwen2.5vl:3b"
-        if ($pullCode -ne 0) { throw "模型下载失败（退出码 $pullCode）。" }
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+                Invoke-OllamaPull -HostAddress $env:OLLAMA_HOST -Model "qwen2.5vl:3b"
+                break
+            } catch {
+                if ($attempt -eq 3) { throw ("视觉模型下载失败（运行器已安装）：" + $_.Exception.Message) }
+                Write-DepsStatus -Stage "pull" -Percent 34 -Message ("模型下载中断，正在续传重试 " + $attempt + "/3：" + $_.Exception.Message)
+                Start-Sleep -Seconds 2
+            }
+        }
     }
 
     if (-not (Test-OllamaModel)) {

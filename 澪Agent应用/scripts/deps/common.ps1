@@ -204,7 +204,7 @@ function Invoke-Download {
         Remove-Item -LiteralPath $Output -Force -ErrorAction SilentlyContinue
     }
     if ($ExpectedSize -gt 0 -and (Test-Path -LiteralPath $partial)) {
-        if ((Get-Item -LiteralPath $partial).Length -gt $ExpectedSize) {
+        if ((Get-Item -LiteralPath $partial).Length -ge $ExpectedSize -and -not (Test-DownloadFile -Path $partial)) {
             Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
         }
     }
@@ -274,6 +274,13 @@ function Invoke-Download {
             throw ("下载失败，退出码 " + $proc.ExitCode)
         } catch {
             $lastError = $_.Exception.Message
+            # A complete but corrupt response must not poison every fallback.
+            if (Test-Path -LiteralPath $partial) {
+                $length = (Get-Item -LiteralPath $partial).Length
+                if (($proc.ExitCode -eq 0) -or ($ExpectedSize -gt 0 -and $length -ge $ExpectedSize) -or $proc.ExitCode -in @(33, 36)) {
+                    Remove-Item -LiteralPath $partial -Force
+                }
+            }
             Write-Host ("该下载源失败：" + $lastError) -ForegroundColor Yellow
             if (-not $proc.HasExited) { try { $proc.Kill() } catch { } }
         }
@@ -333,7 +340,7 @@ function Ensure-DepsVenv {
         )
         Invoke-Download -Urls $urls -Output $installer -Stage "downloading_python" -StartPercent 2 -EndPercent 14 -Label " Python 运行环境"
         Write-Host "正在静默安装 Python（只装给澪使用，不影响系统）..."
-        $proc = Start-Process -FilePath $installer -ArgumentList @("/quiet", "InstallAllUsers=0", "TargetDir=$baseDir", "PrependPath=0", "Include_pip=1", "Include_launcher=0", "Include_test=0", "AssociateFiles=0", "Shortcuts=0", "SimpleInstall=0") -Wait -PassThru
+        $proc = Start-Process -FilePath $installer -ArgumentList @("/quiet", "InstallAllUsers=0", ('TargetDir="' + $baseDir + '"'), "PrependPath=0", "Include_pip=1", "Include_launcher=0", "Include_test=0", "AssociateFiles=0", "Shortcuts=0", "SimpleInstall=0") -WindowStyle Hidden -Wait -PassThru
         if ($proc.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $basePython)) {
             throw "Python 安装失败（退出码 $($proc.ExitCode)）。如果杀毒软件拦截，请允许后重试。"
         }
@@ -354,10 +361,11 @@ function Invoke-DepsPip {
         [string]$Message
     )
     Write-Host $Message
-    $upgradeCode = Invoke-Native -FilePath $Python -Arguments @("-m", "pip", "install", "--upgrade", "pip", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple")
-    $installArgs = @("-m", "pip", "install") + $Packages + @("-i", "https://pypi.tuna.tsinghua.edu.cn/simple")
-    $installCode = Invoke-Native -FilePath $Python -Arguments $installArgs
-    if ($installCode -ne 0) {
-        throw ("依赖安装失败：" + ($Packages -join ", "))
+    foreach ($index in @("https://pypi.tuna.tsinghua.edu.cn/simple", "https://pypi.org/simple")) {
+        $installArgs = @("-m", "pip", "install", "--disable-pip-version-check", "--timeout", "30", "--retries", "2") + $Packages + @("-i", $index)
+        $installCode = Invoke-Native -FilePath $Python -Arguments $installArgs
+        if ($installCode -eq 0) { return }
+        Write-Host "当前依赖源失败，尝试备用源。"
     }
+    throw ("所有 Python 依赖源安装失败：" + ($Packages -join ", ") + "。请查看安装日志中的具体错误。")
 }

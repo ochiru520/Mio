@@ -281,7 +281,7 @@ class UpgradeTransaction:
                 if result.returncode != 0:
                     raise UpdateError(f'安装器退出码 {result.returncode}，正在回退。')
                 marker = (self.install / '数据目录.txt').read_text('utf-8-sig').strip()
-                if Path(marker).resolve() != self.state:
+                if Path(marker).resolve() != self.state.resolve():
                     raise UpdateError('升级改变了数据目录，已阻止启动。')
                 self._phase('validating', data_touched=True)
                 result = self._command([str(self.install / 'Mio.exe'), '--update-verify', str(self.ticket_path)], 240)

@@ -9,7 +9,7 @@ const desktopPreloadSource = fs.readFileSync(path.join(root, 'preload.js'), 'utf
 const petChatPreloadSource = fs.readFileSync(path.join(root, 'pet-chat-preload.js'), 'utf8')
 const htmlSource = fs.readFileSync(path.join(root, 'lock-control.html'), 'utf8')
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
-const appSource = fs.readFileSync(path.resolve(root, '..', 'src', 'App.vue'), 'utf8')
+const appSource = fs.readFileSync(path.resolve(root, '..', 'src', 'composables', 'usePetCall.js'), 'utf8')
 const chatCssSource = fs.readFileSync(path.resolve(root, '..', 'src', 'styles', 'chat.css'), 'utf8')
 
 assert.ok(packageJson.build.files.includes('lock-control.html'))

@@ -1,5 +1,20 @@
 # Changelog
 
+## Mio 0.3.0 — September 19, 2026
+
+- Signed application updates with verified downloads, installation restart and failure recovery. Users on 0.2.1 or earlier must install this version manually once.
+- Memory evidence, user corrections and revision restoration. Conflicting model extractions become candidates instead of replacing confirmed facts; private chat and record prompts include correction rules.
+- Explicit supplier-receipt reconciliation for unknown generation results, confirmation before manual retry, and guards against late results after cancellation or privacy pause.
+- Sanitized diagnostic export and timestamps for dependency model-load checks. Loading a model is distinct from completing inference.
+- Improved web lookup triggers and failure context; split frontend, database and companion modules while preserving their interfaces.
+
+Validation includes automated tests and isolated use of the actual Windows executables and installers on the development computer. Another clean Windows installation, live QQ/phone use and long-running cross-hardware behavior still require field validation. Update-manifest signing is separate from Windows code signing.
+
+## Mio 0.2.1 — September 14, 2026
+
+- Improved optional environment installation, offline Genie and voice-package import, installation logs, alternate download sources and model verification states.
+
+
 ## Mio 0.2 — September 12, 2026
 
 Compared with **v0.1.0**, this release adds a dedicated workspace for model-driven tasks while preserving the everyday chat experience.

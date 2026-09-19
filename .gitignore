@@ -14,5 +14,11 @@
 **/*.wav
 **/*.mp3
 **/*.flac
+# Local runtime and publisher credentials never belong in the public source.
+**/Data/
+**/*.dpapi
+**/*.pem
+**/updates/downloads/
+**/updates/jobs/
 私人AI日记系统/数据/
 澪Agent应用/预览/

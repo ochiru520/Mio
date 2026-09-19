@@ -9,13 +9,19 @@
 5. 提交前运行：
 
 ```powershell
-cd backend
+cd 私人AI日记系统/backend
 .\.venv\Scripts\python.exe -m compileall app
-.\.venv\Scripts\python.exe -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m pytest -q tests
 git diff --check
 ```
 
-桌面界面修改还需在相邻的 `澪Agent应用` 目录执行 `npm run build` 和 Electron 测试。公开仓库使用单仓库结构，但两个子目录仍分别维护 Python 与 Node.js 依赖。
+桌面界面修改还需在仓库根目录下的 `澪Agent应用` 执行 `npm ci`、`npm test` 和 `npm run build`，并在 `澪Agent应用/live2d-desktop` 执行 `npm ci` 与 `npm run test:model`。完整检查步骤见 `.github/workflows/ci.yml`。公开仓库使用单仓库结构，但两个子目录仍分别维护 Python 与 Node.js 依赖。
+
+## 版本与发布
+
+当前公开版本为 0.3.0。修改版本时同步桌面 package.json、锁文件、Windows 版本、安装器和更新通道；更新中英文说明。旧提交说明中的预览编号属于历史记录，不代表当前发行版本。
+
+发布安装器前必须核对构建清单、SHA-256 和签名更新清单，并验证保留数据的安装与失败恢复。0.2.1 及更早版本需要手动安装带更新器的版本一次。签名私钥与私人数据不得提交。
 
 ## 行为边界
 

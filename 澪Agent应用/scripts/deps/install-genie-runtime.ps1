@@ -10,6 +10,15 @@ $voiceDir = if ($env:MIO_VOICE_TRAINING_DIR) { $env:MIO_VOICE_TRAINING_DIR } els
 $genieEnvDir = Join-Path $voiceDir ".genie-env"
 $geniePython = Join-Path $genieEnvDir "Scripts\python.exe"
 $genieData = Join-Path $voiceDir "GenieData"
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$env:GENIE_DATA_DIR = $genieData
+$env:HUBERT_MODEL_DIR = Join-Path $genieData "chinese-hubert-base"
+$env:Chinese_G2P_DIR = Join-Path $genieData "G2P\ChineseG2P"
+$env:English_G2P_DIR = Join-Path $genieData "G2P\EnglishG2P"
+$env:SV_MODEL = Join-Path $genieData "speaker_encoder.onnx"
+$env:ROBERTA_MODEL_DIR = Join-Path $genieData "RoBERTa"
+$env:HF_HUB_OFFLINE = "1"
 $runtimeMarker = Join-Path $genieEnvDir ".mio-genie-runtime-complete"
 $packageInstaller = Join-Path $PSScriptRoot "install-mio-voice-package.py"
 $patchScript = Join-Path $PSScriptRoot "patch-genie-runtime.py"
@@ -77,7 +86,7 @@ try {
         if ($installCode -ne 0) { throw "Genie 运行引擎包安装失败。" }
     }
     if (-not (Test-GenieRuntimeData)) { throw "GenieData 完整性检查未通过。" }
-    $probe = Invoke-Native -FilePath $geniePython -Arguments @("-c", "import genie_tts, jieba, numpy, onnxruntime")
+    $probe = Invoke-Native -FilePath $geniePython -Arguments @("-X", "utf8", "-c", "import genie_tts, jieba, numpy, onnxruntime")
     if ($probe -ne 0) { throw "Genie 运行引擎自检失败。" }
     Set-Content -LiteralPath $runtimeMarker -Value (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss") -Encoding UTF8
     Write-DepsStatus -Stage "done" -Percent 100 -Message "Genie 本地语音运行引擎已安装；现在可以单独安装 Mio 音色包" -Done $true -TargetPath $voiceDir

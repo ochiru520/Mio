@@ -55,6 +55,8 @@ def _public(row) -> dict[str, Any] | None:
     item = dict(row)
     for key in ("snapshot", "allowed_tools", "context", "waiting_jobs"):
         item[key] = json.loads(item.pop(key + "_json"))
+    from .creation_service import current_attempt
+    item['waiting_jobs'] = list(dict.fromkeys((current_attempt(job_id) or {'id': job_id})['id'] for job_id in item['waiting_jobs']))
     return item
 
 
@@ -152,6 +154,25 @@ def update(task_id: str, *, status: str | None = None, snapshot: dict | None = N
     return get(task_id)
 
 
+def attach_retry(conn, original_id: str, retry_id: str) -> None:
+    """Persist attachment in the same transaction that creates the retry."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_tasks'").fetchone():
+        return
+    rows = conn.execute("SELECT * FROM agent_tasks WHERE status NOT IN ('completed','cancelled')").fetchall()
+    for row in rows:
+        jobs = json.loads(row['waiting_jobs_json'])
+        if original_id not in jobs:
+            continue
+        jobs = [retry_id if job == original_id else job for job in jobs]
+        snapshot = json.loads(row['snapshot_json'])
+        status = row['status']
+        if status == 'waiting_user' and snapshot.get('blocker') == '关联生成结果待核对，已停止自动推进。':
+            status = 'waiting_jobs'
+            snapshot.update(blocker='', next_step='等待人工确认重试及生成结果。')
+        conn.execute('UPDATE agent_tasks SET waiting_jobs_json=?,status=?,snapshot_json=?,revision=revision+1,updated_at=? WHERE id=?',
+                     (_json(jobs), status, _json(snapshot), db.now_iso(), row['id']))
+
+
 def observations(task_id: str) -> list[dict]:
     with db.get_conn() as conn:
         rows = conn.execute("""SELECT s.* FROM agent_run_steps s JOIN agent_task_runs r ON r.run_id=s.run_id
@@ -164,11 +185,11 @@ def observations(task_id: str) -> list[dict]:
             payload = {}
         result.append({"tool_name": row["tool_name"], "status": row["status"], "result": payload,
                        "error": row["error"], "step_id": row["id"], "action_id": row["action_id"]})
-    from .creation_service import get_job
+    from .creation_service import current_attempt
     for item in result:
         job = item["result"].get("job", {})
         if job.get("id"):
-            current = get_job(str(job["id"]))
+            current = current_attempt(str(job["id"]))
             if current:
                 item["result"]["job"] = current
     return result
@@ -227,9 +248,12 @@ def resume(task_id: str) -> dict[str, Any]:
         raise ValueError("已完成或取消的任务不能继续，请创建新任务。")
     if task_id in _active and not _active[task_id].done():
         return task
-    from .creation_service import get_job
-    if any((get_job(job_id) or {}).get('status') == 'unknown' for job_id in task['waiting_jobs']):
+    from .creation_service import current_attempt, TERMINAL_STATUSES
+    jobs = [current_attempt(job_id) for job_id in task['waiting_jobs']]
+    if any(job and job['status'] == 'unknown' for job in jobs):
         raise ValueError('关联生成结果仍未知，请先核对回执；不要通过继续任务重复生成。')
+    if any(job and job['status'] not in TERMINAL_STATUSES for job in jobs):
+        return update(task_id, status='waiting_jobs', waiting_jobs=[job['id'] for job in jobs if job])
     with db.get_conn() as conn:
         conn.execute("UPDATE agent_tasks SET budget_yuan=?,status='ready',revision=revision+1,updated_at=? WHERE id=?",
                      (task["spent_yuan"] + limits()["cost_yuan"], db.now_iso(), task_id))
@@ -275,15 +299,16 @@ def ready_to_continue(task: dict[str, Any]) -> bool:
     if last is not None and last["status"] not in {"completed", "failed", "interrupted", "awaiting_response"}:
         return False
     items = observations(task["id"])
-    if task["status"] == "waiting_confirmation":
-        return not any(item["status"] in {"needs_confirmation", "running"} for item in items)
-    from .creation_service import get_job, TERMINAL_STATUSES
-    jobs = [get_job(job_id) for job_id in task["waiting_jobs"]]
+    from .creation_service import current_attempt, TERMINAL_STATUSES
+    jobs = [current_attempt(job_id) for job_id in task["waiting_jobs"]]
     if any(job and job["status"] == "unknown" for job in jobs):
         update(task["id"], status="waiting_user", snapshot={
             "blocker": "关联生成结果待核对，已停止自动推进。",
             "next_step": "在任务页核对供应商回执；确认后再继续。"})
         return False
+    if task["status"] == "waiting_confirmation":
+        return (not any(item["status"] in {"needs_confirmation", "running"} for item in items)
+                and all(job is None or job['status'] in TERMINAL_STATUSES for job in jobs))
     return bool(jobs) and all(job is None or job["status"] in TERMINAL_STATUSES for job in jobs)
 
 

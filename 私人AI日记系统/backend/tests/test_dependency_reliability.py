@@ -64,7 +64,8 @@ class ReliabilityTests(unittest.TestCase):
         with patch.object(probe.subprocess,'run',side_effect=subprocess.TimeoutExpired('python',60)) as run:
             result=probe.verify('whisper',Path('python.exe'),Path('model'))
         self.assertFalse(result['ok'])
-        self.assertIn('local_files_only=True',run.call_args.args[0][3])
+        command = run.call_args.args[0]
+        self.assertIn('local_files_only=True',command[command.index('-c') + 1])
         self.assertEqual(run.call_args.kwargs['env']['HF_HUB_OFFLINE'],'1')
 
     def test_every_installer_has_log_and_no_console(self):

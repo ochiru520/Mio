@@ -5,6 +5,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from .. import dependency_installer, local_vision_service
 
@@ -12,6 +13,31 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/api/dependencies")
+
+
+class UninstallRequest(BaseModel):
+    token: str = Field(min_length=64, max_length=64)
+
+
+@router.get('/{dep_id}/uninstall-preview')
+async def dependencies_uninstall_preview(dep_id: str):
+    from ..dependency_removal import preview
+    try:
+        return await asyncio.to_thread(preview, dep_id)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post('/{dep_id}/uninstall')
+async def dependencies_uninstall(dep_id: str, payload: UninstallRequest):
+    from ..dependency_removal import uninstall
+    try:
+        return await asyncio.to_thread(uninstall, dep_id, payload.token)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except OSError as exc:
+        logger.warning('组件卸载未完成：%s', dep_id, exc_info=True)
+        raise HTTPException(500, str(exc)) from exc
 
 
 @router.get('/diagnostics')

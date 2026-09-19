@@ -530,6 +530,11 @@ def create_job(
     timestamp = db.now_iso()
     with db.get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if parent_job_id:
+            # A double click or concurrent retry request must reuse the same attempt.
+            child = conn.execute("SELECT * FROM creation_jobs WHERE parent_job_id=? AND status!='cancelled' ORDER BY created_at DESC,rowid DESC LIMIT 1", (parent_job_id,)).fetchone()
+            if child is not None:
+                return _job_public(child) or {}, False
         existing = conn.execute("SELECT * FROM creation_jobs WHERE idempotency_key=?", (key,)).fetchone()
         if existing is not None:
             return _job_public(existing) or {}, False
@@ -552,12 +557,35 @@ def create_job(
                 timestamp, timestamp,
             ),
         )
+        if parent_job_id:
+            from .agent_task_service import attach_retry
+            attach_retry(conn, parent_job_id, job_id)
     if not needs_confirmation:
         schedule_job(job_id)
     return get_job(job_id) or {}, True
 
 
+def current_attempt(job_id: str) -> dict[str, Any] | None:
+    """Follow durable retries without letting a late original result replace them."""
+    current = get_job(job_id)
+    seen = set()
+    while current and current['status'] == 'cancelled' and current.get('parent_job_id') and current['id'] not in seen:
+        seen.add(current['id'])
+        current = get_job(current['parent_job_id'])
+    while current and current['id'] not in seen:
+        seen.add(current['id'])
+        with db.get_conn() as conn:
+            child = conn.execute("SELECT id FROM creation_jobs WHERE parent_job_id=? AND status!='cancelled' ORDER BY created_at DESC,rowid DESC LIMIT 1", (current['id'],)).fetchone()
+        if child is None:
+            break
+        current = get_job(child['id'])
+    return current
+
+
 def retry_job(job_id: str) -> dict[str, Any]:
+    current = current_attempt(job_id)
+    if current and current['id'] != job_id:
+        return current
     row = _get_job_row(job_id)
     if row is None:
         raise ValueError("找不到要重试的任务。")

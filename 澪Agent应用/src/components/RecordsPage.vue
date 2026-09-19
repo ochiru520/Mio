@@ -67,7 +67,7 @@ function excerpt(markdown = '') {
       .trim()
     const label = cleaned.replace(/[：:]$/, '')
     if (!cleaned || sectionTitles.has(label) || /^\d{4}[-年/.]\d{1,2}/.test(cleaned)) continue
-    return cleaned.slice(0, 70)
+    return cleaned.length > 90 ? `${cleaned.slice(0, 90)}…` : cleaned
   }
   return ''
 }
@@ -91,7 +91,7 @@ function diaryListDetail(diary) {
   return summary ? `${summary} · ${state}` : state
 }
 
-const activeMonthDiaries = computed(() => (context.diaries || [])
+const activeMonthDiaries = computed(() => (context.selectedMonthlyReview?.source_diaries || [])
   .filter((diary) => String(diary.date || '').startsWith(`${context.selectedMonthlyMonth}-`))
   .sort((a, b) => b.date.localeCompare(a.date)))
 
@@ -226,7 +226,7 @@ async function saveDiaryEdit() {
     <div v-else-if="recordMode === 'weekly'" :class="['period-record-layout', { collapsed: !dateRailExpanded }]">
       <aside class="period-record-rail">
         <header><strong v-if="dateRailExpanded">周记</strong><span v-if="dateRailExpanded">{{ context.weeklyReviewItems.length }} 周</span><button type="button" :title="dateRailExpanded ? '收起周记栏' : '展开周记栏'" @click="dateRailExpanded = !dateRailExpanded"><component :is="dateRailExpanded ? PanelLeftClose : PanelLeftOpen" :size="15" /></button></header>
-        <button v-for="item in context.weeklyReviewItems" :key="item.week_start" type="button" :class="{ active: context.selectedWeeklyStart === item.week_start }" @click="context.selectedWeeklyStart = item.week_start"><time>{{ dateRailExpanded ? `${item.week_start} 至 ${item.week_end}` : item.week_start.slice(5) }}</time><span v-if="dateRailExpanded">{{ item.markdown_content ? excerpt(item.markdown_content) : '这一周还没有形成周记' }}</span></button>
+        <button v-for="item in context.weeklyReviewItems" :key="item.week_start" type="button" :class="{ active: context.selectedWeeklyStart === item.week_start }" @click="context.selectedWeeklyStart = item.week_start"><time :datetime="item.week_start"><b v-if="dateRailExpanded" class="period-date-full">{{ item.week_start }} — {{ item.week_end.slice(5) }}</b><b :class="{ 'period-date-short': dateRailExpanded }">{{ item.week_start.slice(5) }}</b></time><span v-if="dateRailExpanded">{{ item.markdown_content ? excerpt(item.markdown_content) : '这一周还没有形成周记' }}</span></button>
       </aside>
       <article v-if="context.selectedWeeklyReview?.markdown_content" class="period-reader"><header><div><span>{{ context.selectedWeeklyReview.week_start }} 至 {{ context.selectedWeeklyReview.week_end }}</span><h2>这一周的记录</h2></div><button class="secondary-button" type="button" :disabled="Boolean(context.reviewBusy)" @click="context.generateWeekly()"><RefreshCw :class="{ spin: context.reviewBusy === 'weekly' }" :size="15" />重新生成</button></header><div class="markdown-body" v-html="context.renderedMarkdown(context.selectedWeeklyReview.markdown_content)" /></article>
       <div v-else class="reader-empty compact-reader-empty"><CalendarDays :size="30" /><strong>这一周还没有周记</strong><button class="primary-button" type="button" :disabled="Boolean(context.reviewBusy)" @click="context.generateWeekly()"><RefreshCw :class="{ spin: context.reviewBusy === 'weekly' }" :size="15" />生成周记</button></div>

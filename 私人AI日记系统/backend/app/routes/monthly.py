@@ -12,12 +12,18 @@ router = APIRouter()
 
 @router.get("/api/monthly")
 async def api_monthly_list():
-    items = []
+    items = {}
     for row in db.list_monthly_reviews():
         month = str(row["month"])
+        items[month] = {**dict(row), "source_diaries": []}
+    for row in db.list_monthly_diary_index():
+        month = str(row["date"])[:7]
+        item = items.setdefault(month, {"month": month, "markdown_content": "", "source_diaries": []})
+        item["source_diaries"].append(dict(row))
+    for month, item in items.items():
         month_start, month_end = month_bounds(month)
-        items.append({**dict(row), "month_start": month_start, "month_end": month_end})
-    return items
+        item.update(month_start=month_start, month_end=month_end, diary_count=len(item["source_diaries"]))
+    return sorted(items.values(), key=lambda item: item["month"], reverse=True)
 
 
 @router.post("/api/monthly/{month}/generate")

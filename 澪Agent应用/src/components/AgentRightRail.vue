@@ -73,10 +73,10 @@ onBeforeUnmount(() => {
     <button type="button" title="图片工作流设置" @click="emit('navigate', 'settings')"><ImagePlus :size="17" /><span><strong>图片工作流</strong><small>{{ imageWorkflow?.available ? '已登记，运行前检查依赖' : '需要配置' }}</small></span></button>
     <button type="button" title="视频工作流设置" @click="emit('navigate', 'settings')"><Film :size="17" /><span><strong>视频工作流</strong><small>{{ videoWorkflow?.available ? '已登记，运行前检查依赖' : '需要配置' }}</small></span></button>
   </section>
-  <button v-if="!comfyOnline" class="agent-rail-connect" type="button" :disabled="starting" @click="startComfyUi"><RefreshCw v-if="starting" class="spin" :size="16" /><Play v-else :size="16" /><span><small>本地服务</small><strong>{{ starting ? '正在连接' : '启动并连接' }}</strong></span></button>
-  <section class="agent-rail-job" @click="emit('navigate', 'tasks')">
+  <button v-if="!comfyOnline" class="agent-rail-connect" type="button" title="启动并连接 ComfyUI" :disabled="starting" @click="startComfyUi"><RefreshCw v-if="starting" class="spin" :size="16" /><Play v-else :size="16" /><span><small>本地服务</small><strong>{{ starting ? '正在连接' : '启动并连接' }}</strong></span></button>
+  <button type="button" class="agent-rail-job" title="查看当前任务" @click="emit('navigate', 'tasks')">
     <MessageSquareText :size="17" /><span><small>当前任务</small><strong>{{ latestTask ? taskStatusLabel(latestTask.status) : '暂无任务' }}</strong><p v-if="latestTask">{{ latestTask.snapshot?.goal || latestTask.original_goal }}</p></span>
-  </section>
-  <button class="agent-rail-settings" type="button" @click="emit('navigate', 'settings')"><Settings :size="17" /><span><small>Agent</small><strong>设置与诊断</strong></span></button>
+  </button>
+  <button class="agent-rail-settings" type="button" title="设置与诊断" @click="emit('navigate', 'settings')"><Settings :size="17" /><span><small>Agent</small><strong>设置与诊断</strong></span></button>
   <p v-if="error" class="agent-rail-error">{{ error }}</p>
 </template>

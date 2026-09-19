@@ -9,6 +9,7 @@ import {
 import { canContinueOnboardingStep } from '../onboardingGates.js'
 import { apiRequest } from '../services/api.js'
 import DependencyCenter from './DependencyCenter.vue'
+import AppSelect from './AppSelect.vue'
 
 const props = defineProps({
   environment: { type: Object, default: null },
@@ -289,13 +290,12 @@ async function saveAndTestProvider() {
         </div>
         <div v-if="!hasVerifiedModel" class="onboarding-provider-form">
           <div class="onboarding-provider-presets">
-            <select :value="provider.preset_id" @change="selectProviderPreset($event.target.value)"><option v-for="preset in providerPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select>
-            <button type="button" :class="{ active: provider.provider_kind === 'relay' }" @click="selectProviderPreset('compatible')">兼容网关</button>
+            <div class="onboarding-preset-field"><span>模型供应商</span><AppSelect :model-value="provider.preset_id || 'compatible'" :options="[...providerPresets.filter(p => p.id !== 'compatible').map(p => ({ value: p.id, label: p.name })), { value: 'compatible', label: '自定义兼容网关' }]" label="模型供应商" @update:model-value="selectProviderPreset" /></div>
           </div>
           <div class="onboarding-provider-fields">
             <label><span>供应商名称</span><input v-model.trim="provider.provider_name" autocomplete="off" placeholder="例如：我的模型服务" /></label>
             <label><span>API 地址</span><input v-model.trim="provider.base_url" autocomplete="url" placeholder="https://example.com/v1" /></label>
-            <label><span>接口模式</span><select v-model="provider.default_api_mode"><option value="auto">自动识别</option><option value="responses">Responses API（Codex）</option><option value="chat_completions">Chat Completions</option></select></label>
+            <label><span>接口模式</span><AppSelect v-model="provider.default_api_mode" label="接口模式" :options="[{ value: 'auto', label: '自动识别（推荐）' }, { value: 'responses', label: 'Responses API（Codex）' }, { value: 'chat_completions', label: 'Chat Completions' }]" /></label>
             <label class="wide"><span>API Key</span><input v-model="provider.api_key" type="password" autocomplete="new-password" placeholder="只加密保存在当前 Windows 用户下" /></label>
           </div>
           <div class="onboarding-provider-actions"><button type="button" :disabled="Boolean(providerBusy) || !provider.api_key.trim()" @click="discoverModels"><RefreshCw :class="{ spin: providerBusy === 'discover' }" :size="14" />{{ providerBusy === 'discover' ? '正在读取' : '读取模型' }}</button></div>

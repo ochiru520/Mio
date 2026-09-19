@@ -1,8 +1,9 @@
 <script setup>
+import { monthlyCatalog } from './monthlyCatalog.js'
 import UpdateNotice from './components/UpdateNotice.vue'
 // Domain composition; factories do not eagerly access their dependencies.
 import { useMessagePresentation } from './composables/useMessagePresentation.js'
-const { formatRealTime, formatShortTime, formatSidebarTime, weekStartFor, weekEndFor, monthEndFor, requestCostDetails, formatCost, costSourceLabel, pricingSourceLabel, sourceLabel, reasoningLabel, compactModelLabel, messageModelLabel, compactReasoningLabel, turnId, turnToolReceipts, turnCreationJob, turnCreationPrompt, turnCreationLoras, turnCreationSampler, turnCreationWorkflow, agentExecutionStatus, agentExecutionProgress, agentExecutionElapsed, agentCreationCost, turnTokenCount, toolReceiptLabel, toolReceiptStatus, toolReceiptTitle, modelRequestError, cleanDisplayContent, statusLabel, renderedMarkdown } = useMessagePresentation({
+const { formatRealTime, formatShortTime, formatSidebarTime, weekStartFor, weekEndFor, requestCostDetails, formatCost, costSourceLabel, pricingSourceLabel, sourceLabel, reasoningLabel, compactModelLabel, messageModelLabel, compactReasoningLabel, turnId, turnToolReceipts, turnCreationJob, turnCreationPrompt, turnCreationLoras, turnCreationSampler, turnCreationWorkflow, agentExecutionStatus, agentExecutionProgress, agentExecutionElapsed, agentCreationCost, turnTokenCount, toolReceiptLabel, toolReceiptStatus, toolReceiptTitle, modelRequestError, cleanDisplayContent, statusLabel, renderedMarkdown } = useMessagePresentation({
   get activeModel() { return activeModel },
   get compactActiveModelLabel() { return compactActiveModelLabel },
   get modelOptions() { return modelOptions },
@@ -1909,32 +1910,7 @@ const weeklyReviewItems = computed(() => {
   return items.sort((a, b) => b.week_start.localeCompare(a.week_start))
 })
 const selectedWeeklyReview = computed(() => weeklyReviewItems.value.find((item) => item.week_start === selectedWeeklyStart.value) || null)
-const monthlyReviewItems = computed(() => {
-  const items = new Map(monthlyReviews.value.map((item) => [item.month, { ...item }]))
-  for (const diary of diaries.value) {
-    const month = String(diary?.date || '').slice(0, 7)
-    if (!month) continue
-    const item = items.get(month) || {
-      month,
-      month_start: `${month}-01`,
-      month_end: monthEndFor(month),
-      markdown_content: '',
-    }
-    item.diary_count = Number(item.diary_count || 0) + 1
-    items.set(month, item)
-  }
-  const currentMonth = String(logicalDate.value || '').slice(0, 7)
-  if (currentMonth && !items.has(currentMonth)) {
-    items.set(currentMonth, {
-      month: currentMonth,
-      month_start: `${currentMonth}-01`,
-      month_end: monthEndFor(currentMonth),
-      markdown_content: '',
-      diary_count: 0,
-    })
-  }
-  return [...items.values()].sort((a, b) => b.month.localeCompare(a.month))
-})
+const monthlyReviewItems = computed(() => monthlyCatalog(monthlyReviews.value, logicalDate.value))
 const selectedMonthlyReview = computed(() => monthlyReviewItems.value.find((item) => item.month === selectedMonthlyMonth.value) || null)
 const profileRows = computed(() => {
   const profile = memoryData.value.profile

@@ -179,7 +179,12 @@ function Write-PackageReadme {
     )
     $content = Get-Content -LiteralPath (Join-Path $BackendRoot "文档\$SourceName") -Raw -Encoding UTF8
     $content = $content.Replace('(../LICENSE)', '(LICENSE)')
+    $content = $content.Replace('(GitHub项目介绍.md)', '(README.md)')
+    $content = $content.Replace('(GitHub项目介绍_EN.md)', '(README_EN.md)')
     $content = $content.Replace('(../SECURITY.md)', '(SECURITY.md)')
+    $content = $content.Replace('(../CONTRIBUTING.md)', '(CONTRIBUTING.md)')
+    $content = $content.Replace('(使用与升级指南.md)', '(私人AI日记系统/文档/使用与升级指南.md)')
+    $content = $content.Replace('(版本说明.md)', '(私人AI日记系统/文档/版本说明.md)')
     $content = $content.Replace('(隐私说明.md)', '(私人AI日记系统/文档/隐私说明.md)')
     $content = $content.Replace('(资产与第三方许可.md)', '(私人AI日记系统/文档/资产与第三方许可.md)')
     [System.IO.File]::WriteAllText($Path, $content, (New-Object System.Text.UTF8Encoding($true)))
@@ -207,6 +212,12 @@ function Write-PackageRootFiles {
 **/*.wav
 **/*.mp3
 **/*.flac
+# Local runtime and publisher credentials never belong in the public source.
+**/Data/
+**/*.dpapi
+**/*.pem
+**/updates/downloads/
+**/updates/jobs/
 私人AI日记系统/数据/
 澪Agent应用/预览/
 '@

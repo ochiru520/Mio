@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { apiRequest } from '../services/api.js'
 const props = defineProps({ observations: { type: Array, default: () => [] } })
 const emit = defineEmits(['changed'])
@@ -7,7 +7,19 @@ const drafts = reactive({})
 const overrides = reactive({})
 const busy = ref(false)
 const error = ref('')
-const jobs = computed(() => [...new Map(props.observations.map(step => step.result?.job).filter(Boolean).map(job => [job.id, overrides[job.id] || job])).values()].filter(job => ['unknown', 'needs_confirmation', 'failed'].includes(job.status)))
+function currentJob(job) {
+  const seen = new Set()
+  while (overrides[job.id] && !seen.has(job.id)) {
+    seen.add(job.id)
+    const next = overrides[job.id]
+    if (next.id === job.id) return next
+    job = next
+  }
+  return job
+}
+const jobs = computed(() => [...new Map(props.observations.map(step => step.result?.job).filter(Boolean).map(currentJob).map(job => [job.id, job])).values()].filter(job => ['unknown', 'needs_confirmation', 'failed'].includes(job.status)))
+// Server refreshes are authoritative; temporary command responses must not hide them.
+watch(() => props.observations, () => { for (const key of Object.keys(overrides)) delete overrides[key] }, { deep: true, flush: 'sync' })
 function draft(job) { return drafts[job.id] ||= { outcome: 'still_unknown', receipt: '', note: '' } }
 async function perform(job, command, payload = {}) {
   if (busy.value) return

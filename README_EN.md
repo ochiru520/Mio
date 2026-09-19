@@ -1,177 +1,87 @@
-# Mio
+﻿# Mio
 
-Current release: **0.3.0**. Users on 0.2.1 or earlier: install once manually to enable future in-app updates. See [release notes](CHANGELOG.md).
+[中文](README.md) · [Download for Windows](https://github.com/ochiru520/Mio/releases/latest) · [Report an issue](https://github.com/ochiru520/Mio/issues)
 
+Mio is a personal AI companion and Agent for Windows. Conversations, long-term memory, diaries, voice, QQ and a Live2D companion share local data. Its Agent workspace handles file tasks and configured image/video workflows.
 
-<p align="center">
-  <img src="澪Agent应用/desktop/mio-icon.png" width="180" alt="Mio project icon" />
-</p>
+**Public version: 0.3.1 · Preview · Windows x64.** The installer includes the application runtime; users do not need Python or Node.js. Bring your own model API or configure optional local models.
 
-<p align="center">
-  <a href="README.md">中文</a> | English
-</p>
+## Get started
 
-> A local-first personal AI Agent for Windows that connects conversations, long-term memory, diaries, proactive contact, QQ, voice, Live2D, and screen awareness through one shared character and data loop.
+1. Download `Mio-0.3.1-Windows-x64-Setup.exe` from [Releases](https://github.com/ochiru520/Mio/releases/latest), check its SHA-256 file and run it.
+2. Complete the environment and naming steps. Add a model provider now or later under Model & API settings.
+3. Try a conversation, then configure memory, diaries, QQ, voice or the companion as needed. Check provider pricing before enabling cloud features.
+4. Create a complete backup under Data & Privacy settings.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-2f7475.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-4c8bf5.svg)](#requirements-and-official-downloads)
-[![Status](https://img.shields.io/badge/status-preview-d6a84b.svg)](#project-status)
+Windows 11 x64 is the primary tested environment. The desktop window requires [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/). Model weights, QQ/NapCat, custom character assets and reference audio are optional and are not included in the main installer.
 
-Mio is not just a chat webpage or a launcher that bundles unrelated AI features. It explores what it takes to keep one personal Agent present across a real desktop environment. The main app, desktop companion, QQ, voice calls, diary, and screen observation share the same persona, memory, life records, model configuration, and permission state.
+## Features
 
-The project currently targets single-user Windows installations and is still in preview.
-
-## Core Capabilities
-
-| Area | Capabilities |
+| Area | Available capabilities |
 |---|---|
-| Chat and models | Multiple conversations, OpenAI-compatible providers, Responses and Chat Completions APIs, reasoning levels, token and cost records, image/PDF/Word/text attachments |
-| Long-term records | SQLite conversations, structured memory, daily state, diary, weekly and monthly reviews, export, backup, and restore |
-| Proactivity | Configurable proactive messages, unfinished-topic follow-up, scheduled diaries and reviews; sensitive or costly automation is disabled by default |
-| Desktop character | Vue main app, independent Live2D companion, chat bubble, actions, expressions, speech lip sync, and playback queue |
-| Voice | Local Genie ONNX character voice, Chinese and Japanese reading, faster-whisper calls and system-audio transcription, active interruption |
-| Vision and environment | Screen/window/game change detection, local or cloud vision, system-audio context, observable triggers, and cost boundaries |
-| QQ | NapCat / OneBot private and group chats, login diagnostics, and proactive-message synchronization |
-| Privacy and reliability | Local data directory, DPAPI secrets, sensitive-capability controls, migration ledger, verified backups, and runtime identity diagnostics |
+| Chat | Multiple conversations/providers, Responses and Chat Completions, attachments, reasoning controls, token and cost records |
+| Memory | Source evidence, manual edits and confirmation, conflict handling, deactivation and version restoration |
+| Records | Daily diaries/reviews, weekly and monthly summaries, growth statistics and Markdown export; complete month/source listings |
+| Agent | Task tracking, authorized file tools, configured generation services and ComfyUI workflows, recovery and external receipt reconciliation |
+| Models | Inspect, install, verify and uninstall managed optional components with a removal preview; externally reused resources stay externally managed |
+| Companion and voice | Live2D actions/expressions, Genie local voice, faster-whisper transcription and voice interaction |
+| QQ and observation | NapCat/OneBot private and group chats, optional screen/window/system-audio observation |
+| Data and updates | Local SQLite, complete backup/restore, migration checks, signed update manifests, download progress and explicit installation confirmation |
 
-## Design Principles
+Installed, configured, connected and successfully tested are separate states. Check the application's actual diagnostics before relying on a feature.
 
-### One Agent, multiple surfaces
+## Changes in 0.3.1
 
-The main app, QQ, desktop companion, calls, and observation services are not separate bots. They connect to one local backend and share persona, recent context, memory, diaries, models, and permission state.
+- Optional model removal with protection for shared environments, personal data and custom resources.
+- Genie/Whisper Unicode validation fixes on Windows and corrected Genie resource discovery.
+- Task retry association, manual memory protection, sleeping-memory prompt exclusion, cache invalidation and sanitized diagnostics fixes.
+- Revised Agent home, model menus, update panel, weekly excerpts and record empty states.
+- Complete monthly listings and counts independent of the dashboard's recent-diary window.
 
-### Local-first does not mean fully offline
+0.3.0 was withdrawn. Use 0.3.1. Users on 0.2.1 or earlier must install 0.3.1 manually before using the in-app updater. See the [usage and upgrade guide](私人AI日记系统/文档/使用与升级指南.md) and [release notes](私人AI日记系统/文档/版本说明.md) (Chinese).
 
-Chats, diaries, memory, settings, and backups stay on the local machine by default. When a cloud model, web search, or cloud vision is used, the required context is sent to the provider selected by the user. Local vision and voice can reduce outbound data but require separately installed models.
+## Privacy and cost
 
-### Proactive behavior must remain inspectable
+Data stays in the selected local directory and is preserved during upgrades. Windows DPAPI protects stored model keys for the current Windows user; backups do not make those keys portable between users or machines.
 
-Proactive contact, QQ, automatic diaries, screen observation, and system-audio observation are not enabled merely because the code exists. Settings expose their switches, runtime state, errors, and cost boundaries, with a global privacy pause.
+Cloud model, search and cloud vision requests send necessary content to the configured service. Local-first does not mean fully offline. Update checks read the release service. QQ, observation, system audio and proactive behavior can be disabled individually or paused through privacy controls.
 
-## Architecture
+Public source excludes the author's chats, diaries, private persona, credentials, QQ sessions, training audio and private models. Displayed cost information depends on the provider and does not replace provider billing.
 
-```mermaid
-flowchart LR
-    U[User] --> A[Vue main app]
-    U --> P[Live2D companion]
-    U --> Q[QQ / NapCat]
-    U --> V[Voice calls]
-    S[Screen and system audio] --> O[Observation services]
+## Run from source
 
-    A --> B[Local FastAPI backend]
-    P --> B
-    Q --> B
-    V --> B
-    O --> B
+Use Windows x64, Python 3.10 (release builds use 3.10.11) and Node.js 22.12+. Inno Setup 6 is only needed to produce an installer.
 
-    B --> C[Context and permission orchestration]
-    C --> M[Cloud or local models]
-    C --> T[Genie TTS / faster-whisper]
-    C --> D[(SQLite / diary / memory / backups)]
-```
-
-FastAPI only listens on `127.0.0.1`. The Windows launcher starts the backend and embeds the Vue app in the main window. Live2D runs in a separate Electron process while connecting to the same local Agent.
-
-## Repository Layout
-
-```text
-Mio/
-|- 私人AI日记系统/       # FastAPI, SQLite, diary, memory, QQ, voice, observation
-|- 澪Agent应用/          # Vue UI, Windows launcher, Electron Live2D
-|- README.md             # Chinese introduction
-|- README_EN.md          # English introduction
-|- THIRD_PARTY_NOTICES.md
-|- CONTRIBUTING.md
-|- SECURITY.md
-`- LICENSE
-```
-
-The two Chinese source-directory names are retained for compatibility with the existing Windows build and source-discovery logic. End users see a single desktop application named Mio.
-
-## Requirements and Official Downloads
-
-### Using the installer (regular users)
-
-| Item | Requirement | Official download |
-|---|---|---|
-| Mio | Use the Windows x64 installer from the official Release | [Mio Releases](https://github.com/ochiru520/Mio/releases/latest) |
-| Operating system | 64-bit Windows 11; this is the primary verified environment and the installer is x64-only | [Download Windows 11](https://www.microsoft.com/software-download/windows11) |
-| UI runtime | Microsoft Edge WebView2 Runtime; Mio checks it before startup, and it is usually preinstalled on Windows 11 | [Download WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
-| AI model | Mio can start without a model; AI conversations require at least one working cloud-model API or local model | Cloud providers require no software installation; local models can be installed in Mio under Environment and Models |
-
-**The official installer does not require a separate Python, Node.js, Git, or Inno Setup installation.** Local vision, Genie character voice, faster-whisper, NapCat / NT QQ, OBS, and custom Live2D models are optional capabilities installed only when needed.
-
-### Running or building from source (developers)
-
-| Tool | Current requirement | Official download |
-|---|---|---|
-| Windows | Windows 11 x64 | [Windows 11](https://www.microsoft.com/software-download/windows11) |
-| Python | Python 3.10.11 x64; current release builds and CI use Python 3.10 | [Python 3.10.11 x64](https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe) |
-| Node.js | Node.js 22.12.0 x64 or a later compatible version; CI is pinned to 22.12.0 | [Node.js 22.12.0 x64](https://nodejs.org/dist/v22.12.0/node-v22.12.0-x64.msi) |
-| Git | Required when cloning the repository; not required when using the source ZIP | [Git for Windows](https://git-scm.com/download/win) |
-| WebView2 | Required to run the desktop main window | [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
-| Inno Setup 6 | Required only to create the Windows installer; not required for ordinary source runs or directory builds | [Inno Setup](https://jrsoftware.org/isdl.php) |
-
-`npm` is installed with Node.js, and Windows PowerShell is provided by Windows.
-
-## Run from Source
-
-### Backend
+Build the frontend first:
 
 ```powershell
-cd .\私人AI日记系统\backend
+cd .\澪Agent应用
+npm ci
+npm run build
+```
+
+Start the backend:
+
+```powershell
+cd ..\私人AI日记系统\backend
 py -3.10 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000/agent-app/` in a browser.
+Open `http://127.0.0.1:8000/agent-app/`. Use `npm run dev` for frontend development and `构建Windows应用.ps1` for a Windows build. Keep the backend bound to localhost.
 
-### Desktop UI
+The Chinese backend/frontend directory names are retained for build and path compatibility. Private development builds and public releases use separate version channels and do not upgrade across channels based on version numbers.
 
-```powershell
-cd .\澪Agent应用
-npm ci
-npm run build
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\启动预览.ps1
-```
+## Validation and limitations
 
-Build the complete Windows application with:
+Windows CI runs backend, desktop/updater, frontend and Live2D checks. See [CONTRIBUTING](CONTRIBUTING.md) for commands. Local installation and isolated upgrade tests do not establish compatibility with every GPU, audio device or provider. Clean-machine installs, real QQ/microphone use and long-running provider tasks still need broader field testing.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\构建Windows应用.ps1
-```
+This is preview software. Installers do not have Windows code-signing certificates; use the official release and verify checksums.
 
-## First Run
+## Documentation and license
 
-1. Complete the first-run wizard and confirm the data directory.
-2. Add a provider and model under Settings > Models and API.
-3. Edit the character card, persona, names, and behavior boundaries as needed.
-4. Install or enable QQ, voice, local vision, proactive messages, and observation separately.
-5. Create the first full backup under Settings > Data and Privacy.
+[Usage and upgrades](私人AI日记系统/文档/使用与升级指南.md) · [Release notes](私人AI日记系统/文档/版本说明.md) · [Privacy](私人AI日记系统/文档/隐私说明.md) · [Security](SECURITY.md) · [Third-party assets](私人AI日记系统/文档/资产与第三方许可.md)
 
-The public repository does not contain the author's private persona, conversations, diaries, API keys, QQ login state, character voice, training references, model weights, or private Live2D and image assets.
-
-## Project Status
-
-- Current preview version: `0.1.0`
-- Primary platform: Windows
-- Automated regression, builds, isolated-data tests, and multiple real-run acceptance rounds have been completed. Real microphones, QQ login, third-party downloads, different GPUs/audio devices, and long natural sessions can still vary by environment.
-- Mio is currently intended for developers and evaluators willing to configure models and optional capabilities. It should not be treated as a maintenance-free commercial product.
-- Public builds are not code-signed yet. Windows may show a SmartScreen warning; only download from the official Release and verify SHA-256.
-
-## Privacy, Licenses, and Credits
-
-- [Privacy notes](私人AI日记系统/文档/隐私说明.md)
-- [Security policy](SECURITY.md)
-- [Asset and third-party license boundaries](私人AI日记系统/文档/资产与第三方许可.md)
-- [Third-party projects and acknowledgements](THIRD_PARTY_NOTICES.md)
-
-Original source code and documentation are released under the [MIT License](LICENSE). Live2D Cubism, sample models, third-party libraries, character images, voice assets, training data, and user-imported assets keep their own licenses and redistribution terms.
-
-Do not upload real API keys, QQ tokens, chat databases, diaries, private screenshots, voice assets, or raw logs to Issues.
-
-## Contributing
-
-Focused Issues and pull requests are welcome. Changes to shared behavior should include tests. Changes involving network access, screen capture, QQ, proactive messages, backups, model downloads, or local actions should also document permission boundaries, failure states, and privacy impact.
+Original code and documentation use the [MIT License](LICENSE). Live2D, model weights, voices, images and imported assets retain their own licenses. Include only sanitized diagnostics in issues, never databases, credentials or private conversations.

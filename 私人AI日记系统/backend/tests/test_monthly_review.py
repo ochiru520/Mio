@@ -83,6 +83,22 @@ class MonthlyReviewGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0]["month_start"], "2024-02-01")
         self.assertEqual(result[0]["month_end"], "2024-02-29")
 
+    async def test_list_includes_unsummarized_middle_month_and_complete_sources(self) -> None:
+        db.upsert_monthly_review("2026-07", "七月总结")
+        db.upsert_diary("2026-07-31", "七月日记", "私人正文")
+        for day in range(1, 31):
+            db.upsert_diary(f"2026-08-{day:02}", "八月日记", "私人正文")
+        for day in range(1, 15):
+            db.upsert_diary(f"2026-09-{day:02}", "九月日记", "私人正文")
+        result = await api_monthly_list()
+        self.assertEqual([row["month"] for row in result], ["2026-09", "2026-08", "2026-07"])
+        self.assertEqual([row["diary_count"] for row in result], [14, 30, 1])
+        self.assertEqual(result[1]["markdown_content"], "")
+        self.assertEqual(len(result[1]["source_diaries"]), 30)
+        self.assertEqual(result[1]["source_diaries"][0]["date"], "2026-08-30")
+        self.assertNotIn("markdown_content", result[1]["source_diaries"][0])
+        self.assertIsNone(db.get_monthly_review("2026-08"))
+
     async def test_automatic_run_generates_previous_complete_month_once(self) -> None:
         db.upsert_diary("2025-12-20", "十二月", "完成年度整理")
         original_enabled = settings.monthly_review_enabled

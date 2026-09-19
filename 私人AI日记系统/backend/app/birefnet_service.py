@@ -89,11 +89,15 @@ def retry_cutout(row: dict, spec: dict) -> dict:
         raise ValueError("原抠图输入不存在，无法重试。")
     job_id = "job_" + uuid.uuid4().hex[:24]
     target = root / "input" / f"mio-{job_id}{source.suffix}"
-    shutil.copyfile(source, target)
     clean = {key: value for key, value in spec.items() if key in {"input_kind", "frame_limit", "batch_frames", "skip_frames", "prompt"}}
     clean.update(input=target.name, processed_frames=0, batch_prompt_ids=[], quality_status="not_reviewed")
     with db.get_conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        child = conn.execute("SELECT * FROM creation_jobs WHERE parent_job_id=? AND status!='cancelled' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row['id'],)).fetchone()
+        if child is not None:
+            return creation._job_public(child)
         creation.reserve_slot(conn, row["conversation_id"])
+        shutil.copyfile(source, target)
         conn.execute("""INSERT INTO creation_jobs(id,conversation_id,source,media_type,backend,workflow_id,
             provider_id,model_id,status,stage,spec_json,preset_snapshot_json,confirmation_reason,
             idempotency_key,parent_job_id,created_at,updated_at)
@@ -101,6 +105,8 @@ def retry_cutout(row: dict, spec: dict) -> dict:
             (job_id, row["conversation_id"], row["source"], row["media_type"], WORKFLOW_ID,
              json.dumps(clean, ensure_ascii=False), "从原始输入重新抠图，重做全部指定帧，需要确认。",
              f"retry:{row['id']}:{uuid.uuid4().hex}", row["id"], db.now_iso(), db.now_iso()))
+        from .agent_task_service import attach_retry
+        attach_retry(conn, row['id'], job_id)
     return creation.get_job(job_id)
 
 

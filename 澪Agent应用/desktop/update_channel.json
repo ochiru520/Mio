@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "product_id": "io.github.mio-agent.desktop",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "channel": "stable",
   "feed_url": "https://github.com/ochiru520/Mio/releases/latest/download/latest.json",
   "enabled": true,

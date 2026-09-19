@@ -1,7 +1,7 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Check, CheckCircle2, CircleAlert, CircleHelp, Download, ExternalLink, RefreshCw, RotateCw, Settings2, Wrench } from '@lucide/vue'
-import { activateLocalVision, verifyDependency, installDependency, loadDependencies, loadDependencyStatus } from '../services/dependenciesApi.js'
+import { activateLocalVision, verifyDependency, installDependency, loadDependencies, loadDependencyStatus, previewDependencyUninstall, uninstallDependency } from '../services/dependenciesApi.js'
 
 import { apiRequest } from '../services/api.js'
 
@@ -17,6 +17,37 @@ const progress = ref({})
 const pollTimer = ref(null)
 const activating = ref(false)
 const notice = ref('')
+const uninstallPlan = ref(null)
+const uninstallPanel = ref(null)
+
+async function prepareUninstall(item) {
+  if (busy.value || item.installing) return
+  busy.value = true; error.value = ''; uninstallPlan.value = null
+  try {
+    uninstallPlan.value = { ...await previewDependencyUninstall(item.id), label: item.label }
+    await nextTick()
+    uninstallPanel.value?.scrollIntoView({ block: 'nearest' })
+    uninstallPanel.value?.focus({ preventScroll: true })
+  }
+  catch (cause) { error.value = cause.message || '无法检查卸载范围' }
+  finally { busy.value = false }
+}
+
+async function confirmUninstall() {
+  if (busy.value || !uninstallPlan.value) return
+  busy.value = true; error.value = ''; notice.value = '正在停止相关服务并卸载，请稍候…'
+  const plan = uninstallPlan.value
+  try {
+    const result = await uninstallDependency(plan.id, plan.token)
+    notice.value = result.message
+  } catch (cause) { error.value = cause.message || '卸载未完成，请重新检查'; notice.value = '' }
+  finally {
+    const failure = error.value
+    uninstallPlan.value = null; busy.value = false
+    await refresh()
+    if (failure) error.value = failure
+  }
+}
 
 const statusMeta = {
   ready: { label: '已就绪', icon: CheckCircle2, tone: 'ok' },
@@ -170,11 +201,12 @@ function openUrl(url) {
 }
 
 function actionFor(item) {
-  if (item.id === 'ollama_vision' && ['installed', 'unverified', 'degraded'].includes(item.status)) {
+  if (item.installing) return { kind: 'progress' }
+  if (item.id === 'ollama_vision' && ['installed', 'unverified', 'degraded', 'ready'].includes(item.status)) {
     return { kind: 'activate', label: item.status === 'installed' ? '启动并验证' : '重新验证' }
   }
   if (item.installing) return { kind: 'progress' }
-  if (['genie_runtime', 'whisper'].includes(item.id) && ['unverified', 'degraded'].includes(item.status)) return { kind: 'verify', label: '验证本地模型' }
+  if (['genie_runtime', 'whisper'].includes(item.id) && ['unverified', 'degraded', 'ready'].includes(item.status)) return { kind: 'verify', label: item.status === 'ready' ? '重新验证' : '验证本地模型' }
   if (item.id === 'gpt_sovits' && item.status === 'unverified') return { kind: 'navigate', label: '去试听', target: 'settings-voice' }
   if (item.id === 'napcat' && item.status === 'configured') return { kind: 'navigate', label: '连接 QQ', target: 'settings-qq' }
   if (item.offline_only && item.status === 'missing') return { kind: 'offline', label: '选择离线包安装' }
@@ -218,7 +250,7 @@ onBeforeUnmount(stopPolling)
     <div class="dependency-center-heading">
       <div>
         <strong>环境与模型中心</strong>
-        <small>检查这台电脑上有什么、缺什么；支持在线安装或离线包导入；本地模型可单独验证。</small>
+        <small>检查这台电脑上有什么、缺什么；支持安装、验证与卸载可选模型。</small>
       </div>
       <button type="button" :disabled="busy" @click="refresh">
         <RefreshCw :class="{ spin: busy }" :size="14" />重新检查
@@ -235,6 +267,15 @@ onBeforeUnmount(stopPolling)
 
     <div v-if="error" class="dependency-error">{{ error }}</div>
     <p v-if="notice" role="status" class="dependency-notice">{{ notice }}</p>
+    <section v-if="uninstallPlan" ref="uninstallPanel" tabindex="-1" class="dependency-uninstall-confirm" aria-label="确认卸载模型">
+      <strong>卸载 {{ uninstallPlan.label }}</strong>
+      <p>{{ uninstallPlan.impact }}</p>
+      <p>{{ uninstallPlan.preserved }}</p>
+      <p>将删除以下文件，预计释放 {{ (uninstallPlan.size_bytes / 1024 / 1024).toFixed(1) }} MB：</p>
+      <ul><li v-for="path in uninstallPlan.paths" :key="path">{{ path }}</li></ul>
+      <button type="button" :disabled="busy || !uninstallPlan.paths.length" @click="confirmUninstall">确认卸载</button>
+      <button type="button" :disabled="busy" @click="uninstallPlan = null">取消</button>
+    </section>
 
     <ul class="dependency-list">
       <li v-for="item in dependencies" :key="item.id" :class="['dependency-item', `status-${item.status}`, { installing: item.installing }]">
@@ -247,6 +288,8 @@ onBeforeUnmount(stopPolling)
             </div>
             <p>{{ item.what }}</p>
             <small v-if="item.detail" class="dependency-detail">{{ item.detail }}</small>
+            <small v-if="item.verification?.checked_at">最近验证：{{ new Date(item.verification.checked_at).toLocaleString() }}</small>
+            <small v-if="item.uninstall_blocker">{{ item.uninstall_blocker }}</small>
             <small v-if="item.status !== 'ready' && item.status !== 'configured'">{{ item.missing_effect }}</small>
             <small v-if="!['installed', 'unverified', 'degraded', 'ready', 'configured'].includes(item.status)" class="dependency-how">怎么装：{{ item.how }}</small>
             <small v-if="item.offline_only" class="dependency-how">暂未提供在线包。对应文件：{{ item.package_name }}</small>
@@ -256,6 +299,7 @@ onBeforeUnmount(stopPolling)
             <div v-if="item.last_error" class="dependency-last-error">上次安装：{{ item.last_error }}</div>
           </div>
           <div class="dependency-item-actions">
+            <button v-if="item.can_uninstall" type="button" :disabled="busy || item.installing" @click="prepareUninstall(item)">卸载</button>
             <template v-if="actionFor(item).kind === 'activate'">
               <button class="primary" type="button" :disabled="busy || activating" @click="activateVision"><RefreshCw :class="{ spin: activating }" :size="14" />{{ activating ? '正在启动并验证' : actionFor(item).label }}</button>
             </template>
@@ -294,3 +338,11 @@ onBeforeUnmount(stopPolling)
     <p class="dependency-footnote">在线组件会尝试可用下载源，能否连接取决于当前网络。离线组件需选择对应 ZIP 包；“已配置”不代表已连接，文件安装完成后请验证或试听。</p>
   </div>
 </template>
+
+<style scoped>
+.dependency-uninstall-confirm { margin: 12px 0; padding: 14px; border: 1px solid var(--line, #c9c3bd); border-radius: 10px; overflow-wrap: anywhere; }
+.dependency-uninstall-confirm p, .dependency-uninstall-confirm li { font-size: 12px; line-height: 1.6; }
+.dependency-uninstall-confirm button { margin-right: 8px; padding: 7px 12px; border: 1px solid var(--line, #c9c3bd); border-radius: 8px; background: var(--surface, #fff); color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+.dependency-uninstall-confirm button:first-of-type { color: #983e4d; border-color: #d9aeb6; }
+.dependency-uninstall-confirm button:disabled { cursor: wait; opacity: .5; }
+</style>

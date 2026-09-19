@@ -75,6 +75,13 @@ class ReviewsRepository:
                 """
             ).fetchall()
 
+    def list_monthly_diary_index(self) -> list[sqlite3.Row]:
+        """Complete month sources, independent of the dashboard/search result window."""
+        with self._dep_get_conn() as conn:
+            return conn.execute(
+                """SELECT date, title, daily_thirty_status FROM diaries ORDER BY date DESC"""
+            ).fetchall()
+
 
     def upsert_monthly_review(self, month: str, markdown_content: str) -> None:
         timestamp = self._dep_now_iso()

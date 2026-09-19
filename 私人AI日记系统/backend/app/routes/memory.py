@@ -173,13 +173,14 @@ async def api_update_runtime_summary(payload: MemoryTextRequest):
 @router.post("/api/memory/items")
 async def api_create_memory_item(payload: StructuredMemoryRequest):
     try:
-        saved = save_memory_item(
+        from ..memory_service import save_memory_candidate
+        saved = save_memory_candidate(
             layer=payload.layer,
             category=payload.category,
             memory_key=payload.memory_key,
             content=payload.content,
             source_conversation_id=payload.conversation_id.strip() or "default",
-            confidence=payload.confidence,
+            confidence=1.0,
             occurred_at=payload.occurred_at,
             learned_at=payload.learned_at,
             valid_from=payload.valid_from,
@@ -188,6 +189,8 @@ async def api_create_memory_item(payload: StructuredMemoryRequest):
             time_confidence=payload.time_confidence,
             temporal_status=payload.temporal_status,
         )
+        revisions.revise(int(saved['id']), 'confirm')
+        saved['outcome'] = 'user_confirmed'
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     row = db.get_structured_memory(int(saved["id"]))
@@ -243,7 +246,7 @@ async def api_sleep_memory_item(memory_id: int):
     row = db.get_structured_memory(memory_id)
     if row is None or str(row["status"]) != "active":
         raise HTTPException(status_code=404, detail="没有找到这条有效记忆。")
-    db.set_structured_memory_status(memory_id, "sleeping")
+    revisions.revise(memory_id, 'sleep')
     return {"sleeping": True, "id": memory_id}
 
 
@@ -252,7 +255,7 @@ async def api_wake_memory_item(memory_id: int):
     row = db.get_structured_memory(memory_id)
     if row is None or str(row["status"]) != "sleeping":
         raise HTTPException(status_code=404, detail="没有找到这条沉睡记忆。")
-    db.set_structured_memory_status(memory_id, "active")
+    revisions.revise(memory_id, 'restore')
     return {"active": True, "memory": public_memory_item(db.get_structured_memory(memory_id))}
 
 

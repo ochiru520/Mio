@@ -119,6 +119,15 @@ _DEPENDENCY_DEFS: tuple[dict[str, Any], ...] = (
 _install_lock = threading.Lock()
 _voice_finalize_lock = threading.Lock()
 _running_installs: dict[str, int] = {}
+_operation_lock = threading.RLock()
+
+
+@contextmanager
+def dependency_operation(dep_id: str):
+    # Voice packages share directories; serialize launch, verify and removal.
+    group = 'voice' if dep_id in {'genie_runtime', 'gpt_sovits', 'whisper'} else dep_id
+    with _operation_lock, _cross_process_install_lock('operation-' + group):
+        yield
 
 
 @contextmanager
@@ -229,6 +238,7 @@ def _detect_status(
                 result = cached(dep_id, genie_python, genie_data / "chinese-hubert-base/chinese-hubert-base.onnx")
                 status["status"] = "ready" if result.get("ok") else ("degraded" if result else "unverified")
                 status["detail"] = result.get("detail") or status["detail"]
+                status['verification'] = result
             return status
         voice_ready = engine_ready and all(
             path.is_file() and path.stat().st_size > 0
@@ -297,6 +307,7 @@ def _detect_status(
         result = cached(dep_id, Path(layout["python"]), Path(layout["model"])) if layout and layout.get("model") else {}
         status["status"] = "ready" if result.get("ok") else ("degraded" if result else "unverified")
         status["detail"] = result.get("detail") or "检测到本地文件，尚未验证模型加载。"
+        status['verification'] = result
     elif env_status in {"available", "configured"}:
         status["status"] = "ready"
     elif dep_id == "ollama_vision" and env_status in {"installed", "unverified", "degraded"}:
@@ -323,6 +334,12 @@ def list_dependencies() -> list[dict[str, Any]]:
         detected = _detect_status(dep, environment)
         entry["status"] = detected["status"]
         entry["detail"] = detected["detail"]
+        entry['verification'] = detected.get('verification', {})
+        entry['verified'] = bool(entry['verification'].get('ok'))
+        from .dependency_removal import availability
+        entry.update(availability(str(dep['id'])))
+        if dep['id'] == 'whisper' and not entry['can_uninstall'] and not entry.get('uninstall_blocker') and entry['status'] in {'ready', 'unverified', 'degraded'}:
+            entry['uninstall_blocker'] = '当前复用外部语音识别环境；Mio 没有可卸载的专用模型缓存。请到原安装位置管理，避免影响其他程序。'
         detected_ready = entry["status"] in {"ready", "configured"} or (
             dep["id"] == "ollama_vision" and entry["status"] in {"installed", "unverified", "degraded"}
         )
@@ -442,6 +459,11 @@ def _finalize_local_voice_install() -> dict[str, Any]:
 
 
 def _ensure_install_finalized(dep_id: str) -> dict[str, Any]:
+    with dependency_operation(dep_id):
+        return _finalize_install_locked(dep_id)
+
+
+def _finalize_install_locked(dep_id: str) -> dict[str, Any]:
     status = _read_status(dep_id)
     if dep_id != "gpt_sovits" or not status.get("done") or status.get("error"):
         return status
@@ -499,6 +521,9 @@ def _watch_install(dep_id: str, process: subprocess.Popen[Any]) -> None:
             _write_status(dep_id, progress)
         _ensure_install_finalized(dep_id)
     finally:
+        from .dependency_probe import invalidate
+        invalidate()
+        environment_check_service.refresh_detection_cache()
         with _install_lock:
             if _running_installs.get(dep_id) == process.pid:
                 _running_installs.pop(dep_id, None)
@@ -531,11 +556,18 @@ def _dependency_def(dep_id: str) -> dict[str, Any] | None:
 
 
 def install_dependency(dep_id: str, package_path: str = "") -> dict[str, Any]:
+    with dependency_operation(dep_id):
+        return _install_dependency(dep_id, package_path)
+
+
+def _install_dependency(dep_id: str, package_path: str = "") -> dict[str, Any]:
     dep = _dependency_def(dep_id)
     if dep is None:
         raise ValueError("不认识的依赖项目。")
     if str(dep.get("kind") or "") != "script":
         raise ValueError("这个项目不需要安装，请按界面引导操作。")
+    from .dependency_probe import invalidate
+    invalidate()
     if dep_id == "ollama_vision":
         from . import local_vision_service
 
@@ -679,6 +711,14 @@ def _validate_package(source: dict, path: Path) -> None:
 
 
 def verify_dependency(dep_id: str) -> dict:
+    with dependency_operation(dep_id):
+        if _install_running(dep_id):
+            raise ValueError('正在安装，请完成后再验证。')
+        environment_check_service.refresh_detection_cache()
+        return _verify_dependency(dep_id)
+
+
+def _verify_dependency(dep_id: str) -> dict:
     from .dependency_probe import verify
     if dep_id == "genie_runtime":
         root = settings.voice_training_dir

@@ -1,0 +1,89 @@
+/* Period records use stacked dates and excerpts, never the daily row's flex layout. */
+.period-record-layout > aside > button {
+  flex-direction: column; align-items: stretch; gap: 7px; min-height: 92px;
+  padding: 14px 12px; border-radius: 10px; overflow: hidden;
+}
+.period-record-layout > aside > button time { font-size: 12px; font-weight: 650; }
+.period-record-layout > aside > button span {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere; font-size: 12px; line-height: 1.65;
+}
+.period-record-layout > aside { gap: 6px; }
+.period-record-layout time b { font-weight: inherit; }
+.period-record-layout time .period-date-short { display: none; }
+.period-record-layout > aside > button.active { background: var(--view-accent-soft); }
+.period-record-layout.collapsed > aside > button { min-height: 48px; padding: 8px 4px; }
+.reader-empty.compact-reader-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; min-width: 0; padding: 32px 24px; text-align: center;
+  background: radial-gradient(ellipse at center, var(--surface-soft), #fff 75%);
+}
+.compact-reader-empty > svg { box-sizing: content-box; padding: 18px; border-radius: 22px; background: var(--view-accent-soft, var(--accent-soft)); color: var(--view-accent, var(--accent)); }
+.compact-reader-empty > strong { margin-top: 7px; color: var(--ink); font-size: 17px; font-weight: 600; line-height: 1.6; }
+.compact-reader-empty > span { max-width: 360px; font-size: 12px; line-height: 1.8; }
+.compact-reader-empty > button { flex-shrink: 0; min-height: 38px; margin-top: 7px; padding: 8px 16px; border-radius: 8px; }
+
+/* Onboarding controls share one scale and a full-width provider picker. */
+.onboarding-provider-form { padding: 18px; gap: 16px; border-radius: 12px; }
+.onboarding-provider-presets { display: block; }
+.onboarding-preset-field { display: grid; gap: 7px; font-size: 12px; color: var(--muted); }
+.onboarding-provider-presets button.app-select { min-height: 40px; justify-content: space-between; padding: 9px 12px; border-radius: 9px; font-size: 12px; font-weight: 400; background: #fff; color: var(--ink); }
+.onboarding-provider-fields { gap: 14px; }
+.onboarding-provider-fields label,.onboarding-manual-model { gap: 7px; font-size: 12px; }
+.onboarding-provider-fields input,.onboarding-manual-model input { min-height: 40px; font-size: 12px; border-radius: 9px; background: #fff; }
+.onboarding-provider-actions button,.onboarding-provider-save { min-height: 38px; padding: 9px 14px; font-size: 12px; border-radius: 8px; }
+
+/* The Agent has a compact green utility rail, independent of Mio's status cards. */
+.app-shell.integrated-shell.agent-workspace-shell { grid-template-columns: 64px minmax(0, 1fr) 64px; }
+.app-shell.integrated-shell.agent-workspace-shell.left-sidebar-hidden { grid-template-columns: minmax(0, 1fr) 64px; }
+.app-shell.integrated-shell.agent-workspace-shell.right-sidebar-hidden { grid-template-columns: 64px minmax(0, 1fr); }
+.app-shell.integrated-shell.agent-workspace-shell.left-sidebar-hidden.right-sidebar-hidden { grid-template-columns: minmax(0, 1fr); }
+.integrated-right-rail.agent-right-rail { width: 64px; gap: 10px; padding: 14px 10px; background: #fbfcfb; border-left: 1px solid #e1e9e5; }
+.integrated-right-rail.agent-right-rail.expanded { width: 280px; padding: 16px; }
+.integrated-right-rail.agent-right-rail > header,
+.integrated-right-rail.agent-right-rail > section { border: 0; border-radius: 10px; background: transparent; }
+.integrated-right-rail.agent-right-rail > header { min-height: 42px; padding: 10px; background: #eaf3ef; color: #357b69; }
+.agent-right-rail .agent-rail-services { padding: 0 0 10px; gap: 6px; border-bottom: 1px solid #e1e9e5; border-radius: 0; }
+.agent-right-rail .agent-rail-services button { min-height: 40px; border-radius: 9px; }
+.agent-right-rail > .agent-rail-connect { margin-top: 0; min-height: 40px; border-radius: 9px; }
+.agent-right-rail > .agent-rail-job { width: 100%; min-height: 40px; align-items: center; padding: 11px; border: 0; border-radius: 9px; color: #49615c; background: #eef4f1; text-align: left; }
+.agent-right-rail > .agent-rail-job:hover { background: #e1efea; }
+.agent-right-rail > .agent-rail-job p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.6; }
+.agent-right-rail > .agent-rail-settings { border: 0; border-radius: 9px; background: #f0f4f2; }
+.agent-right-rail button:focus-visible { outline: 2px solid #357b69; outline-offset: 2px; }
+.agent-right-rail.expanded small { font-size: 11px; line-height: 1.6; }
+.agent-right-rail.expanded strong { font-size: 12px; }
+.agent-home { width: min(1160px, 100%); padding: clamp(24px, 4vw, 48px); }
+.agent-home-header { padding: 25px 28px; margin-bottom: 28px; align-items: center; border: 1px solid #dce8e1; border-radius: 18px; background: linear-gradient(115deg, #eef6f1, #fafcfb); }
+.agent-home-header h1 { font-size: 30px; letter-spacing: -.7px; }
+.agent-home-header p { margin: 6px 0 0; color: #70857b; font-size: 12px; line-height: 1.7; }
+.agent-home-header .agent-primary-action { flex-shrink: 0; min-height: 40px; border-radius: 9px; padding-inline: 17px; }
+.agent-home-grid { grid-template-columns: minmax(230px, .7fr) minmax(0, 1.3fr); gap: 24px; align-items: start; }
+.agent-start-panel > header,.agent-recent-panel > header { min-height: 36px; padding: 0 2px 12px; border: 0; }
+.agent-recent-actions { display: flex; align-items: center; gap: 4px; }
+.agent-tool-list { gap: 12px; }
+.agent-tool-list > button { min-height: 100px; padding: 19px 16px; gap: 12px; border: 1px solid #e0e8e3; border-radius: 13px; background: #fff; }
+.agent-tool-list > button > svg:first-child { color: #43836e; }
+.agent-tool-list strong { white-space: normal; line-height: 1.6; }
+.agent-tool-list small { font-size: 11px; white-space: normal; line-height: 1.6; }
+.agent-job-list { padding: 5px 15px; border: 1px solid #e0e8e3; border-radius: 13px; background: #fff; }
+.agent-job-list > button { min-height: 85px; padding: 15px 5px; grid-template-columns: 24px minmax(0, 1fr) 16px; border-bottom-color: #eef2ef; border-radius: 5px; }
+.agent-job-list > button:last-child { border-bottom: 0; }
+.agent-job-list strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; line-height: 1.65; font-weight: 550; }
+.agent-job-list span { gap: 7px; }
+.agent-job-list .agent-task-status { justify-self: start; padding: 2px 7px; border-radius: 5px; color: #6d8077; background: #f0f4f2; font-size: 10px; }
+.agent-job-list .status-completed { color: #357b69; background: #edf6f0; }
+.agent-job-list .status-failed { color: #a64c40; background: #fff0ed; }
+.agent-job-list .status-running,.agent-job-list .status-waiting_confirmation { color: #99712d; background: #fff7e8; }
+@media (max-width: 1050px) { .agent-home-grid { grid-template-columns: 1fr; } .agent-tool-list { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 680px) {
+  .period-record-layout time .period-date-full { display: none; }
+  .period-record-layout time .period-date-short { display: inline; }
+  .period-record-layout > aside > button { min-height: 48px; padding: 8px 3px; }
+  .period-record-layout > aside > button time { width: 100%; overflow: hidden; font-size: 10px; text-overflow: ellipsis; }
+  .period-record-layout > aside > button span { display: none; }
+  .agent-home { padding: 20px 16px; }
+  .agent-home-header { padding: 20px; align-items: stretch; }
+  .agent-tool-list { grid-template-columns: 1fr; }
+  .onboarding-provider-fields { grid-template-columns: 1fr; }
+}

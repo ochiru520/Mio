@@ -31,7 +31,7 @@ def control(category: str, key: str):
 
 
 def revise(memory_id: int, action: str, *, content: str = '', expected_content: str | None = None) -> int:
-    if action not in {'correct', 'archive', 'confirm', 'restore'}:
+    if action not in {'correct', 'archive', 'confirm', 'restore', 'sleep'}:
         raise ValueError('不支持的记忆操作。')
     text = ' '.join(content.split()).strip()
     if action == 'correct' and not 1 <= len(text) <= 800:
@@ -44,7 +44,9 @@ def revise(memory_id: int, action: str, *, content: str = '', expected_content: 
             raise ValueError('没有找到这条记忆。')
         if expected_content is not None and row['content'] != expected_content:
             raise ValueError('记忆已发生变化，请刷新后再编辑。')
-        if action in {'correct', 'archive'} and row['status'] != 'active':
+        if action in {'correct', 'sleep'} and row['status'] != 'active':
+            raise ValueError('记忆已被更新或停用，请刷新后再操作。')
+        if action == 'archive' and row['status'] not in {'active', 'sleeping'}:
             raise ValueError('记忆已被更新或停用，请刷新后再操作。')
         if action == 'confirm' and row['status'] != 'candidate':
             raise ValueError('这条记忆不是待确认候选。')
@@ -59,14 +61,15 @@ def revise(memory_id: int, action: str, *, content: str = '', expected_content: 
             new_id = conn.execute(f'INSERT INTO structured_memories ({columns}) VALUES ({",".join("?" for _ in data)})',
                                   tuple(data.values())).lastrowid
             db._upsert_structured_memory_fts(conn, new_id, row['memory_key'], row['category'], text)
-        if action != 'archive':
+        if action not in {'archive', 'sleep'}:
             conn.execute("UPDATE structured_memories SET status='superseded',superseded_by=?,updated_at=? "
                          "WHERE category=? AND memory_key=? AND status='active' AND id<>?",
                          (new_id, now, row['category'], row['memory_key'], new_id))
             conn.execute("UPDATE structured_memories SET status='active',superseded_by=0,confidence=1,"
                          "last_confirmed_at=?,updated_at=? WHERE id=?", (now, now, new_id))
         else:
-            conn.execute("UPDATE structured_memories SET status='archived',updated_at=? WHERE id=?", (now, memory_id))
+            conn.execute("UPDATE structured_memories SET status=?,updated_at=? WHERE id=?",
+                         ('sleeping' if action == 'sleep' else 'archived', now, memory_id))
         conn.execute('INSERT INTO memory_user_controls VALUES(?,?,?,?,?) ON CONFLICT(category,memory_key) '
                      'DO UPDATE SET memory_id=excluded.memory_id,action=excluded.action,updated_at=excluded.updated_at',
                      (row['category'], row['memory_key'], new_id, action, now))
@@ -99,14 +102,14 @@ def _rules() -> list[dict]:
     # Read-only prompt construction must work before database initialization.
     try:
         with db.get_conn() as conn:
-            controls = conn.execute('SELECT c.*,m.content FROM memory_user_controls c JOIN structured_memories m '
+            controls = conn.execute('SELECT c.*,m.content,m.status FROM memory_user_controls c JOIN structured_memories m '
                                     'ON m.id=c.memory_id ORDER BY c.updated_at DESC').fetchall()
             result = []
             for item in controls:
                 old = [str(r[0]) for r in conn.execute(
                     'SELECT content FROM structured_memories WHERE category=? AND memory_key=? AND id<>?',
                     (item['category'], item['memory_key'], item['memory_id']))]
-                if item['action'] == 'archive':
+                if item['status'] != 'active':
                     old.append(item['content'])
                 result.append({**dict(item), 'old': old})
             return result
@@ -121,8 +124,8 @@ def sanitize_history(text: str) -> str:
     replacements = {}
     for rule in _rules():
         for old in rule['old']:
-            if old and (rule['action'] == 'archive' or old != rule['content']):
-                replacements[old] = '[已停用的记忆，不作为事实]' if rule['action'] == 'archive' else '[已纠正的旧说法]'
+            if old and (rule['status'] != 'active' or old != rule['content']):
+                replacements[old] = '[已停用的记忆，不作为事实]' if rule['status'] != 'active' else '[已纠正的旧说法]'
     if not replacements:
         return text
     pattern = '|'.join(re.escape(value) for value in sorted(replacements, key=len, reverse=True))
@@ -130,7 +133,7 @@ def sanitize_history(text: str) -> str:
 
 
 def correction_context() -> str:
-    rules = _rules()
+    rules = [rule for rule in _rules() if rule['status'] == 'active']
     if not rules:
         return ''
     data = [{'key': r['memory_key'], 'action': r['action'], 'confirmed_at': r['updated_at'],

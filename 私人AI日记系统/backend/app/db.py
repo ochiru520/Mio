@@ -297,4 +297,5 @@ list_weekly_reviews = _reviews_service.list_weekly_reviews
 upsert_weekly_review = _reviews_service.upsert_weekly_review
 get_monthly_review = _reviews_service.get_monthly_review
 list_monthly_reviews = _reviews_service.list_monthly_reviews
+list_monthly_diary_index = _reviews_service.list_monthly_diary_index
 upsert_monthly_review = _reviews_service.upsert_monthly_review

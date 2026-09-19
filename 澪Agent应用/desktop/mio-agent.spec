@@ -16,6 +16,8 @@ if not build_identity.is_file():
     raise RuntimeError("缺少构建身份文件；请通过 构建Windows应用.ps1 执行发布构建。")
 
 datas = [
+    (str(desktop / "generated" / "update_channel.json"), "desktop"),
+    (str(desktop / "generated" / "updater" / "MioUpdater.exe"), "."),
     (str(backend / "app" / "templates"), "app/templates"),
     (str(backend / "app" / "static"), "app/static"),
     (str(frontend / "dist"), "agent_frontend"),

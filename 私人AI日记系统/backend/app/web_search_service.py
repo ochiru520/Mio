@@ -18,6 +18,18 @@ URL_RE = re.compile(r"https?://[^\s<>()\"'，。！？；、]+", re.I)
 WEB_TRIGGER_RE = re.compile(
     r"(查一下|查查|帮我查|搜一下|搜索|上网|联网|网上|网页|浏览|看看最新)"
 )
+# Only standalone capability questions are local status checks. A mixed request
+# such as "你能联网吗？帮我查一下 Python" must still reach the search pipeline.
+WEB_CAPABILITY_RE = re.compile(
+    r"(?:(?:请问|我想问一下|我想问问)[，,\s]*)?"
+    r"(?:(?:你|Mio|澪)(?:现在|目前|当前)?(?:的)?)?"
+    r"(?:(?:现在|目前|当前)?(?:能不能|可不可以|是否可以|是否能|能否|能|可以|支持)"
+    r"(?:访问互联网|联网搜索|联网查询|联网|上网|搜索网页)"
+    r"|(?:联网搜索|联网功能|联网|上网)(?:功能)?(?:现在|目前|当前)?(?:是否)?"
+    r"(?:已开启|已打开|开启了|打开了|开启|打开|可用|怎么开启|如何开启|怎么打开|如何打开))"
+    r"(?:吗|么|呢)?[？?。.!！\s]*", re.IGNORECASE,
+)
+NO_WEB_LOOKUP_RE = re.compile(r"(?:不要|不用|不需要|无需|禁止|别)(?:再|去)?\s*(?:联网|上网|搜索|搜一下|查网页)")
 TIME_SENSITIVE_RE = re.compile(
     r"(最新|实时|新闻|热搜|天气|汇率|股价|价格|票价|政策|法规|版本|更新|官网|下载|赛程|比分|上映|发布|"
     r"(现在|今天|最近|目前|当前|今年).{0,20}(是谁|多少|怎么样|有哪些|什么时候|情况|消息|新闻|天气|价格|政策|版本|开了吗|还能用吗))"
@@ -72,11 +84,31 @@ def extract_urls(message: str) -> list[str]:
     return urls
 
 
-def should_use_web_lookup(message: str) -> bool:
-    if not settings.web_search_enabled:
-        return False
+def is_web_capability_question(message: str) -> bool:
+    return WEB_CAPABILITY_RE.fullmatch(re.sub(r"\s+", "", message.strip())) is not None
+
+
+def web_capability_reply(message: str) -> str:
+    """Report configuration truth, not a model guess or an unperformed probe."""
+    if not is_web_capability_question(message):
+        return ""
+    if settings.web_search_enabled:
+        return (
+            "Mio 支持联网搜索，当前联网开关已开启。"
+            "开关开启不等于每次搜索都能成功；你可以直接告诉我需要查什么。"
+            "检查实际连接可到“设置 → 对话与记忆 → 联网与附件”点击“测试联网”。"
+        )
+    return (
+        "Mio 支持联网搜索，但当前联网搜索已关闭。"
+        "请到“设置 → 对话与记忆 → 联网与附件”开启“不知道时允许联网查询”并保存；"
+        "也请确认隐私总控没有暂停敏感能力，保存后可点击“测试联网”验证。"
+    )
+
+
+def needs_web_lookup(message: str) -> bool:
+    """Single semantic predicate shared by routing and execution, independent of permission."""
     text = message.strip()
-    if not text:
+    if not text or is_web_capability_question(text) or NO_WEB_LOOKUP_RE.search(text):
         return False
     if extract_urls(text):
         return True
@@ -85,6 +117,10 @@ def should_use_web_lookup(message: str) -> bool:
     if PERSONAL_STATE_RE.search(text) is not None and WEATHER_RE.search(text) is None:
         return False
     return TIME_SENSITIVE_RE.search(text) is not None
+
+
+def should_use_web_lookup(message: str) -> bool:
+    return bool(settings.web_search_enabled and needs_web_lookup(message))
 
 
 def _mentions_weather(text: str) -> bool:
@@ -110,7 +146,7 @@ def _row_content(row: object) -> str:
 
 
 def build_contextual_lookup_message(message: str, recent_messages: list[object]) -> str:
-    if should_use_web_lookup(message):
+    if needs_web_lookup(message) or is_web_capability_question(message) or NO_WEB_LOOKUP_RE.search(message):
         return message
     if not _looks_like_location_followup(message):
         return message
@@ -835,7 +871,8 @@ def build_web_context_message(lookup: WebLookup) -> str:
     if lookup.error:
         return (
             f"本轮问题需要外部或实时信息，但查询失败：{lookup.error}\n"
-            "如果回答依赖最新信息，请直接说明现在没查到，不要编造。"
+            "如果回答依赖最新信息，请直接说明这次没有查到，不要编造。"
+            "区分权限关闭、超时和搜索源失败，不要将单次失败说成永久没有联网能力。"
         )
 
     if not lookup.sources:

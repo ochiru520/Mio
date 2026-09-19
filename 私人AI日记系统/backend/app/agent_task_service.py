@@ -227,6 +227,9 @@ def resume(task_id: str) -> dict[str, Any]:
         raise ValueError("已完成或取消的任务不能继续，请创建新任务。")
     if task_id in _active and not _active[task_id].done():
         return task
+    from .creation_service import get_job
+    if any((get_job(job_id) or {}).get('status') == 'unknown' for job_id in task['waiting_jobs']):
+        raise ValueError('关联生成结果仍未知，请先核对回执；不要通过继续任务重复生成。')
     with db.get_conn() as conn:
         conn.execute("UPDATE agent_tasks SET budget_yuan=?,status='ready',revision=revision+1,updated_at=? WHERE id=?",
                      (task["spent_yuan"] + limits()["cost_yuan"], db.now_iso(), task_id))
@@ -276,6 +279,11 @@ def ready_to_continue(task: dict[str, Any]) -> bool:
         return not any(item["status"] in {"needs_confirmation", "running"} for item in items)
     from .creation_service import get_job, TERMINAL_STATUSES
     jobs = [get_job(job_id) for job_id in task["waiting_jobs"]]
+    if any(job and job["status"] == "unknown" for job in jobs):
+        update(task["id"], status="waiting_user", snapshot={
+            "blocker": "关联生成结果待核对，已停止自动推进。",
+            "next_step": "在任务页核对供应商回执；确认后再继续。"})
+        return False
     return bool(jobs) and all(job is None or job["status"] in TERMINAL_STATUSES for job in jobs)
 
 

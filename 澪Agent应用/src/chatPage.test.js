@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const root = path.dirname(fileURLToPath(import.meta.url))
 const chatPageSource = fs.readFileSync(path.join(root, 'components', 'ChatPage.vue'), 'utf8')
 const appSource = fs.readFileSync(path.join(root, 'App.vue'), 'utf8')
+const conversationSource = fs.readFileSync(path.join(root, 'composables', 'useConversations.js'), 'utf8')
 const chatCssSource = fs.readFileSync(path.join(root, 'styles', 'chat.css'), 'utf8')
 const agentCssSource = fs.readFileSync(path.join(root, 'styles', 'agent-workspace.css'), 'utf8')
 const integratedCssSource = fs.readFileSync(path.join(root, 'styles', 'integrated.css'), 'utf8')
@@ -30,8 +31,8 @@ test('ordinary chat hides Agent execution receipts and cannot enable creation to
   assert.doesNotMatch(chatPageSource, /message-tool-receipts/)
   assert.doesNotMatch(chatPageSource, /creation-tools-toggle/)
   assert.match(chatPageSource, /context\.isAgentWorkspace && turn\.role === 'assistant'/)
-  assert.match(appSource, /creation_tools_enabled:\s*isAgentWorkspace/)
-  assert.match(appSource, /mode:\s*isAgentWorkspace \? 'agent' : 'companion'/)
+  assert.match(conversationSource, /creation_tools_enabled:\s*deps\.isAgentWorkspace/)
+  assert.match(conversationSource, /mode:\s*deps\.isAgentWorkspace \? 'agent' : 'companion'/)
   assert.doesNotMatch(appSource, /isAgentWorkspace \|\| creationToolsEnabled/)
 })
 

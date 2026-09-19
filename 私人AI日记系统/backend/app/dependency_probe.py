@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 _results: dict[tuple, dict] = {}
@@ -49,5 +50,7 @@ def verify(kind: str, python: Path, model: Path) -> dict:
     except (OSError, subprocess.TimeoutExpired) as exc:
         outcome = {'ok': False, 'detail': '本地验证失败：' + str(exc)[:800]}
     with _lock:
+        outcome['checked_at'] = datetime.now(timezone.utc).isoformat()
+        outcome['verification_level'] = 'model_load'
         _results[key] = outcome
     return outcome

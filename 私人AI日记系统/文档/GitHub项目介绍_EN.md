@@ -1,16 +1,16 @@
 # Mio
 
 <p align="center">
-  <img src="../../澪Agent应用/desktop/mio-icon.png" width="180" alt="Mio project icon" />
+  <img src="澪Agent应用/desktop/mio-icon.png" width="180" alt="Mio project icon" />
 </p>
 
 <p align="center">
-  <a href="GitHub项目介绍.md">中文</a> | English
+  <a href="README.md">中文</a> | English
 </p>
 
 > A local-first personal AI Agent for Windows that connects conversations, long-term memory, diaries, proactive contact, QQ, voice, Live2D, and screen awareness through one shared character and data loop.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-2f7475.svg)](../LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-2f7475.svg)](../../LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-4c8bf5.svg)](#requirements-and-official-downloads)
 [![Status](https://img.shields.io/badge/status-preview-d6a84b.svg)](#project-status)
 
@@ -161,11 +161,11 @@ The public repository does not contain the author's private persona, conversatio
 ## Privacy, Licenses, and Credits
 
 - [Privacy notes](隐私说明.md)
-- [Security policy](../SECURITY.md)
+- [Security policy](../../SECURITY.md)
 - [Asset and third-party license boundaries](资产与第三方许可.md)
 - [Third-party projects and acknowledgements](../../THIRD_PARTY_NOTICES.md)
 
-Original source code and documentation are released under the [MIT License](../LICENSE). Live2D Cubism, sample models, third-party libraries, character images, voice assets, training data, and user-imported assets keep their own licenses and redistribution terms.
+Original source code and documentation are released under the [MIT License](../../LICENSE). Live2D Cubism, sample models, third-party libraries, character images, voice assets, training data, and user-imported assets keep their own licenses and redistribution terms.
 
 Do not upload real API keys, QQ tokens, chat databases, diaries, private screenshots, voice assets, or raw logs to Issues.
 

@@ -1,5 +1,6 @@
 <script>
 import { inject } from 'vue'
+import UpdatePanel from './UpdatePanel.vue'
 import CharacterCardPanel from './CharacterCardPanel.vue'
 import DependencyCenter from './DependencyCenter.vue'
 import PetAppearancePanel from './PetAppearancePanel.vue'
@@ -38,6 +39,7 @@ import {
 export default {
   name: 'SettingsPage',
   components: {
+    UpdatePanel,
     Activity, Archive, Bot, CalendarDays, Check, Clock3, Download, Feather, FolderOpen,
     Heart, ImagePlus, KeyRound, LogIn, MessageSquareText, Monitor, CharacterCardPanel, DependencyCenter, PetAppearancePanel, PrivacyOperationsPanel, ModelStrategyPanel, Play, Plus,
     Power, RefreshCw, RotateCw, ShieldCheck, Sparkles, Trash2, UserRound, Volume2, VoiceSettingsPanel, Wifi,
@@ -95,9 +97,10 @@ export default {
           <label class="settings-item"><span><strong>允许主动联系的时段</strong><small>时段外不主动打扰</small></span><span class="settings-inline-fields"><input v-model.number="runtimeSettingsDraft.qq_proactive_day_start_hour" type="number" min="0" max="23" /><b>时至</b><input v-model.number="runtimeSettingsDraft.qq_proactive_day_end_hour" type="number" min="0" max="23" /><b>时</b></span></label>
           <label class="settings-item"><span><strong>后台检查频率</strong><small>只检查是否达到联系条件，不代表每次都会调用模型</small></span><span class="settings-number"><input v-model.number="runtimeSettingsDraft.qq_proactive_check_seconds" type="number" min="30" max="3600" /><b>秒</b></span></label>
           <label class="settings-item"><span><strong>后台消息通知</strong><small>主窗口隐藏时，收到 Mio 的新消息会显示 Windows 通知</small></span><span class="switch-control"><input v-model="desktopPreferencesDraft.background_notifications" type="checkbox" :disabled="!desktopPreferencesReady" /><i /></span></label>
-          <div class="settings-item"><span><strong>自动更新</strong><small>当前正式版不会静默下载或安装更新</small></span><b class="settings-readonly">未启用</b></div>
+
         </div>
       </div>
+      <UpdatePanel />
       <div class="settings-savebar"><span>启动行为和主动联系修改后保存生效</span><div><button type="button" :disabled="!isSettingsSectionDirty('general')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('general') || runtimeSettingsBusy || desktopPreferencesBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></div></div>
     </section>
 

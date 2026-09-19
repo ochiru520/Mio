@@ -1,7 +1,7 @@
 {
   "name": "mio-agent-app",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
@@ -25,4 +25,3 @@
     "nanoid": "3.3.18"
   }
 }
-

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 
-const appSource = fs.readFileSync(new URL('./App.vue', import.meta.url), 'utf8')
+const appSource = fs.readFileSync(new URL('./composables/useQq.js', import.meta.url), 'utf8')
 const settingsSource = fs.readFileSync(new URL('./components/SettingsPage.vue', import.meta.url), 'utf8')
 
 test('QQ account mismatch can enter forced QR mode instead of stopping at diagnosis', () => {

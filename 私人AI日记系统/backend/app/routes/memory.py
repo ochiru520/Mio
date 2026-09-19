@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from .. import db
+from .. import db, memory_revision_service as revisions
 from ..config import settings
 from ..context_service import SUMMARY_TYPE, _strip_summary_marker, _summary_last_message_id, _summary_with_marker
 from ..documents import read_text_with_fallback
@@ -22,6 +22,11 @@ router = APIRouter()
 
 class MemoryTextRequest(BaseModel):
     content: str = Field(min_length=1, max_length=12000)
+
+
+class MemoryCorrectionRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=800)
+    expected_content: str = Field(min_length=1, max_length=800)
 
 
 class PendingThreadRequest(BaseModel):
@@ -189,19 +194,39 @@ async def api_create_memory_item(payload: StructuredMemoryRequest):
     return {"saved": True, "outcome": saved["outcome"], "memory": public_memory_item(row)}
 
 
+@router.get("/api/memory/items/{memory_id}/evidence")
+async def api_memory_evidence(memory_id: int):
+    try:
+        return revisions.evidence(memory_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.put("/api/memory/items/{memory_id}")
+async def api_correct_memory(memory_id: int, payload: MemoryCorrectionRequest):
+    try:
+        new_id = revisions.revise(memory_id, 'correct', content=payload.content, expected_content=payload.expected_content)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"saved": True, "memory": public_memory_item(db.get_structured_memory(new_id))}
+
+
 @router.delete("/api/memory/items/{memory_id}")
 async def api_archive_memory_item(memory_id: int):
-    if not db.archive_structured_memory(memory_id):
-        raise HTTPException(status_code=404, detail="没有找到这条有效记忆。")
+    try:
+        revisions.revise(memory_id, 'archive')
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
     return {"archived": True, "id": memory_id}
 
 
 @router.post("/api/memory/items/{memory_id}/confirm")
 async def api_confirm_memory_candidate(memory_id: int):
-    if not db.confirm_structured_memory_candidate(memory_id):
-        raise HTTPException(status_code=404, detail="没有找到这条待确认记忆。")
-    row = db.get_structured_memory(memory_id)
-    return {"confirmed": True, "memory": public_memory_item(row)}
+    try:
+        revisions.revise(memory_id, 'confirm')
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"confirmed": True, "memory": public_memory_item(db.get_structured_memory(memory_id))}
 
 
 @router.post("/api/memory/items/{memory_id}/reject")
@@ -233,8 +258,10 @@ async def api_wake_memory_item(memory_id: int):
 
 @router.post("/api/memory/items/{memory_id}/restore")
 async def api_restore_memory_item(memory_id: int):
-    if not db.restore_structured_memory(memory_id):
-        raise HTTPException(status_code=404, detail="没有找到可恢复的旧记忆版本。")
+    try:
+        revisions.revise(memory_id, 'restore')
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
     return {"restored": True, "memory": public_memory_item(db.get_structured_memory(memory_id))}
 
 

@@ -166,6 +166,16 @@ def save_memory_item(
         time_confidence=time_confidence,
         temporal_status=temporal_status,
     )
+    from .memory_revision_service import control
+    confirmed = control(normalized_category, key)
+    if confirmed is not None:
+        current = db.get_structured_memory(int(confirmed['memory_id']))
+        if confirmed['action'] == 'archive' or current['content'] != normalized_content:
+            return save_memory_candidate(
+                layer=normalized_layer, category=normalized_category, memory_key=key,
+                content=normalized_content, source_conversation_id=source_conversation_id,
+                source_message_id=source_message_id, confidence=normalized_confidence,
+                source_window=source_window, **temporal)
     memory_id, outcome = db.save_structured_memory(
         normalized_layer,
         normalized_category,

@@ -4131,7 +4131,8 @@ class CompanionConfigTests(unittest.TestCase):
         self.assertEqual(model_call.call_args.kwargs["reasoning_level"], "low")
 
     def test_full_screen_cloud_route_uses_cloud_vision(self) -> None:
-        companion_service.save_config({"screen_vision_route": "cloud"})
+        companion_service.save_config({"screen_vision_route": "cloud", "voice_enabled": True,
+                                       "screen_direct_voice_enabled": True, "speak_screen_observations": True})
         vision_completion = SimpleNamespace(
             content=(
                 '{"event":"error","summary":"应用显示连接失败",'
@@ -4151,6 +4152,10 @@ class CompanionConfigTests(unittest.TestCase):
         with (
             patch("app.companion_observation_service.ImageGrab.grab", return_value=Image.new("RGB", (640, 360), "red")),
             patch("app.screen_observation_service._vision_profiles", return_value=[SimpleNamespace(id="cloud-vision-test")]),
+            patch("app.screen_observation_service.pet_event_service.has_clients", return_value=False),
+            # This is a vision routing test: do not leak a real playback thread
+            # into the following test and consume its mocked synthesis results.
+            patch("app.screen_observation_service.companion_service.speak_text", return_value=True) as speak,
             patch("app.screen_observation_service.select_auto_route", return_value=route),
             patch("app.screen_observation_service.local_vision_service.analyze_image") as local_vision_call,
             patch(
@@ -4173,6 +4178,9 @@ class CompanionConfigTests(unittest.TestCase):
         )
         self.assertEqual(screen_observation_service.status()["vision_route"], "cloud")
         self.assertIn("上传当前屏幕", screen_observation_service.status()["vision_route_label"])
+        speak.assert_called_once()
+        self.assertEqual(speak.call_args.kwargs["source"], "screen")
+        self.assertIn("断开了", speak.call_args.args[0])
 
     def test_cloud_vision_timeout_skips_stale_frame_and_releases_lock(self) -> None:
         companion_service.save_config({

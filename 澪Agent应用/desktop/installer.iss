@@ -1,5 +1,5 @@
-#define MyAppName "Mio"
-#define MyAppVersion "0.2.1"
+﻿#define MyAppName "Mio"
+#define MyAppVersion "0.3.0"
 #define MyAppPublisher "Mio Project"
 #define MyAppExeName "Mio.exe"
 
@@ -10,13 +10,19 @@ AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Mio
 UsePreviousAppDir=no
+UsePreviousTasks=yes
 DisableDirPage=no
 DefaultGroupName={#MyAppName}
 OutputDir=..\release
-OutputBaseFilename=Mio-0.2.1-Windows-x64-Setup
+OutputBaseFilename=Mio-0.3.0-Windows-x64-Setup
 SetupIconFile=mio.ico
+#ifdef MioFastPackage
+Compression=zip
+SolidCompression=no
+#else
 Compression=lzma2
 SolidCompression=yes
+#endif
 WizardStyle=modern
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
@@ -43,12 +49,26 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MioAgent"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MioAgent"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup; Check: not IsUpdateInstall
 
 [Code]
 var
   DataModePage: TInputOptionWizardPage;
   DataDirPage: TInputDirWizardPage;
+
+function IsUpdateInstall: Boolean;
+begin
+  Result := ExpandConstant('{param:UPDATE|0}') = '1';
+end;
+
+function SaveUTF8Text(const FileName, Value: String): Boolean;
+var
+  Lines: TArrayOfString;
+begin
+  SetArrayLength(Lines, 1);
+  Lines[0] := Value;
+  Result := SaveStringsToUTF8File(FileName, Lines, False);
+end;
 
 function InitialDataDir: String;
 var
@@ -80,7 +100,10 @@ begin
   );
   DataModePage.Add('创建全新独立数据（进入首次启动流程）');
   DataModePage.Add('沿用原有数据（保留当前聊天、日记和设置）');
-  DataModePage.SelectedValueIndex := 0;
+  if IsUpdateInstall then
+    DataModePage.SelectedValueIndex := 1
+  else
+    DataModePage.SelectedValueIndex := 0;
 
   DataDirPage := CreateInputDirPage(
     DataModePage.ID,
@@ -123,6 +146,39 @@ begin
   end;
 end;
 
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := IsUpdateInstall and ((PageID = DataModePage.ID) or (PageID = DataDirPage.ID));
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  RequestedApp, RequestedData: String;
+begin
+  Result := '';
+  if not IsUpdateInstall then Exit;
+  RequestedApp := Trim(ExpandConstant('{param:DIR|}'));
+  RequestedData := Trim(ExpandConstant('{param:DataDir|}'));
+  if (RequestedApp = '') or (RequestedData = '') or
+     (not DirExists(RequestedApp)) or (not DirExists(RequestedData)) then
+  begin
+    Result := '升级模式必须指定已存在的程序目录和数据目录。';
+    Exit;
+  end;
+  if (CompareText(ExpandFileName(RequestedApp), ExpandFileName(WizardDirValue)) <> 0) or
+     (CompareText(RemoveBackslashUnlessRoot(RequestedData), RemoveBackslashUnlessRoot(RequestedApp)) = 0) then
+  begin
+    Result := '升级目标与原安装不一致，已阻止安装。';
+    Exit;
+  end;
+  if not FileExists(AddBackslash(RequestedData) + 'updates\install.lock') then
+  begin
+    Result := '缺少 Mio 升级事务，请从应用内发起更新。';
+    Exit;
+  end;
+  DataDirPage.Values[0] := RequestedData;
+end;
+
 procedure RegisterPreviousData(PreviousDataKey: Integer);
 begin
   SetPreviousData(PreviousDataKey, 'DataDir', DataDirPage.Values[0]);
@@ -132,19 +188,16 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
-    if not SaveStringToFile(
+    if not SaveUTF8Text(
       ExpandConstant('{app}\数据目录.txt'),
-      DataDirPage.Values[0],
-      False
+      DataDirPage.Values[0]
     ) then
       RaiseException('无法保存数据目录配置。');
     ForceDirectories(DataDirPage.Values[0]);
-    if not SaveStringToFile(
+    if not SaveUTF8Text(
       AddBackslash(DataDirPage.Values[0]) + '安装来源目录.txt',
-      ExpandConstant('{src}'),
-      False
+      ExpandConstant('{src}')
     ) then
       RaiseException('无法保存安装来源目录。');
   end;
 end;
-

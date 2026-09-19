@@ -7,6 +7,7 @@ from typing import Mapping, Sequence
 from .model_latency_service import get_latency_stats
 from .model_registry import ModelProfile, list_model_profiles, model_reasoning_config
 from .route_observation_service import model_performance_snapshot
+from .web_search_service import build_contextual_lookup_message, needs_web_lookup
 
 
 CONTINUATION_RE = re.compile(r"^(继续|然后呢|接着|按这个做|详细说说|再说说|就这样|可以|嗯|好)[吧呢啊。！!？?\s]*$")
@@ -28,9 +29,6 @@ TOOL_TASK_RE = re.compile(
     r"|(?:读取|查看|检查|搜索|检索).{0,12}(?:状态|记忆|日记|能力|服务|页面|路由)"
     r"|(?:语音|音色|电话|麦克风|桌宠|QQ|NapCat|屏幕|系统声音|服务).{0,16}"
     r"(?:故障|报错|错误|异常|没声音|不能用|用不了|不工作|出问题|有问题)"
-)
-WEB_TASK_RE = re.compile(
-    r"(?:联网|上网|搜索|搜一下|查一下|查查|官网|网页|新闻|热搜|天气|汇率|股价|票价|实时|最新)"
 )
 CREATION_TASK_RE = re.compile(
     r"(?:生成|画|绘制|制作|做|让).{0,24}(?:图片|图像|立绘|插画|头像|视频|动画)|"
@@ -157,7 +155,8 @@ def build_task_profile(
         text_attachment_chars=text_attachment_chars,
     )
     lower = topic.lower()
-    requires_tools = bool(TOOL_TASK_RE.search(topic) or WEB_TASK_RE.search(topic) or CREATION_TASK_RE.search(topic))
+    lookup_topic = build_contextual_lookup_message(topic, list(history_rows))
+    requires_tools = bool(TOOL_TASK_RE.search(topic) or needs_web_lookup(lookup_topic) or CREATION_TASK_RE.search(topic))
     if image_count:
         task_type = "vision"
     elif text_attachment_chars:

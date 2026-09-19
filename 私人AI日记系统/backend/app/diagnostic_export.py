@@ -1,0 +1,25 @@
+"""Allowlisted diagnostics: no user content, paths, provider addresses or errors."""
+from __future__ import annotations
+from . import db, dependency_installer
+from . import local_vision_service
+
+
+def snapshot() -> dict:
+    allowed = {'ready', 'configured', 'unconfigured', 'missing', 'installed', 'unverified', 'degraded'}
+    dependencies = []
+    for item in dependency_installer.list_dependencies():
+        verification = item.get('verification') or {}
+        dependencies.append({'id': str(item['id']),
+                             'status': item.get('status') if item.get('status') in allowed else 'unknown',
+                             'installing': bool(item.get('installing')),
+                             'verified': bool(item.get('verified') or verification.get('ok')),
+                             'has_error': bool(item.get('last_error'))})
+    with db.get_conn() as conn:
+        jobs = {r[0]: r[1] for r in conn.execute('SELECT status,COUNT(*) FROM creation_jobs GROUP BY status')}
+    vision = local_vision_service.passive_status()
+    return {'schema_version': 1, 'checked_at': db.now_iso(), 'dependencies': dependencies,
+            'local_vision': {'inference_ready': bool(vision.get('inference_ready')),
+                             'inference_state': vision.get('inference_state', 'unverified'),
+                             'probe_stale': bool(vision.get('probe_stale', True))},
+            'creation_job_counts': {key: jobs.get(key, 0) for key in ('created', 'running', 'unknown', 'failed', 'completed', 'cancelled')},
+            'scope': '状态快照；不主动推理，不包含聊天、日记、路径、密钥、供应商地址或原始错误。'}

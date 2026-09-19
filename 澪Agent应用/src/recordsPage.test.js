@@ -4,6 +4,7 @@ import test from 'node:test'
 
 const records = fs.readFileSync(new URL('./components/RecordsPage.vue', import.meta.url), 'utf8')
 const app = fs.readFileSync(new URL('./App.vue', import.meta.url), 'utf8')
+const diaries = fs.readFileSync(new URL('./composables/useDiaries.js', import.meta.url), 'utf8')
 const api = fs.readFileSync(new URL('./services/diaryApi.js', import.meta.url), 'utf8')
 const css = fs.readFileSync(new URL('./styles/integrated.css', import.meta.url), 'utf8')
 
@@ -17,7 +18,7 @@ test('weekly and monthly secondary rails share the diary collapse control', () =
 
 test('monthly records use a persisted monthly summary endpoint', () => {
   assert.match(api, /listMonthlyReviews\s*=\s*\(\)\s*=>\s*apiRequest\('\/api\/monthly'\)/)
-  assert.match(app, /request\(`\/api\/monthly\/\$\{month\}\/generate`/)
+  assert.match(diaries, /request\(`\/api\/monthly\/\$\{month\}\/generate`/)
   assert.match(records, /selectedMonthlyReview\?\.markdown_content/)
   assert.match(records, /renderedMarkdown\(context\.selectedMonthlyReview\.markdown_content\)/)
   assert.match(records, /生成月记/)
@@ -26,6 +27,6 @@ test('monthly records use a persisted monthly summary endpoint', () => {
 test('diary search is wired to records context and ignores stale requests', () => {
   assert.match(records, /v-model="context\.diarySearch"[\s\S]*@input="context\.scheduleDiarySearch"/)
   assert.match(app, /provide\('mio-records-page',[\s\S]*diarySearch,[\s\S]*scheduleDiarySearch,/)
-  assert.match(app, /const requestId = \+\+diarySearchRequestId/)
-  assert.match(app, /requestId !== diarySearchRequestId \|\| query !== diarySearch\.value\.trim\(\)/)
+  assert.match(diaries, /const requestId = \+\+deps\.diarySearchRequestId/)
+  assert.match(diaries, /requestId !== deps\.diarySearchRequestId \|\| query !== deps\.diarySearch\.value\.trim\(\)/)
 })

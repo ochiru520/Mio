@@ -54,6 +54,7 @@ jobs:
           cache-dependency-path: |
             私人AI日记系统/backend/requirements.txt
             澪Agent应用/desktop/requirements-desktop.txt
+            澪Agent应用/desktop/requirements-updater.txt
       - uses: actions/setup-node@v4
         with:
           node-version: "22.12.0"
@@ -63,6 +64,8 @@ jobs:
             澪Agent应用/live2d-desktop/package-lock.json
       - name: 安装后端构建依赖
         run: python -m pip install -r "私人AI日记系统/backend/requirements.txt"
+      - name: 安装更新签名与下载依赖
+        run: python -m pip install -r "澪Agent应用/desktop/requirements-updater.txt"
       - name: 安装桌面依赖
         working-directory: 澪Agent应用
         run: npm ci

@@ -1087,6 +1087,12 @@ async def _run_comfy_job_inner(
                     raise RuntimeError("上次提交结果未知，未找到 ComfyUI 回执。为避免重复生成已停止，请检查 ComfyUI 历史后明确重试。")
             if prompt_id:
                 history = await _monitor_comfy_job(client, job_id, client_id, prompt_id)
+                current = _get_job_row(job_id) or {}
+                from .agent_task_service import automatic_work_paused
+                if (current.get('status') in {'cancel_requested', 'cancelled', 'unknown'}
+                        or automatic_work_paused() or db.conversation_deleted(str(row.get('conversation_id') or ''))):
+                    _update_job(job_id, status='cancelled', stage='late_result_discarded', finished_at=db.now_iso())
+                    return
                 outputs = _validated_comfy_outputs(root, job_id, workflow.media_type, history)
                 _update_job(job_id, status="completed", stage="completed", progress=1.0, outputs_json=_json(outputs), error="", finished_at=db.now_iso())
                 _notify_chat_job_completion(job_id, outputs)
@@ -1120,6 +1126,12 @@ async def _run_comfy_job_inner(
                 raise RuntimeError("ComfyUI 没有返回 prompt_id。")
             _update_job(job_id, status="queued", stage="queued", progress=0.08, prompt_id=prompt_id)
             history = await _monitor_comfy_job(client, job_id, client_id, prompt_id)
+            current = _get_job_row(job_id) or {}
+            from .agent_task_service import automatic_work_paused
+            if (current.get('status') in {'cancel_requested', 'cancelled', 'unknown'}
+                    or automatic_work_paused() or db.conversation_deleted(str(row.get('conversation_id') or ''))):
+                _update_job(job_id, status='cancelled', stage='late_result_discarded', finished_at=db.now_iso())
+                return
             outputs = _validated_comfy_outputs(root, job_id, workflow.media_type, history)
             _update_job(
                 job_id, status="completed", stage="completed", progress=1.0,
@@ -1419,6 +1431,12 @@ async def _run_remote_job(job_id: str, row: Mapping[str, Any]) -> None:
         _request_remote_image(job_id, connection, candidates, reference_data_urls, spec, errors),
         timeout=settings.creation_image_timeout_seconds,
     )
+    current = _get_job_row(job_id) or {}
+    from .agent_task_service import automatic_work_paused
+    if (current.get("status") in {"cancel_requested", "cancelled", "unknown"}
+            or automatic_work_paused() or db.conversation_deleted(str(row.get("conversation_id") or ""))):
+        _mark_remote_unknown(job_id, "本地停止后收到迟到响应，未发布输出或恢复任务；请核对供应商记录。")
+        return
     if len(content) > settings.creation_remote_max_bytes:
         raise RuntimeError("远程图片超过允许大小。")
     output_root = (settings.creation_output_dir / job_id).resolve()
@@ -1440,6 +1458,32 @@ async def _run_remote_job(job_id: str, row: Mapping[str, Any]) -> None:
     archive_outputs(job_id, result, output_root)
     _update_job(job_id, status="completed", stage="completed", progress=1.0, outputs_json=_json(result), error="", finished_at=db.now_iso())
     _notify_chat_job_completion(job_id, result)
+
+
+def reconcile_job(job_id: str, *, outcome: str, receipt: str, note: str) -> dict[str, Any]:
+    """Record an explicit human receipt; never infer remote success from a retry."""
+    if outcome not in {'not_completed', 'completed_external', 'still_unknown'}:
+        raise ValueError('核对结果不受支持。')
+    if not receipt.strip() or not note.strip():
+        raise ValueError('请填写供应商回执编号和核对说明。')
+    with db.get_conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT * FROM creation_jobs WHERE id=?', (job_id,)).fetchone()
+        if row is None or row['status'] != 'unknown':
+            raise ValueError('只有结果待核对的任务可登记回执，请刷新状态。')
+        spec = _loads(row['spec_json'], {})
+        records = spec.get('reconciliations', [])
+        record = {'outcome': outcome, 'receipt': receipt.strip()[:200], 'note': note.strip()[:1000],
+                  'checked_at': db.now_iso(), 'source': 'user_report'}
+        spec['reconciliations'] = [*records, record][-30:]
+        # External completion is not a verified local artifact. Keep it distinct.
+        status = 'failed' if outcome == 'not_completed' else 'unknown'
+        message = {'not_completed': '用户核对供应商记录：未完成。重新提交仍需确认。',
+                   'completed_external': '用户核对供应商记录：远端已完成，结果尚未导入校验。不要重复生成。',
+                   'still_unknown': '已记录核对过程，远程结果仍未知，禁止自动重发。'}[outcome]
+        conn.execute('UPDATE creation_jobs SET status=?,stage=?,spec_json=?,error=?,updated_at=? WHERE id=?',
+                     (status, 'reconciled_' + outcome, _json(spec), message, db.now_iso(), job_id))
+    return get_job(job_id) or {}
 
 
 async def _request_remote_image(

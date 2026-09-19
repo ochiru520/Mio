@@ -133,6 +133,7 @@ async def _stop_background_tasks(app: FastAPI, *, exclude: set[str] | None = Non
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
+    app.state.runtime_event_loop = asyncio.get_running_loop()
     maintenance_service.reset_runtime_state()
     companion_service.reset_frontend_ready()
     initialize_runtime()

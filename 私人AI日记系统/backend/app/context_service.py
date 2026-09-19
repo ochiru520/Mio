@@ -594,7 +594,8 @@ def build_fast_chat_context_snapshot(
     if recent_diaries:
         context_parts.append(recent_diaries)
     if summary_text:
-        context_parts.append("较早聊天摘要：\n" + summary_text)
+        from .memory_revision_service import sanitize_history
+        context_parts.append("较早聊天摘要：\n" + sanitize_history(summary_text))
     if memory_context:
         context_parts.append(memory_context)
     system_context = _trim_text_to_token_budget(

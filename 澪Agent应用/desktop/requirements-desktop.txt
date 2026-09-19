@@ -5,3 +5,5 @@ qrcode==8.2
 dxcam==0.0.5
 mss==10.2.0
 pystray==0.19.5
+
+-r requirements-updater.txt

@@ -170,6 +170,23 @@ async def cancel_creation_job(job_id: str):
         raise _bad_request(exc) from exc
 
 
+from pydantic import BaseModel, Field
+
+
+class ReconciliationRequest(BaseModel):
+    outcome: str = Field(pattern='^(not_completed|completed_external|still_unknown)$')
+    receipt: str = Field(min_length=1, max_length=200)
+    note: str = Field(min_length=1, max_length=1000)
+
+
+@router.post('/jobs/{job_id}/reconcile')
+async def reconcile_creation_job(job_id: str, payload: ReconciliationRequest):
+    try:
+        return {'job': creation_service.reconcile_job(job_id, **payload.model_dump())}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+
 @router.get("/jobs/{job_id}/outputs/{index}")
 async def creation_output(job_id: str, index: int):
     try:

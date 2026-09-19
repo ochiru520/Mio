@@ -25,6 +25,11 @@ try:
 except ModuleNotFoundError:
     from runtime_root_migration import choose_runtime_root
 
+try:
+    from desktop.updates.integration import UpdateBridgeMixin, create_service as create_update_service, run_update_mode, startup_recovery
+except ModuleNotFoundError:
+    from updates.integration import UpdateBridgeMixin, create_service as create_update_service, run_update_mode, startup_recovery
+
 
 APP_NAME = "Mio"
 HOST = "127.0.0.1"
@@ -1624,7 +1629,7 @@ class WorkspaceWindowController:
                 logging.exception("Failed to close a Mio workspace window")
 
 
-class DesktopBridge:
+class DesktopBridge(UpdateBridgeMixin):
     def __init__(
         self,
         workspace: str = "main",
@@ -2294,6 +2299,11 @@ def _run_window(
         bridge.close_child_windows()
         workspace_controller.destroy_all()
 
+    update_service = create_update_service(STATE_DIR, runtime_root, exit_app)
+    bridge._update_service = update_service
+    agent_bridge._update_service = update_service
+    update_service.start()
+
     tray_icon.menu = pystray.Menu(
         pystray.MenuItem("打开 Mio", show_window, default=True),
         pystray.MenuItem("退出 Mio", exit_app),
@@ -2392,6 +2402,7 @@ def _run_window(
         private_mode=False,
         storage_path=str(WEBVIEW_DATA_DIR),
     )
+    update_service.close()
     _notify_window_topology("agent-main", "closed", window=window)
     _notify_window_topology("agent-workspace", "closed", window=agent_window)
     bridge.close_child_windows()
@@ -2496,6 +2507,20 @@ def main() -> int:
     _configure_logging()
     _wait_for_recovery_parent()
     _configure_source_import_path()
+    for update_argument in ("--update-verify", "--update-restore"):
+        if update_argument in sys.argv:
+            try:
+                index = sys.argv.index(update_argument)
+                return run_update_mode(update_argument, Path(sys.argv[index + 1]), _configure_runtime_environment)
+            except Exception:
+                logging.exception("Update validation/recovery failed")
+                return 1
+    try:
+        if startup_recovery(STATE_DIR):
+            return 0
+    except Exception as exc:
+        _message_box(str(exc), error=True)
+        return 1
     if VOICE_PACKAGE_IMPORT_WORKER_ARGUMENT in sys.argv:
         argument_index = sys.argv.index(VOICE_PACKAGE_IMPORT_WORKER_ARGUMENT)
         if argument_index + 1 >= len(sys.argv):

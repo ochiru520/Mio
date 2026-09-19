@@ -1,3 +1,21 @@
+# Mio 0.3.0 · 应用更新、记忆纠错与任务恢复
+
+- 新增带 Ed25519 签名校验的应用更新，支持下载、安装重启及失败恢复；升级保留原数据目录。
+- 0.2.1 及更早版本需手动安装本版一次，此后可从“设置 → 基础与启动 → 应用更新”检查后续版本。
+- 记忆支持查看原始依据、用户纠正记录及版本恢复。用户确认的事实不会被后台旧推断自动覆盖，冲突提取进入待确认候选；私人对话和记录生成读取修订规则。
+- 生成结果未知时停止自动推进，支持登记供应商回执和明确确认的人工重试；本地停止后的迟到结果不会重新发布。
+- 环境中心增加脱敏诊断复制，模型加载验证附带时间戳；加载验证与实际推理分开表述。
+- 修复普通聊天联网触发与失败上下文；拆分前端、数据库和桌宠服务模块，保持接口兼容。
+
+验证边界：本机隔离数据、自动化和真实冻结程序验收；另一台干净 Windows、真人 QQ/电话、跨硬件长期运行仍需现场验证。公开包不包含个人数据、密钥、私人角色、音色或模型权重。更新清单签名不等于 Windows 发布者代码签名。
+
+# English
+
+Signed application updates with installation recovery; source-backed memory corrections; explicit reconciliation for unknown generation results; late-response guards; sanitized diagnostics; web lookup fixes and module refactoring.
+
+Users on 0.2.1 or earlier must install this release manually once. Subsequent releases can be checked inside the app. Validation on another clean Windows computer, live QQ/phone sessions and long-running cross-hardware use remains outstanding. No personal data, credentials, private voices or model weights are distributed.
+
+
 # 更新日志
 
 ## Mio 0.2 — 2026-09-12

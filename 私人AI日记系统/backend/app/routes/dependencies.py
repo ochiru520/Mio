@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dependencies")
 
 
+@router.get('/diagnostics')
+async def dependencies_diagnostics():
+    from ..diagnostic_export import snapshot
+    return await asyncio.to_thread(snapshot)
+
+
 @router.get("")
 async def dependencies_list():
     try:

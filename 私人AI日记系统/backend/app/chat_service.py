@@ -58,6 +58,8 @@ from .web_search_service import (
     build_web_context_message,
     build_contextual_lookup_message,
     perform_web_lookup,
+    needs_web_lookup,
+    web_capability_reply,
 )
 
 
@@ -1219,6 +1221,9 @@ def _annotate_history_content(
         label += "（本轮新消息）"
     note = f"[内部消息时间：{label}]"
     if isinstance(content, str):
+        if current_message_id is None or int(row["id"]) != current_message_id:
+            from .memory_revision_service import sanitize_history
+            content = sanitize_history(content)
         return f"{note}\n{content}"
     if isinstance(content, list):
         return [{"type": "text", "text": note}, *content]
@@ -1366,7 +1371,10 @@ async def _chat_with_ai_unlocked(
         if message and not images and not text_files
         else ""
     )
-    if recitation_target:
+    local_reply = recitation_target or (
+        web_capability_reply(message) if message and not images and not text_files else ""
+    )
+    if local_reply:
         mark_runtime_stage("request_created", request_id=request_id)
         if persist:
             db.save_message(
@@ -1381,7 +1389,7 @@ async def _chat_with_ai_unlocked(
             )
             db.save_message(
                 "assistant",
-                recitation_target,
+                local_reply,
                 source=source,
                 conversation_id=conversation_id,
                 request_id=request_id,
@@ -1391,22 +1399,19 @@ async def _chat_with_ai_unlocked(
             mark_runtime_stage("response_saved")
         else:
             mark_runtime_stage("response_staged")
-        response_emotion = companion_service.infer_speech_emotion(
-            recitation_target,
-            message,
-        )
+        response_emotion = companion_service.infer_speech_emotion(local_reply, message)
         companion_service.set_pet_activity(
             "responding",
             emotion=response_emotion,
             source=source,
-            ttl_seconds=max(6, min(30, len(recitation_target) / 5 + 5)),
+            ttl_seconds=max(6, min(30, len(local_reply) / 5 + 5)),
         )
         return ChatResult(
-            reply=recitation_target,
-            replies=[recitation_target],
+            reply=local_reply,
+            replies=[local_reply],
             speech_emotion=response_emotion,
             request_id=request_id,
-            route="local_deterministic_recitation",
+            route="local_deterministic_recitation" if recitation_target else "local_web_capability",
             http_status=200,
             reasoning_level="off",
         )
@@ -1470,7 +1475,9 @@ async def _chat_with_ai_unlocked(
         )
     mark_runtime_stage("context_ready")
     lookup_message = build_contextual_lookup_message(message, list(chat_context.raw_messages))
-    web_lookup = None if fast_path else await perform_web_lookup(lookup_message)
+    # Fast chat may use a smaller context, but it cannot suppress an explicit
+    # lookup or URL. The lookup function itself enforces intent and permission.
+    web_lookup = await perform_web_lookup(lookup_message)
     mark_runtime_stage("web_lookup_ready")
     self_snapshot_context = "" if fast_path else await _self_snapshot_context_for_message(message)
     mark_runtime_stage("self_snapshot_ready")
@@ -1526,6 +1533,12 @@ async def _chat_with_ai_unlocked(
     )
     if images and not send_images_to_model:
         system_blocks.append(_build_image_unavailable_context(len(images)))
+    if needs_web_lookup(lookup_message) and not settings.web_search_enabled:
+        system_blocks.append(
+            "本轮用户需要外部信息，但当前联网搜索已关闭，未发起联网请求。"
+            "请准确说明是权限开关关闭，而非 Mio 不支持联网；不要编造最新结果。"
+            "用户可在设置 → 对话与记忆 → 联网与附件中开启并保存。"
+        )
     if web_lookup is not None and not web_lookup.error and web_lookup.sources:
         system_blocks.append(build_web_context_message(web_lookup))
     llm_messages: list[dict[str, object]] = [
@@ -1581,15 +1594,6 @@ async def _chat_with_ai_unlocked(
             mark_runtime_stage("agent_tools_observed")
             if agent_context := agent_execution.model_context():
                 llm_messages.append({"role": "system", "content": agent_context})
-            recovered_web = any(
-                item.tool_name == "search_web"
-                and item.status == "completed"
-                and bool(item.result.get("sources"))
-                and not item.result.get("error")
-                for item in agent_execution.observations
-            )
-            if web_lookup is not None and web_lookup.error and not recovered_web:
-                llm_messages.append({"role": "system", "content": build_web_context_message(web_lookup)})
             agent_final_step_id = begin_final_response(agent_execution)
         except asyncio.CancelledError:
             raise
@@ -1601,6 +1605,18 @@ async def _chat_with_ai_unlocked(
             )
     else:
         mark_runtime_stage("agent_tools_skipped")
+
+    # A failed/empty precheck must reach companion mode too. A verified Agent
+    # retry supersedes that failure; an Agent exception must not hide it.
+    recovered_web = bool(agent_execution and any(
+        item.tool_name == "search_web"
+        and item.status == "completed"
+        and bool(item.result.get("sources"))
+        and not item.result.get("error")
+        for item in agent_execution.observations
+    ))
+    if web_lookup is not None and (web_lookup.error or not web_lookup.sources) and not recovered_web:
+        llm_messages.append({"role": "system", "content": build_web_context_message(web_lookup)})
 
     try:
         completion, effective_reasoning_level, escalated_from_model_id = await _complete_chat_reply_with_single_fallback(

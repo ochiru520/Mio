@@ -1,5 +1,6 @@
 param(
-    [switch]$SkipInstaller
+    [switch]$SkipInstaller,
+    [switch]$FastPackage
 )
 
 $ErrorActionPreference = "Stop"
@@ -85,6 +86,14 @@ try {
         Pop-Location
     }
 
+    & $PythonExe (Join-Path $DesktopRoot "publish_update.py") prepare
+    if ($LASTEXITCODE -ne 0) { throw "Update channel preparation failed." }
+    & $PythonExe -m PyInstaller --noconfirm --clean `
+        --distpath (Join-Path $DesktopRoot "generated/updater") `
+        --workpath (Join-Path $DesktopRoot "build/updater") `
+        (Join-Path $DesktopRoot "mio-updater.spec")
+    if ($LASTEXITCODE -ne 0) { throw "Standalone updater packaging failed." }
+
     Write-Host "[6/8] Packaging Mio desktop app..."
     & $PythonExe -m PyInstaller `
         --noconfirm `
@@ -161,7 +170,10 @@ if WHISPER_DISCOVERY_VERSION < 2:
         Write-Host "[8/8] Installer build skipped by request."
     } elseif ($IsccCandidates) {
         Write-Host "[8/8] Building installer..."
-        & $IsccCandidates[0] (Join-Path $DesktopRoot "installer.iss")
+        $InstallerArgs = @()
+        if ($FastPackage) { $InstallerArgs += "/DMioFastPackage=1" }
+        $InstallerArgs += (Join-Path $DesktopRoot "installer.iss")
+        & $IsccCandidates[0] @InstallerArgs
         if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
     } else {
         Write-Host "[8/8] Inno Setup is not installed; skipped installer build."

@@ -126,6 +126,10 @@ def _artifact_paths(release_root: Path) -> list[tuple[str, Path]]:
         ("mio_voice_installer", release_root / "_internal" / "agent_scripts" / "deps" / "install-gpt-sovits.ps1"),
         ("mio_voice_package_installer", release_root / "_internal" / "agent_scripts" / "deps" / "install-mio-voice-package.py"),
     ]
+    updater = release_root / "_internal" / "MioUpdater.exe"
+    update_config = release_root / "_internal" / "desktop" / "update_channel.json"
+    if updater.is_file() or update_config.is_file():
+        artifacts.extend([("standalone_updater", updater), ("update_channel", update_config)])
     default_voice_reference = release_root / "_internal" / "default_voice" / "mio_v2_00.wav"
     if default_voice_reference.is_file():
         artifacts.append(("mio_default_voice_reference", default_voice_reference))

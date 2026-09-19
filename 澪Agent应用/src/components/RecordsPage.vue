@@ -23,6 +23,8 @@ import {
   X,
 } from '@lucide/vue'
 
+import MemoryEvidence from './MemoryEvidence.vue'
+
 const context = inject('mio-records-page')
 if (!context) throw new Error('记录页上下文未初始化')
 const recordMode = ref(context.activeView === 'stats' ? 'growth' : 'daily')
@@ -254,7 +256,7 @@ async function saveDiaryEdit() {
       <section class="memory-understanding"><span>{{ context.mioDisplayName }}现在怎样认识你</span><p v-if="context.memoryData.structured?.length">{{ context.memoryData.structured.slice(0, 5).map((item) => item.content).join('；') }}</p><p v-else>还没有形成稳定的长期认识</p></section>
       <form class="memory-natural-add" @submit.prevent="addNaturalMemory"><select v-model="context.newStructuredMemory.category"><option v-for="item in memoryCategories" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select><input v-model="context.newStructuredMemory.content" :placeholder="`用一句自然的话告诉${context.mioDisplayName}要记住什么`" /><button type="submit" :disabled="Boolean(context.memoryBusy)"><Plus :size="15" />记住</button></form>
       <section v-if="pendingCandidates.length" class="memory-candidate-panel"><header><strong>等待你确认</strong><span>{{ pendingCandidates.length }} 条</span></header><article v-for="memory in pendingCandidates" :key="memory.id"><p>{{ memory.content }}</p><div><button type="button" @click="context.rejectMemoryCandidate(memory)">忽略</button><button type="button" class="primary-button" @click="context.confirmMemoryCandidate(memory)">确认记住</button></div></article></section>
-      <div v-if="groupedMemories.length" class="memory-category-grid"><section v-for="group in groupedMemories" :key="group.id"><header><strong>{{ group.label }}</strong><span>{{ group.items.length }}</span></header><article v-for="memory in group.items" :key="memory.id"><p>{{ memory.content }}</p><small>{{ memoryTimeLabel(memory) }}</small><div class="memory-item-actions"><details><summary>查看依据</summary><span>来源：{{ memory.source_conversation_id || '手动记录' }}<template v-if="memory.source_message_id"> · 消息 #{{ memory.source_message_id }}</template><br />置信度：{{ Math.round(Number(memory.confidence || 0) * 100) }}% · 时间置信度：{{ Math.round(Number(memory.time_confidence || 0) * 100) }}% · {{ context.memoryLayerLabel(memory.layer) }}</span></details><button type="button" @click="context.editStructuredMemory(memory)">编辑</button><button type="button" title="忘记" @click="context.archiveStructuredMemory(memory)"><Trash2 :size="14" /></button></div></article></section></div>
+      <div v-if="groupedMemories.length" class="memory-category-grid"><section v-for="group in groupedMemories" :key="group.id"><header><strong>{{ group.label }}</strong><span>{{ group.items.length }}</span></header><article v-for="memory in group.items" :key="memory.id"><p>{{ memory.content }}</p><small>{{ memoryTimeLabel(memory) }}</small><div class="memory-item-actions"><MemoryEvidence :memory="memory" /><button type="button" @click="context.editStructuredMemory(memory)">编辑</button><button type="button" title="忘记" @click="context.archiveStructuredMemory(memory)"><Trash2 :size="14" /></button></div></article></section></div>
       <div v-else class="reader-empty compact-reader-empty"><Archive :size="30" /><strong>{{ context.mioDisplayName }}还没有形成长期记忆</strong></div>
       <details v-if="restorableMemoryHistory.length" class="memory-version-history">
         <summary><History :size="15" />历史版本 <span>{{ restorableMemoryHistory.length }}</span></summary>

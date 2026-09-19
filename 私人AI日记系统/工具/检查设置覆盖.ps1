@@ -82,7 +82,7 @@ if ($missingRuntime.Count -or $unknownRuntime.Count -or $stalePrivateRuntime.Cou
 $companionParams = @{
     Content = $companionContent
     StartPattern = 'DEFAULT_CONFIG[^=]*=\s*\{'
-    EndPattern = '\}\s*def _migrate_config'
+    EndPattern = '(?m)^\}'
 }
 $companionKeys = Get-NamedKeys @companionParams
 $sectionKeys = @(

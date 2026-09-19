@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "product_id": "io.github.mio-agent.desktop",
+  "version": "0.3.0",
+  "channel": "stable",
+  "feed_url": "https://github.com/ochiru520/Mio/releases/latest/download/latest.json",
+  "enabled": true,
+  "public_keys": {
+    "mio-release-9d702099c12b9cc0": "xD6fYik0GIyVN4hctrRSEi4Eo11eZNcBIyMT92tbklE="
+  }
+}

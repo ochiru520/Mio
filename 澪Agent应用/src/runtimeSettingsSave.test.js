@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import fs from 'node:fs'
-import vm from 'node:vm'
-
-const source = fs.readFileSync(new URL('./App.vue', import.meta.url), 'utf8')
-const start = source.indexOf('async function saveRuntimeSettings()')
-const code = source.slice(start, source.indexOf('async function loadMioProfileSettings', start))
+import { useSettings } from './composables/useSettings.js'
 
 function setup({ conflict = false, restart = false } = {}) {
   const server = { qq_proactive_enabled: false, daily_diary_check_seconds: 60 }
@@ -28,8 +23,7 @@ function setup({ conflict = false, restart = false } = {}) {
       return { settings: server, revision: 'version-b', application: { restart_required: restart ? ['voice_training_dir'] : [] } }
     },
   }
-  vm.createContext(sandbox)
-  vm.runInContext(code, sandbox)
+  Object.assign(sandbox, useSettings(sandbox))
   return { sandbox, server, messages, sent: () => sent }
 }
 

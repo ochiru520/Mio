@@ -4,6 +4,7 @@ import { Check, ChevronDown, ListChecks, Pause, Play, RefreshCw, Settings, X } f
 import { apiRequest } from '../services/api.js'
 import { canResumeTask, taskStatusLabel } from '../agentTaskState.js'
 import RuntimeTimeline from './RuntimeTimeline.vue'
+import JobRecovery from './JobRecovery.vue'
 
 const props = defineProps({ compact: Boolean, conversationId: { type: String, default: '' } })
 const emit = defineEmits(['open-settings'])
@@ -83,7 +84,7 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.rem
         <ol v-if="task.snapshot?.plan?.length"><li v-for="(step,index) in task.snapshot.plan" :key="index">{{ step }}</li></ol>
         <div v-for="step in (task.observations || []).filter(s => task.status === 'waiting_confirmation' && s.status === 'needs_confirmation')" :key="step.step_id" class="goal-confirm"><span>待确认：{{ step.tool_name }}</span><button type="button" :disabled="!!busy" @click="action(task, `actions/${step.action_id}/approve`)">确认执行</button></div>
         <details v-if="task.observations?.length"><summary>执行记录 · {{ task.observations.length }}</summary><ul><li v-for="step in task.observations" :key="step.step_id">{{ step.tool_name }} · {{ step.status }}<p v-if="step.error">{{ step.error }}</p></li></ul></details>
-        <small>模型费用 ¥{{ Number(task.spent_yuan || 0).toFixed(4) }}<template v-if="task.snapshot?.cost_unknown">（部分费用未知）</template></small>
+        <JobRecovery :observations="task.observations || []" @changed="load" /><small>模型费用 ¥{{ Number(task.spent_yuan || 0).toFixed(4) }}<template v-if="task.snapshot?.cost_unknown">（部分费用未知）</template></small>
       </section>
     </template>
   </section>
@@ -110,7 +111,7 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.rem
         <span>待确认：{{ step.tool_name }}</span><button :disabled="!!busy" @click="action(task, `actions/${step.action_id}/approve`)"><Check :size="15" />确认执行</button>
       </div>
       <footer>
-        <small>模型费用 ¥{{ Number(task.spent_yuan || 0).toFixed(4) }}<template v-if="task.snapshot.cost_unknown">（部分费用未知）</template><template v-if="budgetEnabled"> / ¥{{ Number(task.budget_yuan).toFixed(2) }}</template></small>
+        <JobRecovery :observations="task.observations || []" @changed="load" /><small>模型费用 ¥{{ Number(task.spent_yuan || 0).toFixed(4) }}<template v-if="task.snapshot.cost_unknown">（部分费用未知）</template><template v-if="budgetEnabled"> / ¥{{ Number(task.budget_yuan).toFixed(2) }}</template></small>
         <button v-if="canResumeTask(task)" title="继续任务" :disabled="!!busy" @click="action(task, 'resume')"><Play :size="16" />继续</button>
         <button v-if="['running','responding','ready','waiting_jobs','waiting_confirmation'].includes(task.status)" title="暂停任务推进，保留已提交后台工作" :disabled="!!busy" @click="action(task, 'pause')"><Pause :size="16" /></button>
         <button v-if="!['completed','cancelled'].includes(task.status)" title="取消任务及关联后台工作，已完成结果保留" :disabled="!!busy" @click="action(task, 'cancel')"><X :size="16" />取消任务</button>

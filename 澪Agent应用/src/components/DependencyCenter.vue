@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Check, CheckCircle2, CircleAlert, CircleHelp, Download, ExternalLink, RefreshCw, RotateCw, Settings2, Wrench } from '@lucide/vue'
 import { activateLocalVision, verifyDependency, installDependency, loadDependencies, loadDependencyStatus } from '../services/dependenciesApi.js'
 
+import { apiRequest } from '../services/api.js'
+
 const props = defineProps({
   compact: { type: Boolean, default: false },
 })
@@ -24,6 +26,17 @@ const statusMeta = {
   installed: { label: '已安装 · 未启动', icon: CheckCircle2, tone: 'hint' },
   unverified: { label: '文件已安装 · 待验证', icon: CircleHelp, tone: 'hint' },
   degraded: { label: '已安装 · 暂不可用', icon: CircleAlert, tone: 'warn' },
+}
+
+async function copyDiagnostics() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const report = await apiRequest('/api/dependencies/diagnostics')
+    await navigator.clipboard.writeText(JSON.stringify(report, null, 2))
+    notice.value = `已复制脱敏诊断（${report.checked_at}）`
+  } catch (cause) { error.value = cause.message }
+  finally { busy.value = false }
 }
 
 async function refresh() {
@@ -210,6 +223,7 @@ onBeforeUnmount(stopPolling)
       <button type="button" :disabled="busy" @click="refresh">
         <RefreshCw :class="{ spin: busy }" :size="14" />重新检查
       </button>
+      <button type="button" :disabled="busy" @click="copyDiagnostics">复制脱敏诊断</button>
     </div>
 
     <div v-if="dependencies.length" class="dependency-summary">

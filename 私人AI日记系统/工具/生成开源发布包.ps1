@@ -392,6 +392,9 @@ if (-not $SkipValidation) {
     Invoke-CheckedCommand -Name "Agent audit" -WorkingDirectory $AgentDestination -Command { npm audit --audit-level=high }
     Invoke-CheckedCommand -Name "Agent tests" -WorkingDirectory $AgentDestination -Command { npm test }
     Invoke-CheckedCommand -Name "Agent build" -WorkingDirectory $AgentDestination -Command { npm run build }
+    Invoke-CheckedCommand -Name "Updater test dependencies" -WorkingDirectory $AgentDestination -Command {
+        & $BackendPython -m pip install -r (Join-Path $AgentDestination "desktop/requirements-updater.txt")
+    }
     Invoke-CheckedCommand -Name "Desktop tests" -WorkingDirectory $AgentDestination -Command {
         & $BackendPython -m unittest discover -s desktop -p "test_*.py"
         if ($LASTEXITCODE -ne 0) { throw "Desktop tests failed." }

@@ -6,5 +6,7 @@
   "sha256": "aebb09eef2a0d09b6ba564c3f738aaaabbca77e47ada2e1a1a71a5c769d390a6",
   "version": "genie-2.0.2",
   "file_count": 4,
-  "urls": []
+  "urls": [
+    "https://github.com/ochiru520/Mio/releases/download/v0.4.0/Mio-Genie-Runtime-v1.zip"
+  ]
 }

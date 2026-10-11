@@ -517,6 +517,8 @@ def pet_status() -> dict[str, Any]:
     running = pet_running()
     sprites = pet_sprite_manifest()
     external_renderer = running and _pet_process is None
+    public_settings = dict(load_config())
+    public_settings['cloud_tts_api_key'] = ''
     return {
         "running": running,
         "pid": _pet_process.pid if running and _pet_process is not None else None,
@@ -528,7 +530,7 @@ def pet_status() -> dict[str, Any]:
         "sprite_expected_count": sprites["expected_count"],
         "sprite_version": sprites["version"],
         "activity": pet_activity_status(),
-        "settings": load_config(),
+        "settings": public_settings,
         "live2d": {
             "available": (settings.agent_frontend_dir / "live2d-pet" / "index.html").is_file(),
             "models": available_live2d_models(),
@@ -2295,6 +2297,9 @@ def warm_voice_language_async(language: str) -> bool:
     global _voice_language_warmup_active
     selected = str(language or "").strip().lower()
     if selected not in {"zh", "ja"}:
+        return False
+    config = load_config()
+    if not config.get('voice_enabled', True) or config.get('voice_engine') == 'cloud':
         return False
 
     if _uses_genie_runtime():

@@ -44,7 +44,7 @@ export default {
     currentModel: { type: String, default: '正在读取' },
     contextUsage: { type: Object, default: () => ({}) },
   },
-  emits: ['navigate', 'open-diary'],
+  emits: ['navigate', 'open-diary', 'open-thread'],
   computed: {
     readableDate() {
       if (!this.logicalDate) return '今天'
@@ -107,9 +107,9 @@ export default {
     },
     ongoingItem() {
       const thread = (this.memoryData?.threads || []).find((item) => item.status !== 'resolved')
-      if (thread) return { title: '上次还在继续的事', content: thread.content, target: 'memory' }
+      if (thread) return { title: '上次还在继续的事', content: thread.content, target: 'memory', thread }
       const diary = this.recentDiaries[0]
-      if (diary) return { title: diary.title || `${diary.date} 的日记`, content: `${diary.date} 留下的记录`, target: 'diaries' }
+      if (diary) return { title: diary.title || `${diary.date} 的日记`, content: `${diary.date} 留下的记录`, target: 'diaries', date: diary.date }
       return { title: '从今天开始', content: '还没有需要接着处理的事情', target: 'chat' }
     },
     attentionItems() {
@@ -194,6 +194,12 @@ export default {
     },
   },
   methods: {
+    continueOngoingItem() {
+      const item = this.ongoingItem
+      if (item.thread) this.$emit('open-thread', item.thread)
+      else if (item.date) this.$emit('open-diary', item.date)
+      else this.$emit('navigate', item.target)
+    },
     diaryPreview(item) {
       if (item?.title && item.title !== item.date) return item.title
       const firstEvent = String(item?.markdown_content || '')
@@ -216,7 +222,7 @@ export default {
     <section class="home-focus-grid">
       <article class="home-focus-primary">
         <span>继续上次的事情</span><h2>{{ ongoingItem.title }}</h2><p>{{ ongoingItem.content }}</p>
-        <button type="button" @click="$emit('navigate', ongoingItem.target)">继续 <ArrowRight :size="15" /></button>
+        <button type="button" @click="continueOngoingItem">继续 <ArrowRight :size="15" /></button>
       </article>
       <article class="home-attention-panel">
         <span>今天需要留意</span>

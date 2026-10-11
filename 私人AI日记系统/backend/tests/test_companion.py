@@ -950,6 +950,7 @@ class CompanionConfigTests(unittest.TestCase):
                 return_value={
                     "running": True,
                     "ready": True,
+                    "capture_loopback": True,
                     "last_error": "",
                 },
             ),
@@ -2741,7 +2742,8 @@ class CompanionConfigTests(unittest.TestCase):
             [call.args[0] for call in save_config.call_args_list],
             [{"screen_audio_enabled": True}, {"screen_audio_enabled": False}],
         )
-        audio_start.assert_called_once()
+        self.assertEqual(audio_start.call_count, 2)
+        self.assertTrue(audio_start.call_args.kwargs['transcription_only'])
         audio_stop.assert_not_called()
 
     def test_so_vits_svc_synthesis_converts_base_gpt_audio(self) -> None:
@@ -4063,6 +4065,7 @@ class CompanionConfigTests(unittest.TestCase):
         )
         route = SimpleNamespace(model_id="vision-test", reasoning_level="low")
         with (
+            patch("app.screen_observation_service.companion_service.speak_text", return_value=True),
             patch("app.companion_observation_service.ImageGrab.grab", return_value=Image.new("RGB", (640, 360), "red")),
             patch("app.screen_observation_service.select_auto_route", return_value=route),
             patch(
@@ -4108,6 +4111,7 @@ class CompanionConfigTests(unittest.TestCase):
         )
         route = SimpleNamespace(model_id="chat-test", reasoning_level="high")
         with (
+            patch("app.screen_observation_service.companion_service.speak_text", return_value=True),
             patch("app.companion_observation_service.ImageGrab.grab", return_value=Image.new("RGB", (640, 360), "navy")),
             patch("app.screen_observation_service.select_auto_route", return_value=route),
             patch(

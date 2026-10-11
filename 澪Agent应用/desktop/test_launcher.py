@@ -17,6 +17,72 @@ from desktop import launcher
 
 
 class WebViewRecoveryTests(unittest.TestCase):
+    def test_restored_content_refresh_waits_for_ui_thread_without_reloading_page(self):
+        window = unittest.mock.Mock()
+        native = window.native
+        native.IsDisposed = native.Disposing = native.webview.IsDisposed = False
+        native.Handle.ToInt64.return_value = 321
+        queued = []
+        native.BeginInvoke.side_effect = queued.append
+        with patch.dict(sys.modules, {"System": types.SimpleNamespace(Action=lambda callback: callback)}):
+            self.assertTrue(launcher._refresh_restored_window_content(window))
+        native.PerformLayout.assert_not_called()
+        window.evaluate_js.assert_not_called()
+        queued[0]()
+        self.assertEqual(native.webview.Size, native.ClientSize)
+        native.webview.Update.assert_called_once_with()
+        native.Update.assert_called_once_with()
+        window.load_url.assert_not_called()
+        window.resize.assert_not_called()
+
+    def test_restored_content_callback_tolerates_window_closed_before_dispatch(self):
+        window = unittest.mock.Mock()
+        native = window.native
+        native.IsDisposed = False
+        native.Disposing = False
+        queued = []
+        native.BeginInvoke.side_effect = queued.append
+        with patch.dict(sys.modules, {"System": types.SimpleNamespace(Action=lambda callback: callback)}):
+            self.assertTrue(launcher._refresh_restored_window_content(window))
+        native.IsDisposed = True
+        queued[0]()
+        native.PerformLayout.assert_not_called()
+        native.webview.Update.assert_not_called()
+
+    def test_restore_reuses_outer_bounds_and_does_not_shrink_each_minimize_cycle(self):
+        window = unittest.mock.Mock()
+        native = window.native
+        native.IsDisposed = native.Disposing = native.webview.IsDisposed = False
+        native.Handle.ToInt64.return_value = 321
+        native.BeginInvoke.side_effect = lambda callback: callback()
+        with (
+            patch.dict(sys.modules, {"System": types.SimpleNamespace(Action=lambda callback: callback)}),
+            patch.dict(launcher._NATIVE_MINIMIZE_BOUNDS, {321: (180, 100, 1180, 780)}, clear=True),
+            patch.object(launcher.ctypes.windll.user32, "IsZoomed", return_value=False),
+            patch.object(launcher.ctypes.windll.user32, "SetWindowPos") as position,
+        ):
+            self.assertTrue(launcher._refresh_restored_window_content(window))
+            position.assert_called_once_with(321, 0, 180, 100, 1180, 780, 0x0004 | 0x0010)
+            self.assertNotIn(321, launcher._NATIVE_MINIMIZE_BOUNDS)
+            self.assertTrue(launcher._refresh_restored_window_content(window))
+            self.assertEqual(position.call_count, 1)
+
+    def test_minimized_maximized_window_stays_maximized_after_content_refresh(self):
+        window = unittest.mock.Mock()
+        native = window.native
+        native.IsDisposed = native.Disposing = native.webview.IsDisposed = False
+        native.Handle.ToInt64.return_value = 321
+        native.BeginInvoke.side_effect = lambda callback: callback()
+        with (
+            patch.dict(sys.modules, {"System": types.SimpleNamespace(Action=lambda callback: callback)}),
+            patch.dict(launcher._NATIVE_MINIMIZE_BOUNDS, {321: (180, 100, 1180, 780)}, clear=True),
+            patch.object(launcher.ctypes.windll.user32, "IsZoomed", return_value=True),
+            patch.object(launcher.ctypes.windll.user32, "SetWindowPos") as position,
+        ):
+            self.assertTrue(launcher._refresh_restored_window_content(window))
+            position.assert_not_called()
+            native.webview.Update.assert_called_once_with()
+
     def test_workspace_controller_switches_between_main_and_agent(self):
         controller = launcher.WorkspaceWindowController()
         main_window = unittest.mock.Mock()
@@ -57,6 +123,10 @@ class WebViewRecoveryTests(unittest.TestCase):
         self.assertIn('"Mio Agent",', source)
         self.assertIn("?workspace=agent&v=", source)
         self.assertRegex(source, r"agent_window = webview\.create_window\([\s\S]+?hidden=True,")
+        self.assertRegex(
+            source,
+            r"agent_window = webview\.create_window\([\s\S]+?easy_drag=True,[\s\S]+?hidden=True,",
+        )
 
     def test_state_json_retries_when_windows_temporarily_locks_destination(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -753,6 +823,57 @@ class WebViewRecoveryTests(unittest.TestCase):
         release.assert_called_once_with()
         send.assert_called_once_with(456, 0x00A1, 2, 0)
 
+    def test_agent_bridge_starts_native_window_drag(self):
+        bridge = launcher.DesktopBridge("agent")
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 654
+        bridge.attach_window(unittest.mock.Mock(native=native), None)
+        with (
+            patch.object(launcher.ctypes.windll.user32, "ReleaseCapture") as release,
+            patch.object(launcher.ctypes.windll.user32, "SendMessageW") as send,
+        ):
+            result = bridge.window_drag()
+
+        self.assertEqual(result, {"ok": True})
+        release.assert_called_once_with()
+        send.assert_called_once_with(654, 0x00A1, 2, 0)
+
+    def test_live_agent_drag_is_queued_to_window_thread_without_worker_capture(self):
+        bridge = launcher.DesktopBridge("agent")
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 654
+        bridge.attach_window(unittest.mock.Mock(native=native), None)
+
+        def cursor(point):
+            point._obj.x = -20
+            point._obj.y = 80
+            return 1
+
+        with (
+            patch.object(launcher.ctypes.windll.user32, "IsWindow", return_value=1),
+            patch.object(launcher, "_install_native_hit_test", return_value=True),
+            patch.object(launcher.ctypes.windll.user32, "GetCursorPos", side_effect=cursor),
+            patch.object(launcher.ctypes.windll.user32, "PostMessageW", return_value=1) as post,
+            patch.object(launcher.ctypes.windll.user32, "SetCapture") as capture,
+        ):
+            self.assertEqual(bridge.window_drag(), {"ok": True})
+        capture.assert_not_called()
+        post.assert_called_once_with(654, launcher._WM_BEGIN_WINDOW_DRAG, 0, (80 << 16) | 65516)
+
+    def test_live_agent_drag_survives_cursor_read_denial(self):
+        bridge = launcher.DesktopBridge("agent")
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 655
+        bridge.attach_window(unittest.mock.Mock(native=native), None)
+        with (
+            patch.object(launcher.ctypes.windll.user32, "IsWindow", return_value=1),
+            patch.object(launcher, "_install_native_hit_test", return_value=True),
+            patch.object(launcher.ctypes.windll.user32, "GetCursorPos", return_value=0),
+            patch.object(launcher.ctypes.windll.user32, "PostMessageW", return_value=1) as post,
+        ):
+            self.assertEqual(bridge.window_drag(), {"ok": True})
+        post.assert_called_once_with(655, launcher._WM_BEGIN_WINDOW_DRAG, 0, 0)
+
     def test_pet_chat_window_is_topmost_and_accepts_mouse_input(self):
         native = unittest.mock.Mock()
         native.Handle.ToInt64.return_value = 789
@@ -821,12 +942,49 @@ class WebViewRecoveryTests(unittest.TestCase):
         release.assert_called_once_with()
         send.assert_called_once_with(123, 0x00A1, 17, 0)
 
+    def test_pointer_resize_preserves_opposite_corner_dpi_and_minimum(self):
+        bridge = launcher.DesktopBridge("agent")
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 123
+        bridge.attach_window(unittest.mock.Mock(native=native), None)
+
+        def bounds(_handle, point):
+            point._obj.left, point._obj.top = 100, 200
+            point._obj.right, point._obj.bottom = 1300, 1200
+            return 1
+
+        with (
+            patch.object(launcher.ctypes.windll.user32, "IsZoomed", return_value=0),
+            patch.object(launcher.ctypes.windll.user32, "GetWindowRect", side_effect=bounds) as get_bounds,
+            patch.object(launcher.ctypes.windll.user32, "GetDpiForWindow", return_value=144),
+            patch.object(launcher.ctypes.windll.user32, "SetWindowPos", return_value=1) as move,
+        ):
+            self.assertTrue(bridge.window_resize_by("top-left", 100, 100, "gesture-1")["ok"])
+            move.assert_called_with(123, 0, 250, 350, 1050, 850, 0x14)
+            self.assertTrue(bridge.window_resize_by("top-left", 1000, 1000, "gesture-1", True)["ok"])
+            move.assert_called_with(123, 0, 580, 450, 720, 750, 0x14)
+            get_bounds.assert_called_once()
+            self.assertIsNone(bridge._resize_gesture)
+
+    def test_pointer_resize_rejects_nonfinite_offsets_and_ignores_maximized_window(self):
+        bridge = launcher.DesktopBridge("agent")
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 123
+        bridge.attach_window(unittest.mock.Mock(native=native), None)
+        with patch.object(launcher.ctypes.windll.user32, "SetWindowPos") as move:
+            for dx in (float("nan"), float("inf"), 100001, "invalid"):
+                self.assertFalse(bridge.window_resize_by("right", dx, 0, "gesture")["ok"])
+            with patch.object(launcher.ctypes.windll.user32, "IsZoomed", return_value=1):
+                self.assertEqual(bridge.window_resize_by("right", 100, 0, "gesture"),
+                                 {"ok": True, "ignored": True, "reason": "maximized"})
+            move.assert_not_called()
+
     def test_main_window_native_style_allows_resizing(self):
         native = unittest.mock.Mock()
         native.Handle.ToInt64.return_value = 321
         window = unittest.mock.Mock(native=native)
         with (
-            patch.object(launcher.ctypes.windll.user32, "GetWindowLongPtrW", return_value=0x16010000),
+            patch.object(launcher.ctypes.windll.user32, "GetWindowLongPtrW", return_value=0x16000000),
             patch.object(launcher.ctypes.windll.user32, "SetWindowLongPtrW") as set_style,
             patch.object(launcher.ctypes.windll.user32, "SetWindowPos") as set_position,
         ):
@@ -842,6 +1000,129 @@ class WebViewRecoveryTests(unittest.TestCase):
             0,
             0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020,
         )
+
+    def test_agent_window_native_style_exposes_native_titlebar_drag_fallback(self):
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 322
+        window = unittest.mock.Mock(native=native)
+        with (
+            patch.object(launcher.ctypes.windll.user32, "GetWindowLongPtrW", return_value=0x16000000),
+            patch.object(launcher.ctypes.windll.user32, "SetWindowLongPtrW"),
+            patch.object(launcher.ctypes.windll.user32, "SetWindowPos"),
+            patch.object(launcher, "_install_native_hit_test") as install,
+        ):
+            self.assertTrue(launcher._make_main_window_resizable(window, titlebar_drag=True))
+
+        install.assert_called_once_with(322, titlebar_drag=True)
+
+    def test_drag_uses_initial_bounds_and_dpi_without_mousedown_frame_jump(self):
+        bridge = launcher.DesktopBridge("agent")
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 321
+        bridge.attach_window(unittest.mock.Mock(native=native), None)
+
+        def bounds(rect):
+            rect._obj.left, rect._obj.top = 80, 40
+            return 1
+
+        with (
+            patch.object(launcher.ctypes.windll.user32, "IsZoomed", return_value=0),
+            patch.object(launcher.ctypes.windll.user32, "GetWindowRect", side_effect=lambda hwnd, rect: bounds(rect)) as read,
+            patch.object(launcher.ctypes.windll.user32, "GetDpiForWindow", return_value=144),
+            patch.object(launcher.ctypes.windll.user32, "SetWindowPos", return_value=1) as move,
+        ):
+            self.assertTrue(bridge.window_move_by(0, 0, "drag")["ok"])
+            self.assertTrue(bridge.window_move_by(10, -20, "drag")["ok"])
+            self.assertTrue(bridge.window_move_by(20, -10, "drag", True)["ok"])
+            self.assertEqual(read.call_count, 1)
+            self.assertEqual([call.args[2:4] for call in move.call_args_list], [(80, 40), (95, 10), (110, 25)])
+            self.assertIsNone(bridge._move_gesture)
+            for value in (float("nan"), float("inf"), 100001, "invalid"):
+                self.assertFalse(bridge.window_move_by(value, 0, "drag")["ok"])
+
+    def test_maximized_drag_restores_under_cursor_and_continues_at_same_dpi(self):
+        bridge = launcher.DesktopBridge("agent")
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 321
+        bridge.attach_window(unittest.mock.Mock(native=native), None)
+        def rect(_handle, value):
+            value._obj.left, value._obj.top = 0, 0
+            value._obj.right, value._obj.bottom = 1920, 1080
+            return 1
+
+        def cursor(value):
+            value._obj.x, value._obj.y = 690, 90
+            return 1
+
+        def placement(_handle, value):
+            value._obj.rcNormalPosition.left, value._obj.rcNormalPosition.top = 100, 80
+            value._obj.rcNormalPosition.right, value._obj.rcNormalPosition.bottom = 1300, 880
+            return 1
+
+        with (
+            patch.object(launcher.ctypes.windll.user32, "IsZoomed", side_effect=[1, 1, 1, 1, 0, 0]),
+            patch.object(launcher.ctypes.windll.user32, "GetWindowRect", side_effect=rect),
+            patch.object(launcher.ctypes.windll.user32, "GetCursorPos", side_effect=cursor),
+            patch.object(launcher.ctypes.windll.user32, "GetWindowPlacement", side_effect=placement),
+            patch.object(launcher.ctypes.windll.user32, "GetDpiForWindow", return_value=144),
+            patch.object(launcher.ctypes.windll.user32, "ShowWindow") as restore,
+            patch.object(launcher.ctypes.windll.user32, "SetWindowPos", return_value=1) as move,
+        ):
+            self.assertEqual(bridge.window_move_by(0, 0, "max"), {"ok": True, "maximized": True})
+            bridge.window_move_by(2, 3, "max")
+            bridge.window_move_by(2, 3, "max", True)
+            restore.assert_not_called()
+            move.assert_not_called()
+            self.assertTrue(bridge.window_move_by(60, 40, "max")["ok"])
+            restore.assert_called_once_with(321, 9)
+            move.assert_called_with(321, 0, 315, 60, 1200, 800, 0x14)
+            self.assertTrue(bridge.window_move_by(80, 60, "max")["ok"])
+            move.assert_called_with(321, 0, 345, 90, 0, 0, 0x15)
+            bridge.window_move_by(80, 60, "max", True)
+            self.assertIsNone(bridge._move_gesture)
+
+    def test_maximized_drag_read_failure_does_not_restore_or_move(self):
+        bridge = launcher.DesktopBridge("agent")
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 321
+        bridge.attach_window(unittest.mock.Mock(native=native), None)
+        with (
+            patch.object(launcher.ctypes.windll.user32, "IsZoomed", return_value=1),
+            patch.object(launcher.ctypes.windll.user32, "GetWindowRect", return_value=0),
+            patch.object(launcher.ctypes.windll.user32, "ShowWindow") as restore,
+            patch.object(launcher.ctypes.windll.user32, "SetWindowPos") as move,
+        ):
+            self.assertFalse(bridge.window_move_by(10, 20, "max")["ok"])
+            restore.assert_not_called()
+            move.assert_not_called()
+
+    def test_maximized_quick_drag_restores_even_when_only_final_offset_arrives(self):
+        bridge = launcher.DesktopBridge("agent")
+        native = unittest.mock.Mock()
+        native.Handle.ToInt64.return_value = 321
+        bridge.attach_window(unittest.mock.Mock(native=native), None)
+        bridge._restore_bounds = (100, 80, 1200, 800)
+        def rect(_handle, value):
+            value._obj.left, value._obj.top = 0, 0
+            value._obj.right, value._obj.bottom = 1920, 1080
+            return 1
+        def cursor(value):
+            value._obj.x, value._obj.y = 660, 80
+            return 1
+        with (
+            patch.object(launcher.ctypes.windll.user32, "IsZoomed", return_value=1),
+            patch.object(launcher.ctypes.windll.user32, "GetWindowRect", side_effect=rect),
+            patch.object(launcher.ctypes.windll.user32, "GetCursorPos", side_effect=cursor),
+            patch.object(launcher.ctypes.windll.user32, "GetWindowPlacement", return_value=1),
+            patch.object(launcher.ctypes.windll.user32, "GetDpiForWindow", return_value=96),
+            patch.object(launcher.ctypes.windll.user32, "ShowWindow") as restore,
+            patch.object(launcher.ctypes.windll.user32, "SetWindowPos", return_value=1) as move,
+        ):
+            self.assertTrue(bridge.window_move_by(60, 40, "quick", True)["ok"])
+            restore.assert_called_once_with(321, 9)
+            move.assert_called_once_with(321, 0, 285, 40, 1200, 800, 0x14)
+            self.assertIsNone(bridge._move_gesture)
+            self.assertIsNone(bridge._restore_bounds)
 
     def test_desktop_bridge_imports_selected_live2d_directory(self):
         bridge = launcher.DesktopBridge()

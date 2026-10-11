@@ -128,6 +128,12 @@ def _job_public(row: object | None) -> dict[str, Any] | None:
     item["spec"] = spec if isinstance(spec, dict) else {}
     item["preset_snapshot"] = snapshot if isinstance(snapshot, dict) else {}
     item["outputs"] = outputs
+    from .creation_provenance import owner
+    provenance = owner(item['id'])
+    item['task_id'] = provenance['task_id']
+    item['provenance_status'] = provenance['provenance_status']
+    for output in outputs:
+        output['task_id'] = item['task_id']
     item["progress"] = round(max(0.0, min(1.0, float(item.get("progress") or 0))), 4)
     item["elapsed_seconds"] = _job_elapsed_seconds(item)
     if str(item.get("backend") or "") == "comfyui":
@@ -170,6 +176,9 @@ def workflow_source_file(job_id: str) -> tuple[Path, str]:
     if row is None or str(row.get("backend") or "") != "comfyui":
         raise ValueError("鎵句笉鍒颁娇鐢ㄦ湰鍦板伐浣滄祦鐨勫垱浣滀换鍔°€?")
     definition = require_workflow(str(row.get("workflow_id") or ""), str(row.get("media_type") or ""), include_disabled=True)
+    archived = settings.creation_output_dir / job_id / "workflow-source.json"
+    if archived.is_file() and archived.resolve().is_relative_to(settings.creation_output_dir.resolve()):
+        return archived, definition.filename
     path = workflow_path(_require_comfy_root(), definition)
     if not path.is_file():
         raise ValueError("宸ヤ綔娴佹枃浠跺凡涓嶅彲鐢ㄣ€?")
@@ -492,7 +501,15 @@ def create_job(
     conversation_id: str = "",
     force_confirmation: bool = False,
     parent_job_id: str = "",
+    task_id: str = "",
+    run_id: str = "",
+    source_message_id: int = 0,
 ) -> tuple[dict[str, Any], bool]:
+    from . import creation_provenance as provenance
+    provenance.initialize()
+    if parent_job_id and not task_id:
+        task_id = provenance.owner(parent_job_id)['task_id']
+    provenance.validate(task_id, conversation_id, run_id)
     spec, snapshot = _effective_spec(payload)
     backend = str(spec.get("backend") or "auto")
     if backend == "auto":
@@ -503,6 +520,12 @@ def create_job(
         workflow = require_workflow(workflow_id, str(spec["media_type"]))
         workflow_id = workflow.id
         spec["workflow_id"] = workflow.id
+        references = spec.get("reference_asset_ids") or []
+        limit = workflow.max_reference_images or (1 if workflow.requires_reference or workflow.custom else 0)
+        if workflow.requires_reference and not references:
+            raise ValueError("此工作流需要一张参考图，请先添加图片或选择已有生成结果。")
+        if references and len(references) > limit:
+            raise ValueError(f"{workflow.label} 支持 {limit} 张参考图，请选择支持参考图的工作流。")
     elif spec["media_type"] != "image":
         raise ValueError("远程中转站当前只支持图片生成。")
     if backend == "remote_api":
@@ -513,6 +536,7 @@ def create_job(
     with db.get_conn() as conn:
         existing = conn.execute("SELECT * FROM creation_jobs WHERE idempotency_key = ?", (key,)).fetchone()
     if existing is not None:
+        provenance.validate_reuse(existing, conversation_id, task_id)
         return _job_public(existing) or {}, False
     needs_confirmation = bool(
         force_confirmation
@@ -534,9 +558,11 @@ def create_job(
             # A double click or concurrent retry request must reuse the same attempt.
             child = conn.execute("SELECT * FROM creation_jobs WHERE parent_job_id=? AND status!='cancelled' ORDER BY created_at DESC,rowid DESC LIMIT 1", (parent_job_id,)).fetchone()
             if child is not None:
+                provenance.validate_reuse(child, conversation_id, task_id)
                 return _job_public(child) or {}, False
         existing = conn.execute("SELECT * FROM creation_jobs WHERE idempotency_key=?", (key,)).fetchone()
         if existing is not None:
+            provenance.validate_reuse(existing, conversation_id, task_id)
             return _job_public(existing) or {}, False
         reserve_slot(conn, conversation_id)
         conn.execute(
@@ -557,6 +583,7 @@ def create_job(
                 timestamp, timestamp,
             ),
         )
+        provenance.bind(conn, job_id, task_id, run_id, source_message_id)
         if parent_job_id:
             from .agent_task_service import attach_retry
             attach_retry(conn, parent_job_id, job_id)
@@ -882,6 +909,7 @@ async def start_comfyui(*, wait_seconds: float = 8.0) -> dict[str, Any]:
             _comfyui_start_process = None
 
         root, python_executable, host, port = _comfyui_launch_target()
+        from .creation_custom import launch_options
         log_dir = (settings.data_dir / "logs").resolve()
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "comfyui-startup.log"
@@ -893,6 +921,7 @@ async def start_comfyui(*, wait_seconds: float = 8.0) -> dict[str, Any]:
             "--port",
             str(port),
             "--disable-auto-launch",
+            *launch_options(root, python_executable),
         ]
         log_stream = log_path.open("a", encoding="utf-8")
         try:
@@ -980,7 +1009,7 @@ async def comfyui_health(*, include_nodes: bool = False) -> dict[str, Any]:
 
 
 async def comfyui_preflight(workflow_id: str = "") -> dict[str, Any]:
-    """Check the two approved workflows against the running ComfyUI install.
+    """Check registered workflows against the running ComfyUI install.
 
     This is intentionally separate from job creation: opening the creation
     page must explain missing models/custom nodes before a user spends time on
@@ -989,7 +1018,7 @@ async def comfyui_preflight(workflow_id: str = "") -> dict[str, Any]:
     """
     clean_id = str(workflow_id or "").strip()
     from .creation_custom import definitions as custom_definitions
-    definitions = [*WORKFLOWS.values(), *custom_definitions()] if not clean_id else [require_workflow(clean_id)]
+    definitions = [*WORKFLOWS.values(), *custom_definitions()] if not clean_id else [require_workflow(clean_id, include_disabled=True)]
     try:
         root = _require_comfy_root()
     except ValueError as exc:
@@ -1010,6 +1039,8 @@ async def comfyui_preflight(workflow_id: str = "") -> dict[str, Any]:
     reports = [inspect_workflow(root, item, object_info=object_info) for item in definitions]
     if fetch_error:
         for report in reports:
+            if report["status"] == "pending_review":
+                continue
             report["status"] = "comfyui_unavailable"
             report.setdefault("errors", []).append(fetch_error)
     ok = bool(object_info is not None and reports and all(item.get("status") == "ready" for item in reports))
@@ -1019,9 +1050,8 @@ async def comfyui_preflight(workflow_id: str = "") -> dict[str, Any]:
         "comfyui": health,
         "workflows": reports,
     }
-async def bootstrap() -> dict[str, Any]:
-    from .creation_custom import default_ids
-    health = await comfyui_health()
+def available_workflows() -> list[dict[str, Any]]:
+    """A file-only catalog for the composer; no health probe or job history."""
     # ``workflow_catalog`` only needs to inspect files to report availability.
     # An invalid configured installation must not expose arbitrary directory
     # contents while rendering the built-in workflow availability.
@@ -1029,9 +1059,15 @@ async def bootstrap() -> dict[str, Any]:
         catalog_root = _require_comfy_root()
     except ValueError:
         catalog_root = Path(r"D:\AI\__mio_invalid_comfyui_root__")
+    return workflow_catalog(catalog_root)
+
+
+async def bootstrap() -> dict[str, Any]:
+    from .creation_custom import default_ids
+    health = await comfyui_health()
     return {
         "comfyui": health,
-        "workflows": workflow_catalog(catalog_root),
+        "workflows": available_workflows(),
         "presets": list_presets(),
         "assets": list_assets(),
         "jobs": list_jobs(),
@@ -1071,6 +1107,15 @@ async def _object_info(client: httpx.AsyncClient) -> dict[str, Any]:
     return payload
 
 
+def _comfy_output_targets(prompt: Mapping[str, Any], media_type: str) -> list[str]:
+    output_types = {"SaveVideo", "VHS_VideoCombine"} if media_type == "video" else {"SaveImage"}
+    targets = [str(node_id) for node_id, node in prompt.items()
+               if isinstance(node, Mapping) and node.get("class_type") in output_types]
+    if not targets:
+        raise ValueError("工作流没有与本任务匹配的文件输出节点；预览图不能作为生成成果。")
+    return targets
+
+
 async def _run_comfy_job(job_id: str, row: Mapping[str, Any]) -> None:
     if row.get("workflow_id") == "birefnet-portrait-png":
         from . import birefnet_service
@@ -1081,6 +1126,8 @@ async def _run_comfy_job(job_id: str, row: Mapping[str, Any]) -> None:
     if not isinstance(spec, dict):
         raise ValueError("任务参数已经损坏。")
     workflow = require_workflow(str(row.get("workflow_id") or ""), str(row.get("media_type") or ""), include_disabled=True)
+    if workflow.pending_reason and not row.get("prompt_id") and not spec.get("submission_pending"):
+        raise ValueError(workflow.pending_reason)
     client_id = str(row.get("client_id") or "") or f"mio_{uuid.uuid4().hex}"
     _update_job(job_id, status="cancel_requested" if row.get("status") == "cancel_requested" else "submitted", stage="validating", progress=0.01, client_id=client_id, started_at=str(row.get("started_at") or db.now_iso()))
     timeout_seconds = settings.creation_video_timeout_seconds if workflow.media_type == "video" else settings.creation_image_timeout_seconds
@@ -1130,21 +1177,34 @@ async def _run_comfy_job_inner(
                 return
             object_info = await _object_info(client)
             uploaded_reference = ""
+            uploaded_references = []
             reference_ids = list(spec.get("reference_asset_ids") or [])
-            if workflow.requires_reference:
+            if workflow.requires_reference or reference_ids:
                 if not reference_ids:
                     raise ValueError("此工作流需要先选择一张参考图。")
                 _update_job(job_id, stage="uploading_reference", progress=0.03)
-                uploaded_reference = await _upload_reference(client, job_id, str(reference_ids[0]))
+                for asset_id in reference_ids:
+                    uploaded_references.append(await _upload_reference(client, job_id, str(asset_id)))
+                uploaded_reference = uploaded_references[0]
+            source_bytes = workflow_path(root, workflow).read_bytes()
             prompt, effective_spec = build_workflow_prompt(
                 root, workflow, spec, job_id=job_id, object_info=object_info,
                 uploaded_reference=uploaded_reference,
+                uploaded_references=uploaded_references,
             )
+            if effective_spec.get("workflow_snapshot", {}).get("source_sha256") != hashlib.sha256(source_bytes).hexdigest():
+                raise ValueError("工作流文件在准备任务时发生变化，请检查后重新提交。")
+            output_targets = _comfy_output_targets(prompt, workflow.media_type)
+            snapshot_root = settings.creation_output_dir / job_id
+            snapshot_root.mkdir(parents=True, exist_ok=True)
+            (snapshot_root / "workflow-source.json").write_bytes(source_bytes)
+            (snapshot_root / "workflow-api.json").write_text(_json(prompt), encoding="utf-8")
             effective_spec["submission_pending"] = True
             _update_job(job_id, stage="submitting", progress=0.05, client_id=client_id, spec_json=_json(effective_spec))
             response = await client.post(
                 f"{settings.comfyui_base_url}/prompt",
-                json={"prompt": prompt, "client_id": client_id},
+                json={"prompt": prompt, "client_id": client_id,
+                      "partial_execution_targets": output_targets},
             )
             if response.status_code >= 400:
                 raise RuntimeError(f"ComfyUI 拒绝任务（HTTP {response.status_code}）：{response.text[:800]}")
@@ -1367,11 +1427,14 @@ def _validated_comfy_outputs(
 
 def archive_outputs(job_id: str, outputs: list[dict], source_root: Path) -> list[dict]:
     from . import artifact_service
+    from .creation_provenance import owner
     row = _get_job_row(job_id) or {}
+    task_id = owner(job_id)['task_id']
     for output in outputs:
         if not output.get("artifact_id"):
             artifact = artifact_service.import_file(Path(output["path"]), source_root=source_root,
                 producer="creation", expected_sha256=output["sha256"], job_id=job_id,
+                task_id=task_id,
                 conversation_id=str(row.get("conversation_id") or ""),
                 name=output.get("name", ""), mime_type=output.get("mime_type", ""))
             output["artifact_id"] = artifact["id"]

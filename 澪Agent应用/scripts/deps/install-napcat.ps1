@@ -34,11 +34,13 @@ try {
     if (-not (Test-NapCatShellReady)) {
         Write-DepsStatus -Stage "download" -Percent 15 -Message "正在下载 NapCat（约 50 MB，优先国内通道）"
         $urls = @(
-            "https://ghfast.top/https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.zip",
-            "https://gh-proxy.com/https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.zip",
-            "https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.zip"
+            "https://ghfast.top/https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.37/NapCat.Shell.zip",
+            "https://gh-proxy.com/https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.37/NapCat.Shell.zip",
+            "https://github.com/NapNeko/NapCatQQ/releases/download/v4.18.37/NapCat.Shell.zip"
         )
-        Invoke-Download -Urls $urls -Output $zipPath -Stage "download" -StartPercent 15 -EndPercent 44 -Label " NapCat"
+        # Official GitHub release asset size/digest, checked 2026-10-11.
+        Invoke-Download -Urls $urls -Output $zipPath -Stage "download" -StartPercent 15 -EndPercent 44 -Label " NapCat" -ExpectedSize 35880104 -ExpectedSha256 "db39b28192714f8f54b3dcdccb84f9898be409faebb05da6627995b998517859"
+        Assert-DepsZipArchive -Path $zipPath -RequiredFiles @("NapCatWinBootMain.exe", "NapCatWinBootHook.dll", "napcat.mjs", "qqnt.json")
         Write-DepsStatus -Stage "extract" -Percent 45 -Message "正在解压 NapCat"
         if (Test-Path -LiteralPath $stagingDir) { Remove-Item -LiteralPath $stagingDir -Recurse -Force }
         New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null

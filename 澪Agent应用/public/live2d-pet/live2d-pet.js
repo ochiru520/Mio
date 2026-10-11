@@ -69,6 +69,7 @@
   let sizeCommitTimer = null
   let passThroughFrame = null
   let interactiveState = null
+  let lastPointerPosition = { clientX: -10000, clientY: -10000 }
   let socket = null
   let socketRetry = 0
   let socketRetryTimer = null
@@ -816,6 +817,10 @@
     }
     root.classList.toggle('click-through-locked', Boolean(settings.live2d_click_through_locked))
     updateContextMenuLabels()
+    // Settings can arrive from the Agent page while the pointer is stationary.
+    // Recompute the native hit-test policy immediately so smart pass-through and
+    // the context menu reflect the new setting without waiting for mousemove.
+    if (electronRuntime) updateMousePassThrough(true)
     if (!settings.live2d_speech_bubble_enabled) hideSpeechBubble()
     const nextModel = selectedModelId()
     if (!model || previousModel !== nextModel || currentModelId !== nextModel) {
@@ -1683,6 +1688,9 @@
   }
 
   function updateMousePassThrough(force = false, event = null) {
+    if (event) {
+      lastPointerPosition = { clientX: event.clientX, clientY: event.clientY }
+    }
     if (clickThroughLocked()) {
       setInteractive(false)
       return
@@ -1695,8 +1703,8 @@
     passThroughFrame = window.requestAnimationFrame(() => {
       passThroughFrame = null
       const menuOpen = !contextMenu.hidden || !sizePanel.hidden
-      const x = Number(event?.clientX ?? -10000)
-      const y = Number(event?.clientY ?? -10000)
+      const x = Number(lastPointerPosition.clientX)
+      const y = Number(lastPointerPosition.clientY)
       setInteractive(menuOpen || Boolean(pointerDown) || pointHitsModel(x, y))
     })
   }

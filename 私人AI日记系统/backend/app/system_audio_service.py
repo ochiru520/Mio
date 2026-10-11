@@ -35,6 +35,7 @@ _speaker = ""
 _phase = "stopped"
 _desired_running = False
 _worker_engine = ""
+_transcription_only = False
 _quality_requests: dict[str, dict[str, Any]] = {}
 _quality_requested = 0
 _quality_completed = 0
@@ -209,6 +210,8 @@ def _reader() -> None:
                 continue
             event_type = str(payload.get("type") or "")
             with _lock:
+                if _process is not process:
+                    continue
                 _last_event_at = _now_iso()
                 if event_type == "ready":
                     _ready = True
@@ -293,11 +296,11 @@ def _reader() -> None:
                     _phase = "stopped"
 
 
-def start(config: dict[str, Any]) -> dict[str, Any]:
+def start(config: dict[str, Any], *, transcription_only: bool = False) -> dict[str, Any]:
     global _process, _reader_thread, _ready, _last_error, _model, _requested_model
     global _model_fallback_reason, _speaker, _phase, _desired_running
-    global _capture_stats, _capture_config, _worker_engine
-    if not bool(config.get("screen_audio_enabled", True)):
+    global _capture_stats, _capture_config, _worker_engine, _transcription_only
+    if not transcription_only and not bool(config.get("screen_audio_enabled", True)):
         stop()
         return status()
     requested_engine = _canonical_engine(config.get("asr_engine"))
@@ -320,6 +323,7 @@ def start(config: dict[str, Any]) -> dict[str, Any]:
             and (
                 (_worker_engine and _worker_engine != requested_engine)
                 or (_model and _model != requested_model)
+                or _transcription_only != transcription_only
             )
         )
         if _process is not None and _process.poll() is None and not restart_for_identity:
@@ -363,7 +367,7 @@ def start(config: dict[str, Any]) -> dict[str, Any]:
                     str(int(config.get("screen_audio_chunk_seconds") or 6)),
                     "--cache-dir",
                     str(cache),
-                ],
+                ] + (["--stdin-only"] if transcription_only else []),
                 cwd=str(settings.voice_training_dir),
                 env=env,
                 stdout=subprocess.PIPE,
@@ -386,6 +390,7 @@ def start(config: dict[str, Any]) -> dict[str, Any]:
         _requested_model = str(launch.get("requested_model_label") or requested_model)
         _model_fallback_reason = str(launch.get("fallback_reason") or "")[:300]
         _worker_engine = requested_engine
+        _transcription_only = transcription_only
         _speaker = ""
         _capture_stats = {
             "captured_blocks": 0,
@@ -522,6 +527,8 @@ def chat_context() -> str:
         )
     if not current["ready"]:
         return "【系统声音能力】系统声音监听正在加载，还没有准备好；此刻只能说正在加载。"
+    if not current["capture_loopback"]:
+        return "【系统声音能力】当前只在本地转写传入的音频，没有监听电脑扬声器；不要声称听到电脑播放内容。"
     transcript = recent_transcript(max_age_seconds=90)
     if transcript:
         return (
@@ -544,6 +551,7 @@ def status() -> dict[str, Any]:
             "desired_running": _desired_running,
             "running": running,
             "ready": _ready,
+            "capture_loopback": running and not _transcription_only,
             "phase": _phase,
             "engine": _engine,
             "requested_engine": _worker_engine,

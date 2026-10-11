@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, reactive, ref, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import {
   Activity,
   Archive,
@@ -24,19 +24,56 @@ import {
 } from '@lucide/vue'
 
 import MemoryEvidence from './MemoryEvidence.vue'
+import ReviewSources from './ReviewSources.vue'
+import DiaryVersionHistory from './DiaryVersionHistory.vue'
+import PendingThreadSources from './PendingThreadSources.vue'
 
+const props = defineProps({ threadFocus: { type: Object, default: null } })
 const context = inject('mio-records-page')
 if (!context) throw new Error('记录页上下文未初始化')
+onMounted(() => {
+  void context.loadMemoryHub({ quiet: true })
+  if (context.activeView !== 'memory') void context.loadDiaries()
+})
 const recordMode = ref(context.activeView === 'stats' ? 'growth' : 'daily')
 const dateRailExpanded = ref(true)
+const diaryPage = ref(1)
+const pendingDiaryDate = ref('')
+const diaryPageSize = 20
+const diaryPageCount = computed(() => Math.max(1, Math.ceil((context.diaries || []).length / diaryPageSize)))
+const pagedDiaries = computed(() => (context.diaries || []).slice((diaryPage.value - 1) * diaryPageSize, diaryPage.value * diaryPageSize))
+watch(() => context.diarySearch, () => { diaryPage.value = 1 })
+function focusDiaryPage(date) {
+  const index = (context.diaries || []).findIndex(item => item.date === date)
+  if (index >= 0) diaryPage.value = Math.floor(index / diaryPageSize) + 1
+  pendingDiaryDate.value = index < 0 ? date || '' : ''
+}
+watch(() => context.diaries, () => {
+  diaryPage.value = Math.min(diaryPage.value, diaryPageCount.value)
+  if (pendingDiaryDate.value) focusDiaryPage(pendingDiaryDate.value)
+})
+watch(() => context.selectedDiary?.date, focusDiaryPage, { immediate: true })
 const memoryView = ref('remembered')
+const memoryCenter = ref(null)
+watch(() => props.threadFocus, (thread) => {
+  if (thread) memoryView.value = thread.follow_up_after ? 'followup' : 'current'
+}, { immediate: true })
+watch([() => props.threadFocus?.id, () => context.memoryLoading], async () => {
+  if (!props.threadFocus || context.memoryLoading) return
+  await nextTick()
+  memoryCenter.value?.querySelector(`[data-thread-id="${Number(props.threadFocus.id)}"]`)
+    ?.scrollIntoView({ block: 'nearest' })
+}, { flush: 'post' })
 const diaryEditing = ref(false)
 const diaryDraft = ref({ markdown_content: '', daily_thirty_status: 'unknown', mood_tags: '' })
 const followUpResultDrafts = reactive({})
 
 watch(() => context.activeView, (view) => {
   if (view === 'stats') recordMode.value = 'growth'
-  else if (view === 'diaries' && recordMode.value === 'growth') recordMode.value = 'daily'
+  else if (view === 'diaries') {
+    if (recordMode.value === 'growth') recordMode.value = 'daily'
+    void context.loadDiaries()
+  }
 })
 
 watch(() => context.selectedDiary?.date, () => {
@@ -98,6 +135,7 @@ const activeMonthDiaries = computed(() => (context.selectedMonthlyReview?.source
 const memoryCategories = [
   ['identity', '关于我'], ['preference', '偏好与习惯'], ['relationship', '重要的人与关系'],
   ['experience', '经历'], ['project', '项目'], ['other', '其他'],
+  ['current_state', '近期状态'], ['plan', '计划与目标'],
 ]
 const groupedMemories = computed(() => memoryCategories.map(([id, label]) => ({
   id,
@@ -105,12 +143,15 @@ const groupedMemories = computed(() => memoryCategories.map(([id, label]) => ({
   items: (context.memoryData.structured || []).filter((item) => item.category === id || (id === 'identity' && item.category === 'person')),
 })).filter((group) => group.items.length))
 const pendingCandidates = computed(() => context.memoryData.structured_candidates || [])
+const sleepingMemories = computed(() => context.memoryData.structured_sleeping || [])
 const currentThreads = computed(() => (context.memoryData.threads || []).filter((item) => !item.follow_up_after))
 const followUpThreads = computed(() => (context.memoryData.threads || []).filter((item) => item.follow_up_after))
 const restorableMemoryHistory = computed(() => (context.memoryData.structured_history || [])
   .filter((item) => ['superseded', 'archived'].includes(item.status)))
 const recentFollowUpResults = computed(() => context.memoryData.follow_up_results || [])
 const diaryLifeSteps = computed(() => context.selectedDiary?.life_loop?.steps || [])
+const diaryReview = computed(() => (context.dailyReviews || []).find(item => item.date === context.selectedDiary?.date))
+function openSourceDiary(date) { chooseRecordMode('daily'); context.openDiary(date) }
 
 function beginFollowUpResult(thread) {
   followUpResultDrafts[thread.id] = {
@@ -140,6 +181,11 @@ function addNaturalMemory() {
   context.newStructuredMemory.layer = 'L0'
   context.newStructuredMemory.memory_key = ''
   context.addStructuredMemory()
+}
+
+async function addThread() {
+  const hasDate = Boolean(context.newThreadFollowUp)
+  if (await context.addMemoryThread()) memoryView.value = hasDate ? 'followup' : 'current'
 }
 
 function memoryTimeLabel(memory) {
@@ -183,6 +229,10 @@ async function saveDiaryEdit() {
       <button type="button" :class="{ active: recordMode === 'growth' }" @click="chooseRecordMode('growth')"><ChartNoAxesCombined :size="16" />成长报告</button>
     </nav>
 
+    <div v-if="recordMode !== 'growth' && context.memoryError" class="records-load-error" role="alert">
+      <p>回顾读取失败：{{ context.memoryError }}</p><button type="button" :disabled="context.memoryLoading" @click="context.loadMemoryHub()">重新读取</button>
+    </div>
+
     <div v-if="recordMode === 'daily' && context.autoDiaryStatus" class="auto-diary-status" :class="{ error: context.autoDiaryStatus.result === 'error' }" role="status">
       <div><strong>{{ context.autoDiaryStatusLabel }}</strong>
         <p v-if="context.autoDiaryStatus.error">{{ context.autoDiaryStatus.error }}</p>
@@ -199,11 +249,16 @@ async function saveDiaryEdit() {
         <header><span>全部日记</span><button type="button" :title="dateRailExpanded ? '收起日期栏' : '展开日期栏'" @click="dateRailExpanded = !dateRailExpanded"><component :is="dateRailExpanded ? PanelLeftClose : PanelLeftOpen" :size="15" /></button></header>
         <label v-if="dateRailExpanded" class="record-search"><Search :size="14" /><input v-model="context.diarySearch" type="search" placeholder="搜索日记" @input="context.scheduleDiarySearch" /></label>
         <div class="record-date-list">
-          <button v-for="diary in context.diaries" :key="diary.date" type="button" :class="{ active: context.selectedDiary?.date === diary.date }" @click="context.openDiary(diary.date)">
+          <button v-for="diary in pagedDiaries" :key="diary.date" type="button" :class="{ active: context.selectedDiary?.date === diary.date }" @click="context.openDiary(diary.date)">
             <time>{{ dateRailExpanded ? diary.date : diary.date.slice(5) }}</time>
             <span v-if="dateRailExpanded"><strong>{{ diaryListTitle(diary) }}</strong><small>{{ diaryListDetail(diary) }}</small></span>
           </button>
         </div>
+        <nav v-if="diaryPageCount > 1" aria-label="日记分页" class="record-pagination">
+          <button type="button" aria-label="上一页日记" :disabled="diaryPage === 1" @click="diaryPage--"><ChevronLeft :size="15" /></button>
+          <small>{{ diaryPage }} / {{ diaryPageCount }}</small>
+          <button type="button" aria-label="下一页日记" :disabled="diaryPage === diaryPageCount" @click="diaryPage++"><ChevronRight :size="15" /></button>
+        </nav>
       </aside>
       <article v-if="context.selectedDiary" class="diary-reader integrated-diary-reader">
         <header><div><span>{{ context.selectedDiary.date }}</span><h2>{{ context.selectedDiary.title }}</h2></div><div class="reader-actions"><a class="icon-button" :href="`/diaries/${context.selectedDiary.date}/download`" title="下载 Markdown"><Download :size="17" /></a><button v-if="!diaryEditing" class="icon-button" type="button" title="编辑日记" @click="startDiaryEdit"><FilePenLine :size="17" /></button><button v-if="diaryEditing" class="icon-button" type="button" title="取消编辑" @click="diaryEditing = false"><X :size="17" /></button><button v-if="diaryEditing" class="primary-button" type="button" :disabled="Boolean(context.diaryBusy) || !diaryDraft.markdown_content.trim()" @click="saveDiaryEdit"><Save :size="16" />保存</button><button v-else class="primary-button" type="button" :disabled="Boolean(context.diaryBusy) || Boolean(context.selectedDiary.confirmed_at)" @click="context.confirmDiary"><Check :size="16" />{{ context.selectedDiary.confirmed_at ? '已确认' : '确认日记' }}</button></div></header>
@@ -219,45 +274,61 @@ async function saveDiaryEdit() {
           <textarea v-model="diaryDraft.markdown_content" aria-label="日记 Markdown 正文" spellcheck="false" />
         </form>
         <div v-else class="markdown-body" v-html="context.renderedMarkdown(context.selectedDiary.markdown_content)" />
+        <DiaryVersionHistory v-if="!diaryEditing" :diary="context.selectedDiary" :confirm="context.showAppConfirm" @restored="context.openDiary" />
+        <section v-if="!diaryEditing && !context.memoryError" class="daily-review-section"><header><h3>当天回顾</h3><button type="button" class="secondary-button" :disabled="Boolean(context.reviewBusy)" @click="context.generateDailyReview(context.selectedDiary.date)">{{ diaryReview ? '重新生成回顾' : '生成当天回顾' }}</button></header><template v-if="diaryReview"><ReviewSources :review="diaryReview" @open-diary="openSourceDiary" /><div class="markdown-body" v-html="context.renderedMarkdown(diaryReview.markdown_content)" /></template></section>
       </article>
       <div v-else class="reader-empty compact-reader-empty"><BookOpen :size="30" /><strong>还没有可查看的日记</strong><span>日记会由自动流程或对话指令生成</span></div>
     </div>
 
-    <div v-else-if="recordMode === 'weekly'" :class="['period-record-layout', { collapsed: !dateRailExpanded }]">
+    <div v-else-if="recordMode === 'weekly' && !context.memoryError" :class="['period-record-layout', { collapsed: !dateRailExpanded }]">
       <aside class="period-record-rail">
         <header><strong v-if="dateRailExpanded">周记</strong><span v-if="dateRailExpanded">{{ context.weeklyReviewItems.length }} 周</span><button type="button" :title="dateRailExpanded ? '收起周记栏' : '展开周记栏'" @click="dateRailExpanded = !dateRailExpanded"><component :is="dateRailExpanded ? PanelLeftClose : PanelLeftOpen" :size="15" /></button></header>
         <button v-for="item in context.weeklyReviewItems" :key="item.week_start" type="button" :class="{ active: context.selectedWeeklyStart === item.week_start }" @click="context.selectedWeeklyStart = item.week_start"><time :datetime="item.week_start"><b v-if="dateRailExpanded" class="period-date-full">{{ item.week_start }} — {{ item.week_end.slice(5) }}</b><b :class="{ 'period-date-short': dateRailExpanded }">{{ item.week_start.slice(5) }}</b></time><span v-if="dateRailExpanded">{{ item.markdown_content ? excerpt(item.markdown_content) : '这一周还没有形成周记' }}</span></button>
       </aside>
-      <article v-if="context.selectedWeeklyReview?.markdown_content" class="period-reader"><header><div><span>{{ context.selectedWeeklyReview.week_start }} 至 {{ context.selectedWeeklyReview.week_end }}</span><h2>这一周的记录</h2></div><button class="secondary-button" type="button" :disabled="Boolean(context.reviewBusy)" @click="context.generateWeekly()"><RefreshCw :class="{ spin: context.reviewBusy === 'weekly' }" :size="15" />重新生成</button></header><div class="markdown-body" v-html="context.renderedMarkdown(context.selectedWeeklyReview.markdown_content)" /></article>
+      <article v-if="context.selectedWeeklyReview?.markdown_content" class="period-reader"><header><div><span>{{ context.selectedWeeklyReview.week_start }} 至 {{ context.selectedWeeklyReview.week_end }}</span><h2>这一周的记录</h2></div><button class="secondary-button" type="button" :disabled="Boolean(context.reviewBusy)" @click="context.generateWeekly()"><RefreshCw :class="{ spin: context.reviewBusy === 'weekly' }" :size="15" />重新生成</button></header><ReviewSources :review="context.selectedWeeklyReview" @open-diary="openSourceDiary" /><div class="markdown-body" v-html="context.renderedMarkdown(context.selectedWeeklyReview.markdown_content)" /></article>
       <div v-else class="reader-empty compact-reader-empty"><CalendarDays :size="30" /><strong>这一周还没有周记</strong><button class="primary-button" type="button" :disabled="Boolean(context.reviewBusy)" @click="context.generateWeekly()"><RefreshCw :class="{ spin: context.reviewBusy === 'weekly' }" :size="15" />生成周记</button></div>
     </div>
 
-    <div v-else-if="recordMode === 'monthly'" :class="['period-record-layout', { collapsed: !dateRailExpanded }]">
+    <div v-else-if="recordMode === 'monthly' && !context.memoryError" :class="['period-record-layout', { collapsed: !dateRailExpanded }]">
       <aside class="period-record-rail">
         <header><strong v-if="dateRailExpanded">月记</strong><span v-if="dateRailExpanded">{{ context.monthlyReviewItems.length }} 月</span><button type="button" :title="dateRailExpanded ? '收起月记栏' : '展开月记栏'" @click="dateRailExpanded = !dateRailExpanded"><component :is="dateRailExpanded ? PanelLeftClose : PanelLeftOpen" :size="15" /></button></header>
         <button v-for="item in context.monthlyReviewItems" :key="item.month" type="button" :class="{ active: context.selectedMonthlyMonth === item.month }" @click="context.selectedMonthlyMonth = item.month"><time>{{ dateRailExpanded ? item.month : item.month.slice(5) }}</time><span v-if="dateRailExpanded">{{ item.markdown_content ? excerpt(item.markdown_content) : `${item.diary_count || 0} 篇日记，尚未总结` }}</span></button>
       </aside>
-      <article v-if="context.selectedMonthlyReview?.markdown_content" class="period-reader monthly-reader"><header><div><span>{{ context.selectedMonthlyReview.month_start }} 至 {{ context.selectedMonthlyReview.month_end }}</span><h2>{{ context.selectedMonthlyReview.month }} 月记</h2></div><button class="secondary-button" type="button" :disabled="Boolean(context.reviewBusy)" @click="context.generateMonthly()"><RefreshCw :class="{ spin: context.reviewBusy === 'monthly' }" :size="15" />重新生成</button></header><div class="markdown-body" v-html="context.renderedMarkdown(context.selectedMonthlyReview.markdown_content)" /><details v-if="activeMonthDiaries.length" class="monthly-source-diaries"><summary>查看本月 {{ activeMonthDiaries.length }} 篇日记</summary><div class="monthly-diary-list"><button v-for="diary in activeMonthDiaries" :key="diary.date" type="button" @click="chooseRecordMode('daily'); context.openDiary(diary.date)"><time>{{ diary.date }}</time><strong>{{ diary.title || `${diary.date} 的日记` }}</strong><span>{{ context.statusLabel(diary.daily_thirty_status) }}</span></button></div></details></article>
+      <article v-if="context.selectedMonthlyReview?.markdown_content" class="period-reader monthly-reader"><header><div><span>{{ context.selectedMonthlyReview.month_start }} 至 {{ context.selectedMonthlyReview.month_end }}</span><h2>{{ context.selectedMonthlyReview.month }} 月记</h2></div><button class="secondary-button" type="button" :disabled="Boolean(context.reviewBusy)" @click="context.generateMonthly()"><RefreshCw :class="{ spin: context.reviewBusy === 'monthly' }" :size="15" />重新生成</button></header><ReviewSources :review="context.selectedMonthlyReview" @open-diary="openSourceDiary" /><div class="markdown-body" v-html="context.renderedMarkdown(context.selectedMonthlyReview.markdown_content)" /><details v-if="activeMonthDiaries.length" class="monthly-source-diaries"><summary>查看本月 {{ activeMonthDiaries.length }} 篇日记</summary><div class="monthly-diary-list"><button v-for="diary in activeMonthDiaries" :key="diary.date" type="button" @click="chooseRecordMode('daily'); context.openDiary(diary.date)"><time>{{ diary.date }}</time><strong>{{ diary.title || `${diary.date} 的日记` }}</strong><span>{{ context.statusLabel(diary.daily_thirty_status) }}</span></button></div></details></article>
       <div v-else class="reader-empty compact-reader-empty"><History :size="30" /><strong>这个月还没有形成总结</strong><span>{{ activeMonthDiaries.length ? `将根据 ${activeMonthDiaries.length} 篇日记总结整个月` : '这个月还没有日记' }}</span><button v-if="activeMonthDiaries.length" class="primary-button" type="button" :disabled="Boolean(context.reviewBusy)" @click="context.generateMonthly()"><RefreshCw :class="{ spin: context.reviewBusy === 'monthly' }" :size="15" />生成月记</button></div>
     </div>
 
-    <section v-else class="growth-report-page">
-      <header><div><ChartNoAxesCombined :size="21" /><span><h2>成长报告</h2><p>从日记、今日成长和情绪里看看最近的变化</p></span></div><button type="button" title="刷新" @click="context.loadStats(context.statsData.year, context.statsData.month)"><RefreshCw :class="{ spin: context.statsLoading }" :size="16" /></button></header>
+    <section v-else-if="recordMode === 'growth'" class="growth-report-page">
+      <header><div><ChartNoAxesCombined :size="21" /><span><h2>成长报告</h2><p>从日记、今日成长和情绪里看看最近的变化</p></span></div><button type="button" title="刷新" :disabled="context.statsLoading" @click="context.loadStats(context.statsData.year, context.statsData.month)"><RefreshCw :class="{ spin: context.statsLoading }" :size="16" /></button></header>
+      <p v-if="context.statsLoading" role="status">正在读取成长记录…</p>
+      <div v-else-if="context.statsError"><p role="alert">成长记录读取失败：{{ context.statsError }}</p><button type="button" @click="context.loadStats(context.statsData.year, context.statsData.month)">重新读取</button></div>
+      <template v-else-if="context.statsLoaded">
       <div class="growth-metrics"><article><span>日记</span><strong>{{ context.statsSummary.total || 0 }}<small>篇</small></strong></article><article><span>成长完成率</span><strong>{{ ((context.statsSummary.completion_rate || 0) * 100).toFixed(1) }}<small>%</small></strong></article><article><span>当前连续</span><strong>{{ context.statsSummary.current_streak || 0 }}<small>天</small></strong></article><article><span>最长连续</span><strong>{{ context.statsSummary.longest_streak || 0 }}<small>天</small></strong></article></div>
-      <div class="growth-dashboard"><section class="stats-calendar-panel"><header><div><CalendarDays :size="18" /><h3>{{ context.statsMonthLabel }}</h3></div><div><button type="button" @click="context.changeStatsMonth(-1)"><ChevronLeft :size="16" /></button><button type="button" @click="context.changeStatsMonth(1)"><ChevronRight :size="16" /></button></div></header><div class="stats-weekdays"><span v-for="day in ['一','二','三','四','五','六','日']" :key="day">{{ day }}</span></div><div class="stats-calendar-grid"><span v-for="cell in context.statsCalendarCells" :key="cell.key" :class="{ blank: cell.blank }"><button v-if="!cell.blank" type="button" :class="[`status-${cell.status}`, { today: cell.isToday }]" :disabled="!cell.hasDiary" @click="context.openStatsDiary(cell)">{{ cell.day }}</button></span></div></section><section class="growth-summary-panel"><h3>近 30 天情绪</h3><div v-if="context.statsMoodPoints.length" class="growth-mood-bars"><i v-for="point in context.statsMoodPoints" :key="point.date" :style="{ height: `${20 + point.score * 14}%` }" :title="`${point.date} · ${point.score}/5`" /></div><p v-else>还没有足够的情绪记录</p></section></div>
+      <div class="growth-dashboard"><section class="stats-calendar-panel"><header><div><CalendarDays :size="18" /><h3>{{ context.statsMonthLabel }}</h3></div><div><button type="button" :disabled="context.statsLoading" aria-label="上个月" @click="context.changeStatsMonth(-1)"><ChevronLeft :size="16" /></button><button type="button" :disabled="context.statsLoading" aria-label="下个月" @click="context.changeStatsMonth(1)"><ChevronRight :size="16" /></button></div></header><div class="stats-weekdays"><span v-for="day in ['一','二','三','四','五','六','日']" :key="day">{{ day }}</span></div><div class="stats-calendar-grid"><span v-for="cell in context.statsCalendarCells" :key="cell.key" :class="{ blank: cell.blank }"><button v-if="!cell.blank" type="button" :class="[`status-${cell.status}`, { today: cell.isToday }]" :disabled="!cell.hasDiary" @click="context.openStatsDiary(cell)">{{ cell.day }}</button></span></div></section><section class="growth-summary-panel"><h3>近 30 天情绪</h3><div v-if="context.statsMoodPoints.length" class="growth-mood-bars"><i v-for="point in context.statsMoodPoints" :key="point.date" :style="{ height: `${20 + point.score * 14}%` }" :title="`${point.date} · ${point.score}/5`" /></div><p v-else>还没有足够的情绪记录</p></section></div>
+      </template>
     </section>
   </section>
 
-  <section v-else class="memory-center">
+  <section v-else ref="memoryCenter" class="memory-center">
     <header class="memory-center-heading"><div><Archive :size="21" /><span><h2>{{ context.mioDisplayName }}记住的你</h2><p>这里保存{{ context.mioDisplayName }}真正会在对话里使用的长期记忆</p></span></div><button type="button" title="刷新" @click="context.loadMemoryHub()"><RefreshCw :class="{ spin: context.memoryLoading }" :size="16" /></button></header>
     <nav class="memory-view-tabs"><button type="button" :class="{ active: memoryView === 'remembered' }" @click="memoryView = 'remembered'">记住的事</button><button type="button" :class="{ active: memoryView === 'current' }" @click="memoryView = 'current'">正在进行</button><button type="button" :class="{ active: memoryView === 'followup' }" @click="memoryView = 'followup'">约定与跟进</button></nav>
+    <form v-if="memoryView !== 'remembered'" class="memory-thread-create" @submit.prevent="addThread">
+      <label>事项内容<input v-model="context.newThreadContent" required maxlength="500" :disabled="Boolean(context.memoryBusy)" placeholder="记录正在做的事或约定" /></label>
+      <label>{{ memoryView === 'followup' ? '跟进时间' : '跟进时间（可选）' }}<input v-model="context.newThreadFollowUp" type="datetime-local" :required="memoryView === 'followup'" :disabled="Boolean(context.memoryBusy)" /></label>
+      <button type="submit" :disabled="Boolean(context.memoryBusy) || !context.newThreadContent.trim()"><Plus :size="15" />添加事项</button>
+    </form>
     <div v-if="context.memoryLoading && !context.memoryLoaded" class="center-state"><RefreshCw class="spin" :size="22" /><span>正在读取记忆</span></div>
+    <div v-else-if="context.memoryError" class="reader-empty compact-reader-empty"><p role="alert">记忆读取失败：{{ context.memoryError }}</p><button type="button" @click="context.loadMemoryHub()">重新读取</button></div>
     <template v-else-if="memoryView === 'remembered'">
       <section class="memory-understanding"><span>{{ context.mioDisplayName }}现在怎样认识你</span><p v-if="context.memoryData.structured?.length">{{ context.memoryData.structured.slice(0, 5).map((item) => item.content).join('；') }}</p><p v-else>还没有形成稳定的长期认识</p></section>
       <form class="memory-natural-add" @submit.prevent="addNaturalMemory"><select v-model="context.newStructuredMemory.category"><option v-for="item in memoryCategories" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select><input v-model="context.newStructuredMemory.content" :placeholder="`用一句自然的话告诉${context.mioDisplayName}要记住什么`" /><button type="submit" :disabled="Boolean(context.memoryBusy)"><Plus :size="15" />记住</button></form>
-      <section v-if="pendingCandidates.length" class="memory-candidate-panel"><header><strong>等待你确认</strong><span>{{ pendingCandidates.length }} 条</span></header><article v-for="memory in pendingCandidates" :key="memory.id"><p>{{ memory.content }}</p><div><button type="button" @click="context.rejectMemoryCandidate(memory)">忽略</button><button type="button" class="primary-button" @click="context.confirmMemoryCandidate(memory)">确认记住</button></div></article></section>
-      <div v-if="groupedMemories.length" class="memory-category-grid"><section v-for="group in groupedMemories" :key="group.id"><header><strong>{{ group.label }}</strong><span>{{ group.items.length }}</span></header><article v-for="memory in group.items" :key="memory.id"><p>{{ memory.content }}</p><small>{{ memoryTimeLabel(memory) }}</small><div class="memory-item-actions"><MemoryEvidence :memory="memory" /><button type="button" @click="context.editStructuredMemory(memory)">编辑</button><button type="button" title="忘记" @click="context.archiveStructuredMemory(memory)"><Trash2 :size="14" /></button></div></article></section></div>
+      <section v-if="pendingCandidates.length" class="memory-candidate-panel"><header><strong>等待你确认</strong><span>{{ pendingCandidates.length }} 条</span></header><article v-for="memory in pendingCandidates" :key="memory.id"><p>{{ memory.content }}</p><div><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.rejectMemoryCandidate(memory)">忽略</button><button type="button" class="primary-button" :disabled="Boolean(context.memoryBusy)" @click="context.confirmMemoryCandidate(memory)">确认记住</button></div></article></section>
+      <div v-if="groupedMemories.length" class="memory-category-grid"><section v-for="group in groupedMemories" :key="group.id"><header><strong>{{ group.label }}</strong><span>{{ group.items.length }}</span></header><article v-for="memory in group.items" :key="memory.id"><p>{{ memory.content }}</p><small>{{ memoryTimeLabel(memory) }}</small><div class="memory-item-actions"><MemoryEvidence :memory="memory" /><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.editStructuredMemory(memory)">编辑</button><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.sleepStructuredMemory(memory)">暂时搁置</button><button type="button" title="忘记" :disabled="Boolean(context.memoryBusy)" @click="context.archiveStructuredMemory(memory)"><Trash2 :size="14" /></button></div></article></section></div>
       <div v-else class="reader-empty compact-reader-empty"><Archive :size="30" /><strong>{{ context.mioDisplayName }}还没有形成长期记忆</strong></div>
+      <details v-if="sleepingMemories.length" class="memory-version-history memory-sleeping-history">
+        <summary><Archive :size="15" />暂时搁置 <span>{{ sleepingMemories.length }}</span></summary>
+        <div><article v-for="memory in sleepingMemories" :key="memory.id"><span><b>{{ context.memoryCategoryLabel(memory.category) }}</b><small>暂不用于后续对话</small></span><p>{{ memory.content }}</p><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.wakeStructuredMemory(memory)"><RotateCcw :size="14" />恢复使用</button></article></div>
+      </details>
       <details v-if="restorableMemoryHistory.length" class="memory-version-history">
         <summary><History :size="15" />历史版本 <span>{{ restorableMemoryHistory.length }}</span></summary>
         <div>
@@ -269,12 +340,12 @@ async function saveDiaryEdit() {
         </div>
       </details>
     </template>
-    <section v-else-if="memoryView === 'current'" class="memory-thread-list"><article v-for="thread in currentThreads" :key="thread.id"><textarea v-model="thread.content" rows="2" /><footer><span>{{ context.formatShortTime(thread.created_at) }}</span><div><button type="button" @click="context.deleteMemoryThread(thread.id)">删除</button><button type="button" @click="context.saveMemoryThread(thread)">保存</button><button type="button" @click="context.resolveThread(thread.id)">完成</button></div></footer></article><div v-if="!currentThreads.length" class="reader-empty compact-reader-empty"><Activity :size="30" /><strong>当前没有正在进行的事情</strong></div></section>
-    <section v-else class="memory-follow-up-view">
+    <section v-else-if="memoryView === 'current'" class="memory-thread-list"><article v-for="thread in currentThreads" :key="thread.id" :data-thread-id="thread.id"><textarea v-model="thread.content" rows="2" :disabled="Boolean(context.memoryBusy)" /><PendingThreadSources :thread="thread" @open-diary="openSourceDiary" /><footer><span>{{ context.formatShortTime(thread.created_at) }}</span><div><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.deleteMemoryThread(thread.id)">删除</button><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.saveMemoryThread(thread)">保存</button><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.resolveThread(thread.id)">完成</button></div></footer></article><div v-if="!currentThreads.length" class="reader-empty compact-reader-empty"><Activity :size="30" /><strong>当前没有正在进行的事情</strong></div></section>
+    <section v-else-if="!context.memoryError" class="memory-follow-up-view">
       <div class="memory-thread-list">
-        <article v-for="thread in followUpThreads" :key="thread.id">
-          <textarea v-model="thread.content" rows="2" />
-          <footer><span>跟进时间：{{ context.formatShortTime(thread.follow_up_after) }}</span><div><button type="button" @click="context.deleteMemoryThread(thread.id)">删除</button><button type="button" @click="context.saveMemoryThread(thread)">保存</button><button type="button" class="primary" @click="beginFollowUpResult(thread)">记录结果</button></div></footer>
+        <article v-for="thread in followUpThreads" :key="thread.id" :data-thread-id="thread.id">
+          <textarea v-model="thread.content" rows="2" :disabled="Boolean(context.memoryBusy)" /><PendingThreadSources :thread="thread" @open-diary="openSourceDiary" />
+          <footer><span>跟进时间：{{ context.formatShortTime(thread.follow_up_after) }}</span><div><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.deleteMemoryThread(thread.id)">删除</button><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.saveMemoryThread(thread)">保存</button><button type="button" class="primary" :disabled="Boolean(context.memoryBusy)" @click="beginFollowUpResult(thread)">记录结果</button></div></footer>
           <form v-if="followUpResultDrafts[thread.id]" class="follow-up-result-form" @submit.prevent="submitFollowUpResult(thread)">
             <div class="follow-up-outcome-control" aria-label="完成情况">
               <button v-for="item in [['completed','完成'],['partial','部分完成'],['not_completed','未完成']]" :key="item[0]" type="button" :class="{ active: followUpResultDrafts[thread.id].outcome === item[0] }" @click="followUpResultDrafts[thread.id].outcome = item[0]">{{ item[1] }}</button>
@@ -303,13 +374,16 @@ async function saveDiaryEdit() {
 <style scoped>
 .records-hub { display: flex; flex-direction: column; }
 .record-mode-tabs { flex-shrink: 0; }
+.records-load-error { flex-shrink: 0; padding: 12px; overflow-wrap: anywhere; }
 .record-reader-layout, .period-record-layout { flex: 1; height: auto; min-height: 0; }
-.auto-diary-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 18px; border-bottom: 1px solid var(--border-color, #e7dfe4); font-size: 12px; flex-shrink: 0; }
+.auto-diary-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: calc(12px * var(--fs, 1)); flex-shrink: 0; }
 .auto-diary-status > div:first-child { flex: 1; min-width: 180px; overflow-wrap: anywhere; }
 .auto-diary-status p { margin: 5px 0; }
 .auto-diary-status small { display: block; margin-top: 4px; opacity: .8; }
-.auto-diary-status.error { background: #fff3f0; color: #8d3c30; }
+.auto-diary-status.error { background: var(--danger-soft); color: var(--danger); }
 .auto-diary-actions { display: flex; gap: 8px; }
-.auto-diary-actions button { padding: 6px 10px; border: 1px solid var(--border-color, #e7dfe4); border-radius: 6px; background: var(--surface-color, #fff); color: inherit; cursor: pointer; }
+.auto-diary-actions button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); color: inherit; cursor: pointer; }
 .auto-diary-actions button:disabled { opacity: .5; cursor: default; }
 </style>
+
+<style scoped>.daily-review-section{border-top:1px solid var(--line);margin-top:24px;padding-top:18px}.daily-review-section>header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.daily-review-section h3{margin:0;font-size:16px}.record-pagination{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;margin-top:10px}.record-pagination button{display:grid;place-items:center;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--surface-raised);color:var(--text);cursor:pointer}.record-pagination button:disabled{opacity:.4;cursor:default}.record-pagination small{white-space:nowrap}</style>

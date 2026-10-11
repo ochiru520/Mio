@@ -1,0 +1,101 @@
+/* Shared finishing layer: themes remain the single source of colors. */
+.mio-settings-content .settings-page-header .settings-unsaved { align-self: flex-end; margin-top: 40px; }
+.mio-settings-window .settings-savebar button.primary-button:not(:disabled) { opacity: 1; background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
+.mio-settings-window .settings-savebar button:disabled { opacity: 1; background: var(--surface-soft); color: var(--text-muted); border-color: var(--border); }
+.profile-analysis-settings > .settings-note { padding: 0; border: 0; background: transparent; }
+.app-shell.integrated-shell {
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  letter-spacing: 0;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-titlebar {
+  background: var(--surface);
+  border-bottom-color: color-mix(in srgb,var(--border) 65%,transparent);
+  backdrop-filter: none;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell) .window-drag-zone strong { font-weight: 550; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-sidebar { border-right-color: color-mix(in srgb,var(--border) 55%,transparent); padding-top: 18px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-sidebar .nav-item { border-radius: 9px; font-size: calc(13px * var(--fs)); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-sidebar .nav-item.active { font-weight: 550; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .nav-item.active::before { content: none; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-sidebar.expanded { box-shadow: 4px 0 16px color-mix(in srgb,var(--shadow-tint) 60%,transparent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-right-rail { gap: 14px; padding-top: 18px; border-left-color: color-mix(in srgb,var(--border) 50%,transparent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-right-rail > header,
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-right-rail > section { border: 0; border-bottom: 1px solid color-mix(in srgb,var(--border) 65%,transparent); border-radius: 0; background: transparent; padding-bottom: 14px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-right-rail.expanded { box-shadow: -4px 0 18px color-mix(in srgb,var(--shadow-tint) 60%,transparent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-list { width: min(840px,calc(100% - 64px)); margin-inline: auto; padding-bottom: 26px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row { margin-bottom: 30px; gap: 14px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-avatar { width: 30px; height: 30px; min-width: 30px; margin-top: 6px; border: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-heading { margin-bottom: 8px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-body { border: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-heading strong { font-size: calc(13px * var(--fs)); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-bubble { font-size: calc(14px * var(--fs)); line-height: 1.9; border: 0; box-shadow: none; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row.assistant .message-bubble { background: transparent; border-radius: 0; padding: 3px 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row.assistant .message-bubble::before,
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row.assistant .message-bubble::after { content: none; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row.user .message-bubble { background: var(--surface-soft); border-radius: 16px 16px 5px 16px; padding: 12px 17px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-wrap { padding: 10px clamp(16px,3vw,38px) 22px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer { width: min(840px,100%); padding: 15px 16px 11px; background: var(--surface); backdrop-filter: none; border-radius: 16px; box-shadow: 0 2px 8px color-mix(in srgb,var(--shadow-tint) 40%,transparent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer:focus-within { border-color: color-mix(in srgb,var(--accent) 50%,var(--border)) !important; box-shadow: 0 2px 12px color-mix(in srgb,var(--shadow-tint) 60%,transparent) !important; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-input { min-height: 38px; max-height: min(140px,20vh); font-size: calc(14px * var(--fs)); line-height: 1.75; padding: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-input::placeholder { color: var(--text-faint); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-actions { gap: 9px; margin-top: 8px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger { border: 0; background: transparent; padding: 5px 7px; font-size: calc(12px * var(--fs)); box-shadow: none; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger small { font-size: calc(10px * var(--fs)); color: var(--text-faint); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .send-button { border-radius: 50%; width: 32px; min-width: 32px; height: 32px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-trigger { border: 0; background: var(--surface-soft); border-radius: 8px; padding: 7px 11px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-trigger span { font-size: calc(12px * var(--fs)); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer { border-radius: 0; box-shadow: 6px 0 20px color-mix(in srgb,var(--shadow-tint) 60%,transparent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-list strong { font-size: calc(13px * var(--fs)); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-list small { font-size: calc(11px * var(--fs)); }
+.mio-settings-content .settings-page-title h1 { font-size: calc(25px * var(--fs)); font-weight: 500; letter-spacing: 0; }
+.mio-agent-project-sidebar button,.agent-content-sidebar button,.agent-personal-menu button,.mio-settings-sidebar nav > button { color: var(--text); font-size: calc(13px * var(--fs,1)); }
+.mio-agent-project-sidebar .agent-sidebar-label,.mio-settings-sidebar nav > small { color: var(--text-muted); }
+.mio-settings-content .settings-section-intro,.mio-settings-content .settings-page-title p { line-height: 1.8; font-size: calc(13px * var(--fs)); }
+.mio-settings-content .settings-list { background: transparent; border-radius: 0; box-shadow: none; }
+.mio-settings-content .settings-list { border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.mio-settings-content .settings-item { padding-inline: 0; border-bottom-color: var(--border); }
+/* Settings use open rows; controls and actual previews retain their own boundaries. */
+.mio-settings-content .settings-form-grid {
+  grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0;
+  background: transparent; border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); border-radius: 0;
+}
+.mio-settings-content .settings-form-grid > label:not(.toggle-row) {
+  grid-template-columns: minmax(140px, .8fr) minmax(0, 1.6fr); align-items: start;
+  gap: 8px 28px; padding: 18px 0; background: transparent; border-radius: 0;
+  border-bottom: 1px solid var(--border); color: var(--text); font-size: calc(13px * var(--fs, 1));
+}
+.mio-settings-content .settings-form-grid > label:last-child { border-bottom: 0; }
+.mio-settings-content .settings-form-grid > label:not(.toggle-row) > span:first-child { grid-column: 1; grid-row: 1 / span 2; padding-top: 9px; color: var(--text); }
+.mio-settings-content .settings-form-grid > label:not(.toggle-row) > :not(span:first-child) { grid-column: 2; min-width: 0; }
+.mio-settings-content .settings-form-grid > label > small { line-height: 1.65; }
+.mio-settings-content .settings-form-grid .toggle-row { padding: 16px 0; min-height: 58px; background: transparent; border-radius: 0; border-bottom: 1px solid var(--border); }
+.mio-settings-content .settings-form-grid .settings-info-tile { padding: 16px 0; background: transparent; border: 0; border-radius: 0; }
+.mio-settings-content .settings-check-grid { gap: 0 28px; padding: 0; background: transparent; border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); border-radius: 0; }
+.mio-settings-content .settings-check-grid .toggle-row { padding: 15px 0; min-height: 56px; }
+.mio-settings-content .profile-identity-editor { padding: 18px 0; margin-bottom: 0; background: transparent; border: 0; border-top: 1px solid var(--border); border-radius: 0; }
+.mio-settings-content .appearance-resource-grid { grid-template-columns: minmax(0, 1fr); gap: 0; border-top: 1px solid var(--border); }
+.mio-settings-content .appearance-resource-card { padding: 18px 0; background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
+.mio-settings-content .character-card-panel > .settings-note { padding: 14px 0 0; background: transparent; border: 0; }
+.mio-settings-content .settings-item { gap: 22px; }
+.mio-settings-content .settings-item small,.mio-settings-content .settings-item p { font-size: calc(12px * var(--fs)); line-height: 1.75; }
+.mio-settings-content .settings-item input:not([type=checkbox]),.mio-settings-content .settings-item select,.mio-settings-content .settings-item textarea { border-radius: 8px; padding: 10px 12px; font-size: calc(13px * var(--fs)); }
+.mio-settings-content .settings-page button:not(.theme-option):not(.theme-choice):not(.theme-card) { border-radius: 8px; }
+.mio-settings-sidebar .mio-settings-search input { background: transparent; border: 0; box-shadow: none; }
+.mio-settings-sidebar > button { font-size: calc(13px * var(--fs)); }
+.mio-settings-sidebar .mio-settings-search input { font-size: calc(12px * var(--fs)); }
+.mio-settings-sidebar nav button:hover,.advanced-navigation > button:hover { background: var(--surface-soft); }
+@media(max-width:760px) {
+  .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-list { width: calc(100% - 30px); }
+  .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row { gap: 9px; margin-bottom: 24px; }
+  .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-bubble { font-size: calc(13px * var(--fs)); }
+  .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-wrap { padding-inline: 12px; padding-bottom: 15px; }
+  .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer { padding: 13px 12px 10px; }
+  .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-actions { gap: 5px; }
+  .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger { max-width: 150px; }
+}
+@media(max-width:700px) {
+  .mio-settings-content .settings-form-grid > label:not(.toggle-row) { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 16px 0; }
+  .mio-settings-content .settings-form-grid > label:not(.toggle-row) > span:first-child { grid-column: 1; grid-row: auto; padding-top: 0; }
+  .mio-settings-content .settings-form-grid > label:not(.toggle-row) > :not(span:first-child) { grid-column: 1; }
+}
+@media(prefers-reduced-motion:reduce) { .app-shell.integrated-shell .integrated-sidebar,.app-shell.integrated-shell .message-hover-meta { transition: none; } }

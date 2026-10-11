@@ -25,7 +25,24 @@ class RestoreStateUncertainError(ValueError):
 
 BACKUP_FORMAT = "mio-complete-backup"
 BACKUP_FORMAT_VERSION = 1
-CURRENT_APP_VERSION = "0.5.9"
+def _application_version() -> str:
+    """Keep backup metadata aligned with the packaged runtime identity."""
+    configured = os.getenv("MIO_APP_VERSION", "").strip()
+    if configured:
+        return configured
+    manifest_path = os.getenv("MIO_BUILD_MANIFEST", "").strip()
+    if manifest_path:
+        try:
+            payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+            value = str(payload.get("app_version") or "").strip()
+            if value:
+                return value
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
+    return "0.11.0.0"
+
+
+CURRENT_APP_VERSION = _application_version()
 MAX_IMPORT_BYTES = 2 * 1024 * 1024 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_ARCHIVE_FILES = 10_000

@@ -3,11 +3,22 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 import launcher
 
 
 class AgentPathPickerTests(unittest.TestCase):
+    def test_agent_conversation_window_validates_id_and_uses_native_close(self):
+        bridge=launcher.DesktopBridge('agent')
+        window=MagicMock(); webview=Mock(); webview.create_window.return_value=window
+        with patch('app.conversation_state_service.require') as require, patch.dict(sys.modules,{'webview':webview}):
+            self.assertEqual(bridge.open_agent_conversation('desktop_agent_example'),{'ok':True})
+        require.assert_called_once_with('desktop_agent_example')
+        self.assertIn('conversation_id=desktop_agent_example',webview.create_window.call_args.args[1])
+        child=webview.create_window.call_args.kwargs['js_api']
+        self.assertIs(child._window,window)
+        self.assertEqual(child._hide_window,window.destroy)
+
     def bridge(self, selected):
         bridge=launcher.DesktopBridge(); window=Mock()
         window.create_file_dialog.return_value=selected

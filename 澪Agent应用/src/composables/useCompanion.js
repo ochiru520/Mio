@@ -8,6 +8,7 @@ export function useCompanion(deps) {
   async function loadCompanionStatus({ quiet = false, preserveSettings = false } = {}) {
     if (deps.companionStatusLoading) return
     deps.companionStatusLoading = true
+    deps.companionStatusError.value = ''
     try {
       const editingSettings = deps.companionStatus.value.pet?.settings
       const previousSpriteVersion = deps.companionStatus.value.pet?.sprite_version || ''
@@ -34,6 +35,8 @@ export function useCompanion(deps) {
         deps.companionAvatarNonce.value = Date.now()
       }
     } catch (error) {
+      deps.companionStatusError.value = error.message
+      if (!preserveSettings) deps.companionStatusReady.value = false
       if (!quiet) deps.errorMessage.value = error.message
     } finally {
       deps.companionStatusLoading = false

@@ -58,6 +58,24 @@ class SchemaRepository:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS diary_versions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    diary_date TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    markdown_content TEXT NOT NULL,
+                    mood_tags TEXT NOT NULL DEFAULT '',
+                    daily_thirty_status TEXT NOT NULL DEFAULT 'unknown',
+                    confirmed_at TEXT NOT NULL DEFAULT '',
+                    change_reason TEXT NOT NULL DEFAULT '',
+                    content_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(diary_date, revision)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_diary_versions_date
+                    ON diary_versions(diary_date, revision DESC);
+
                 CREATE TABLE IF NOT EXISTS memories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     type TEXT NOT NULL,
@@ -295,6 +313,21 @@ class SchemaRepository:
                 CREATE INDEX IF NOT EXISTS idx_follow_up_results_conversation
                     ON follow_up_results(conversation_id, created_at DESC, id DESC);
 
+                CREATE TABLE IF NOT EXISTS pending_thread_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id INTEGER NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    source_revision INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'current',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(thread_id, source_type, source_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_pending_thread_sources_thread
+                    ON pending_thread_sources(thread_id, state, updated_at DESC);
+
                 CREATE TABLE IF NOT EXISTS weekly_reviews (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     week_start TEXT NOT NULL UNIQUE,
@@ -371,6 +404,32 @@ class SchemaRepository:
 
                 CREATE INDEX IF NOT EXISTS idx_agent_runs_conversation_created
                     ON agent_runs(conversation_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS agent_run_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    turn_index INTEGER NOT NULL DEFAULT 0,
+                    message_key TEXT NOT NULL UNIQUE,
+                    role TEXT NOT NULL,
+                    content_json TEXT NOT NULL DEFAULT 'null',
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_agent_run_messages_order
+                    ON agent_run_messages(run_id, turn_index, id);
+
+                CREATE TABLE IF NOT EXISTS agent_run_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    event_key TEXT NOT NULL UNIQUE,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_agent_run_events_order
+                    ON agent_run_events(run_id, id);
 
                 CREATE TABLE IF NOT EXISTS agent_run_steps (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

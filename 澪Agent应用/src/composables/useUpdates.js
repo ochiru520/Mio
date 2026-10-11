@@ -9,7 +9,7 @@ export function createUpdateClient(getBridge = () => globalThis.window?.pywebvie
   let revision = 0
   let refreshing = false
   async function refresh() {
-    if (refreshing) return
+    if (refreshing || busy.value) return
     const bridge = getBridge()
     available.value = typeof bridge?.update_status === 'function'
     if (!available.value) return
@@ -19,8 +19,9 @@ export function createUpdateClient(getBridge = () => globalThis.window?.pywebvie
       const result = await bridge.update_status()
       if (current !== revision) return
       if (result.status) state.value = result.status
-      if (!result.ok) error.value = result.error || '无法读取更新状态'
+      error.value = result.ok ? '' : result.error || '无法读取更新状态'
     } catch (reason) {
+      if (current !== revision) return
       error.value = reason.message || '无法连接桌面更新服务'
     } finally {
       refreshing = false

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="rose" data-font-size="medium">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mio 设置预览（合成数据）</title></head>
+<body><div id="app"></div>
+<script type="module">
+import { createApp, h, reactive } from 'vue'
+import CharacterCardPanel from '../src/components/CharacterCardPanel.vue'
+import UpdatePanel from '../src/components/UpdatePanel.vue'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+import '../src/styles/refinements.css'
+import '../src/styles/settings.css'
+import '../src/styles/companion.css'
+import '../src/styles/agent-settings.css'
+import '../src/styles/ui-polish.css'
+const query = new URLSearchParams(location.search)
+document.documentElement.dataset.theme = query.get('theme') || 'rose'
+const context = reactive({
+  mioProfileReady: true,
+  mioProfileDraft: {
+    identity: { name: 'Mio', core: '自然、友好的伙伴。' },
+    speaking_style: { tone: '温和自然', bubble_style: '简洁完整', avoid: ['旧表达'] },
+    preferences: { user_address: '你', relationship_distance: '友好的伙伴', custom_notes: ['旧备注'] },
+    behavior: { initiative: '保持现有边界' },
+  },
+  mioProfileAvoidDraft: '旧表达', mioProfileNotesDraft: '旧备注',
+})
+// Only a synthetic native status reader. This preview cannot update an installed app.
+window.pywebview = { api: { update_status: async () => ({ ok: true, status: {
+  state: 'idle', current_version: '0.11.0', channel: 'development', configured: false,
+  auto_check: true, auto_download: false, installed: true,
+} }) } }
+createApp({
+  setup() {
+    return () => h('main', { class: 'mio-settings-content preset-preview', tabindex: 0 }, [
+      h('div', { class: 'settings-page' }, [
+        h('header', { class: 'settings-page-title' }, [h('h1', query.has('updates') ? '基础与启动' : '人设与表达')]),
+        h(query.has('updates') ? UpdatePanel : CharacterCardPanel),
+      ]),
+      h('output', { class: 'preview-draft', 'data-testid': 'draft' }, JSON.stringify({ avoid: context.mioProfileAvoidDraft, notes: context.mioProfileNotesDraft, core: context.mioProfileDraft.identity.core })),
+    ])
+  },
+}).provide('mio-settings-page', context).mount('#app')
+</script>
+<style>
+.preset-preview { width: 100%; height: 100%; overflow-y: auto; padding: 36px max(20px, calc((100vw - 840px)/2)); background: var(--bg); }
+.preset-preview .settings-page { width: 100%; max-width: 840px; margin: 0 auto; }
+.preview-draft { display: none; }
+@media(max-width:600px) { .preset-preview { padding: 20px 16px; } }
+</style>
+</body></html>

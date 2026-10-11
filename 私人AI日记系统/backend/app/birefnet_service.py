@@ -47,6 +47,9 @@ def input_file(*, asset_id: str = "", job_id: str = "", output_index: int = 0, p
 
 
 def create_cutout(arguments: dict, context) -> dict:
+    from . import creation_provenance as provenance
+    provenance.initialize()
+    provenance.validate(context.task_id, context.conversation_id, context.run_id)
     source = input_file(**{key: arguments.get(key, default) for key, default in
                           (("asset_id", ""), ("job_id", ""), ("output_index", 0), ("path", ""))})
     digest = hashlib.sha256(json.dumps(arguments, sort_keys=True).encode()).hexdigest()
@@ -78,11 +81,15 @@ def create_cutout(arguments: dict, context) -> dict:
             (job_id, context.conversation_id, context.source,
              'video' if video else 'image', WORKFLOW_ID,
              json.dumps(spec, ensure_ascii=False), key, now, now))
+        provenance.bind(conn, job_id, context.task_id, context.run_id, context.source_message_id)
     creation.schedule_job(job_id)
     return {"job": creation.get_job(job_id), "created": True}
 
 
 def retry_cutout(row: dict, spec: dict) -> dict:
+    from . import creation_provenance as provenance
+    provenance.initialize()
+    task_id = provenance.owner(row['id'])['task_id']
     root = creation._require_comfy_root()
     source = (root / "input" / str(spec.get("input") or "")).resolve()
     if not source.is_relative_to((root / "input").resolve()) or not source.is_file():
@@ -106,6 +113,7 @@ def retry_cutout(row: dict, spec: dict) -> dict:
              json.dumps(clean, ensure_ascii=False), "从原始输入重新抠图，重做全部指定帧，需要确认。",
              f"retry:{row['id']}:{uuid.uuid4().hex}", row["id"], db.now_iso(), db.now_iso()))
         from .agent_task_service import attach_retry
+        provenance.bind(conn, job_id, task_id)
         attach_retry(conn, row['id'], job_id)
     return creation.get_job(job_id)
 

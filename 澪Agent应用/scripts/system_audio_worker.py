@@ -60,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--language", default="auto")
     parser.add_argument("--chunk-seconds", type=float, default=6.0)
     parser.add_argument("--cache-dir", required=True)
+    parser.add_argument("--stdin-only", action="store_true", help="只转写传入的 WAV，不监听系统声音")
     return parser.parse_args()
 
 
@@ -222,7 +223,6 @@ def main() -> None:
     args = parse_args()
     emit("loading_runtime")
     import numpy as np
-    import soundcard as sc
     warnings.filterwarnings("ignore", message="data discontinuity in recording")
 
     cache_dir = Path(args.cache_dir)
@@ -448,10 +448,19 @@ def main() -> None:
                     **diagnostics,
                 )
             except Exception as exc:
-                emit("quality_transcript", request_id=request_id, text="", error=str(exc)[:300])
+                emit("quality_transcript", request_id=request_id, text="", accepted=False,
+                     rejection_reason="transcription_error", error=str(exc)[:300])
             finally:
                 quality_pending.clear()
 
+    if args.stdin_only:
+        emit("ready", engine=engine_name, model=model_label, device=model_device,
+             compute_type=model_compute_type, speaker="", sample_rate=16000,
+             capture_loopback=False)
+        command_reader()
+        return
+
+    import soundcard as sc
     threading.Thread(target=command_reader, name="mio-quality-asr", daemon=True).start()
     speaker = sc.default_speaker()
     emit("speaker_detected", speaker=str(speaker.name if speaker else ""))
@@ -540,6 +549,7 @@ def main() -> None:
         capture_block_seconds=0.5,
         analysis_window_seconds=window_seconds,
         analysis_hop_seconds=analysis_hop_frames / sample_rate,
+        capture_loopback=True,
     )
 
     with microphone.recorder(samplerate=sample_rate, channels=1) as recorder:

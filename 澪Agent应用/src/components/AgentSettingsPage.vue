@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, reactive, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ArrowLeft, Bot, FolderKey, Gauge, PanelsTopLeft, Save, Search, Workflow, Wrench, X } from '@lucide/vue'
 import AgentTaskSettings from './AgentTaskSettings.vue'
 import AgentCreationSettings from './AgentCreationSettings.vue'
@@ -17,7 +17,14 @@ const categories = [
   { id: 'workflows', label: '工作流', icon: Workflow, keywords: '自定义 导入 API JSON 图片 视频 参考图 参数' },
   { id: 'appearance', label: '界面显示', icon: PanelsTopLeft, keywords: '过程 侧栏 悬停' },
 ]
-const category = ref('model')
+const savedSection = () => localStorage.getItem('mio_agent_settings_section')
+const validSection = value => categories.some(item => item.id === value) ? value : 'model'
+const category = ref(validSection(savedSection()))
+function handleSettingsRequest(event) {
+  if (event.key === 'mio_agent_settings_request') category.value = validSection(savedSection())
+}
+onMounted(() => window.addEventListener('storage', handleSettingsRequest))
+onBeforeUnmount(() => window.removeEventListener('storage', handleSettingsRequest))
 const search = ref('')
 const visibleCategories = computed(() => categories.filter(item => `${item.label} ${item.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase())))
 const currentCategory = computed(() => categories.find(item => item.id === category.value))

@@ -27,6 +27,9 @@ class WorkflowDefinition:
     expected_sha256: str = ""
     custom: bool = False
     bindings: dict = field(default_factory=dict)
+    max_reference_images: int = 0
+    selection_hint: str = ""
+    pending_reason: str = ""
 
     def public_dict(self, root: Path) -> dict[str, object]:
         path = workflow_path(root, self)
@@ -40,8 +43,11 @@ class WorkflowDefinition:
             "media_type": self.media_type,
             "description": self.description,
             "requires_reference": self.requires_reference,
-            "available": path.is_file(),
-            "missing_reason": "" if path.is_file() else f"缺少固定工作流：{self.filename}",
+            "max_reference_images": self.max_reference_images or (1 if self.requires_reference else 0),
+            "selection_hint": self.selection_hint,
+            "available": path.is_file() and not self.pending_reason,
+            "pending_reason": self.pending_reason,
+            "missing_reason": self.pending_reason or ("" if path.is_file() else f"缺少固定工作流：{self.filename}"),
             "file": metadata,
             "expected_sha256": self.expected_sha256,
             "defaults": {
@@ -64,22 +70,36 @@ WORKFLOWS: dict[str, WorkflowDefinition] = {
         description="本地 Anima 2.9B 文生图，一次默认生成一张。",
         default_width=864,
         default_height=1536,
-        default_steps=4,
+        default_steps=6,
         default_cfg=1.0,
-        expected_sha256="4ba5202a9dc185efd230d45be4175648754bc44bb7dff4d76f8cd1e018aaa7ee",
+        expected_sha256="7a268c1ad41b128237ea51947cdd0e7b6d01e0d06c023d42d58561bcd3b89c03",
+        selection_hint="Anima / 无敌图片：英文提示词，适合原有二次元插画与 LoRA 风格；不支持参考图。未指定工作流时使用图片默认项。",
+    ),
+    "qwen-2.1-image": WorkflowDefinition(
+        id="qwen-2.1-image",
+        label="千问 Qwen 2.1 图片",
+        media_type="image",
+        filename="千问生图.json",
+        description="直接使用千问生图文件：无参考图时用原文生图分支，有参考图时用原编辑分支。",
+        default_width=1024, default_height=1024, default_steps=8, default_cfg=1.0,
+        max_reference_images=8,
+        selection_hint="千问 / Qwen：支持中文提示词、画面文字和参考图编辑；按输入选择文件已有分支，不引用文件里残留的示例图片。",
+        expected_sha256="ff6de539690d8ad23d4a08b0a7965f77f6772d3ea43bf6b92e72abfa4573bb82",
     ),
     "minimax-h3-video": WorkflowDefinition(
         id="minimax-h3-video",
-        label="MiniMax H3 视频",
+        label="MINIMAX H3 双采样 · 8G 视频",
         media_type="video",
-        filename="黑鹤.json",
-        description="本地 MiniMax H3 图生视频，需要一张参考图。",
+        filename="MINIMAX-H3双采样_8G显存版.json",
+        description="直接使用 8G 版双采样工作流，保留分块、潜空间放大和二阶段精修，需要一张参考图。",
         requires_reference=True,
-        default_width=576,
-        default_height=1024,
-        default_steps=6,
+        default_width=384,
+        default_height=512,
+        default_steps=10,
         default_cfg=1.0,
-        expected_sha256="1b6a89f2bb8fbb7c845ec50df320c266f9b4da39d78947fc973ca76ed072a749",
+        max_reference_images=1,
+        selection_hint="当前唯一内置视频工作流，替代黑鹤；用 <Picture 1> 指代参考图。默认沿用文件中的 5 秒、24fps、双采样与 8G 显存参数；尺寸指第一阶段，原文件再放大 1.5 倍。",
+        expected_sha256="1132af92fd38e1bf85af6f5e5903e08416088efbe588755eee48c111dee3c306",
     ),
 }
 
@@ -106,6 +126,8 @@ MODEL_INPUTS: dict[str, tuple[tuple[str, str], ...]] = {
     "VAELoader": (("vae_name", "vae"),),
     "UpscaleModelLoader": (("model_name", "upscale_models"),),
     "LoraLoaderModelOnly": (("lora_name", "loras"),),
+    "ViggleTurboLora": (("lora_name", "loras"),),
+    "MinimaxH3LatentUpscaler3D": (("model_name", "latent_upscale_models"),),
 }
 
 
@@ -116,6 +138,7 @@ MODEL_ROOTS: dict[str, tuple[str, ...]] = {
     "vae": ("vae", "checkpoints"),
     "upscale_models": ("upscale_models",),
     "loras": ("loras",),
+    "latent_upscale_models": ("latent_upscale_models", "upscale_models"),
 }
 
 
@@ -151,6 +174,8 @@ def require_workflow(workflow_id: str, media_type: str = "", *, include_disabled
         raise ValueError("不允许使用未登记的 ComfyUI 工作流。")
     if media_type and definition.media_type != media_type:
         raise ValueError("工作流类型与本次生成类型不一致。")
+    if definition.pending_reason and not include_disabled:
+        raise ValueError(definition.pending_reason)
     return definition
 
 
@@ -342,96 +367,8 @@ def ui_workflow_to_api_prompt(
     *,
     object_info: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    nodes = [item for item in workflow.get("nodes") or [] if isinstance(item, Mapping)]
-    nodes_by_id = {str(item.get("id")): item for item in nodes}
-    links = _link_table(workflow)
-    prompt: dict[str, dict[str, Any]] = {}
-
-    # A saved ComfyUI canvas may contain several alternate, editor-visible
-    # branches.  The API must receive only the branch that contributes to an
-    # output node: otherwise an unconnected required input (for example the
-    # optional TE-Speed patch in 黑鹤.json) can reject the entire request.  The
-    # small synthetic graphs used by unit tests may not have an output node;
-    # retain their previous all-active-node behaviour in that case.
-    output_ids: set[str] = set()
-    for node in nodes:
-        node_id = str(node.get("id"))
-        node_type = str(node.get("type") or "").strip()
-        if int(node.get("mode") or 0) != 0 or node_type in UI_ONLY_NODE_TYPES:
-            continue
-        node_info = object_info.get(node_type) if isinstance(object_info, Mapping) else None
-        if node_type in {"SaveImage", "SaveVideo"} or (
-            isinstance(node_info, Mapping) and bool(node_info.get("output_node"))
-        ):
-            output_ids.add(node_id)
-
-    reachable: set[str] | None = None
-    if output_ids:
-        reachable = set()
-        pending = list(output_ids)
-        while pending:
-            node_id = str(pending.pop())
-            if node_id in reachable:
-                continue
-            node = nodes_by_id.get(node_id)
-            if node is None or int(node.get("mode") or 0) != 0:
-                continue
-            node_type = str(node.get("type") or "").strip()
-            if node_type in UI_ONLY_NODE_TYPES:
-                continue
-            reachable.add(node_id)
-            for descriptor in node.get("inputs") or []:
-                if not isinstance(descriptor, Mapping) or descriptor.get("link") is None:
-                    continue
-                link = links.get(str(descriptor.get("link")))
-                if link is None:
-                    continue
-                origin_id, _ = _resolve_bypassed_origin(
-                    link[0], link[1], link[4], nodes_by_id, links
-                )
-                if origin_id not in reachable:
-                    pending.append(origin_id)
-
-    for node in nodes:
-        node_id = str(node.get("id"))
-        node_type = str(node.get("type") or "").strip()
-        if int(node.get("mode") or 0) != 0 or node_type in UI_ONLY_NODE_TYPES:
-            continue
-        if reachable is not None and node_id not in reachable:
-            continue
-        node_info = object_info.get(node_type) if isinstance(object_info, Mapping) else None
-        if isinstance(object_info, Mapping) and node_info is None:
-            raise ValueError(f"ComfyUI 缺少工作流节点：{node_type}")
-        inputs = _widget_inputs(node, node_info if isinstance(node_info, Mapping) else None)
-        for descriptor in node.get("inputs") or []:
-            if not isinstance(descriptor, Mapping) or descriptor.get("link") is None:
-                continue
-            link = links.get(str(descriptor.get("link")))
-            if link is None:
-                raise ValueError(f"节点 {node_id} 的输入 {descriptor.get('name')} 缺少链接记录。")
-            origin_id, output_slot = _resolve_bypassed_origin(
-                link[0], link[1], link[4], nodes_by_id, links
-            )
-            _assign_input(
-                inputs,
-                str(descriptor.get("name") or "input"),
-                [origin_id, output_slot],
-            )
-        ordered_required, _ = _schema_input_names(node_info if isinstance(node_info, Mapping) else None)
-        if isinstance(node_info, Mapping):
-            required = node_info.get("input", {}).get("required", {})
-            if isinstance(required, Mapping):
-                missing = [name for name in required if not _input_present(inputs, str(name))]
-                if missing:
-                    raise ValueError(f"节点 {node_type} 缺少必填输入：{', '.join(missing)}")
-        prompt[node_id] = {
-            "class_type": node_type,
-            "inputs": inputs,
-            "_meta": {"title": str(node.get("title") or node_type)},
-        }
-    if not prompt:
-        raise ValueError("工作流没有可执行节点。")
-    return prompt
+    from .comfy_canvas import to_prompt
+    return to_prompt(workflow, object_info, UI_ONLY_NODE_TYPES, LEGACY_WIDGET_NAMES)
 
 
 def _set_first(prompt: dict[str, dict[str, Any]], node_type: str, name: str, value: Any) -> bool:
@@ -584,12 +521,18 @@ def workflow_execution_snapshot(
     metadata = _workflow_file_metadata(root, definition)
     models: list[dict[str, Any]] = []
     loras: list[dict[str, Any]] = []
+    samplers: list[dict[str, Any]] = []
     node_types: list[str] = []
     for node_id, node in prompt.items():
         node_type = str(node.get("class_type") or "")
         if node_type not in node_types:
             node_types.append(node_type)
         inputs = node.get("inputs") or {}
+        if node_type in {"KSampler", "KSamplerAdvanced", "BasicScheduler", "SplitSigmas", "SamplerCustomAdvanced", "ViggleTurboSigmas", "KSamplerSelect"}:
+            samplers.append({"node_id": str(node_id), "node_type": node_type,
+                             **{key: inputs[key] for key in ("steps", "cfg", "sampler_name", "scheduler", "denoise", "step", "nodes") if key in inputs}})
+        if node_type in {"LoraLoaderModelOnly", "ViggleTurboLora"}:
+            loras.append({"node_id": str(node_id), "name": inputs.get("lora_name", ""), "on": True, "strength": inputs.get("strength_model", inputs.get("strength"))})
         for input_name, category in MODEL_INPUTS.get(node_type, ()):
             value = inputs.get(input_name)
             if isinstance(value, str) and value.strip():
@@ -610,6 +553,7 @@ def workflow_execution_snapshot(
         "active_node_types": sorted(node_types),
         "models": models,
         "loras": loras,
+        "samplers": samplers,
     }
 
 
@@ -668,9 +612,10 @@ def _combo_options(node_info: Mapping[str, Any] | None, input_name: str) -> list
         return []
     required = node_info.get("input", {}).get("required", {})
     value = required.get(input_name) if isinstance(required, Mapping) else None
-    if not isinstance(value, list) or not value or not isinstance(value[0], list):
+    if not isinstance(value, list) or not value:
         return []
-    return [str(item) for item in value[0] if isinstance(item, (str, int, float))]
+    options = value[0] if isinstance(value[0], list) else (value[1].get("options", []) if len(value) > 1 and isinstance(value[1], Mapping) else [])
+    return [str(item) for item in options if isinstance(item, (str, int, float))]
 
 
 def _load_runtime_workflow(
@@ -915,12 +860,19 @@ def inspect_workflow(
         "filename": definition.filename,
         "description": definition.description,
         "requires_reference": definition.requires_reference,
+        "max_reference_images": definition.max_reference_images or (1 if definition.requires_reference else 0),
+        "selection_hint": definition.selection_hint,
+        "defaults": definition.public_dict(root)["defaults"],
         "file": metadata,
         "nodes": {"required": metadata.get("active_node_types", []), "missing": [], "checked": object_info is not None},
         "models": [],
         "status": "missing_file" if not metadata.get("available") else "not_checked",
         "errors": [],
     }
+    if definition.pending_reason:
+        report["status"] = "pending_review"
+        report["errors"].append(definition.pending_reason)
+        return report
     if not metadata.get("available"):
         report["errors"].append(metadata.get("error") or f"缺少固定工作流：{definition.filename}")
         return report
@@ -946,11 +898,19 @@ def inspect_workflow(
             for node in workflow.get("nodes") or []
             if isinstance(node, Mapping)
             and int(node.get("mode") or 0) == 0
-            and str(node.get("type") or "") not in UI_ONLY_NODE_TYPES
+            and str(node.get("type") or "") not in UI_ONLY_NODE_TYPES | {"GetNode", "SetNode", "Reroute"}
             and str(node.get("type") or "") not in object_info
         })
         try:
-            prompt = ui_workflow_to_api_prompt(workflow, object_info=object_info)
+            if definition.id == "qwen-2.1-image":
+                from .creation_profiles import qwen_canvas
+                # Validate both existing branches; dummy names are only used for
+                # conversion and are never uploaded or submitted here.
+                prompts = [ui_workflow_to_api_prompt(qwen_canvas(workflow, refs), object_info=object_info)
+                           for refs in ([], ["preflight-reference.png"])]
+                prompt = {key: node for item in prompts for key, node in item.items()}
+            else:
+                prompt = ui_workflow_to_api_prompt(workflow, object_info=object_info)
         except ValueError as exc:
             report["errors"].append(str(exc))
         if prompt is not None:
@@ -1002,13 +962,23 @@ def build_workflow_prompt(
     job_id: str,
     object_info: Mapping[str, Any] | None = None,
     uploaded_reference: str = "",
+    uploaded_references: list[str] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     if definition.custom:
         from .creation_custom import build_custom
         return build_custom(root, definition, spec, job_id=job_id, object_info=object_info, uploaded_reference=uploaded_reference)
     workflow, runtime_workflow_filename = _load_runtime_workflow(root, definition, object_info)
+    references = list(uploaded_references or ([uploaded_reference] if uploaded_reference else []))
+    if definition.id == "qwen-2.1-image":
+        from .creation_profiles import qwen_canvas
+        workflow = qwen_canvas(workflow, references)
     prompt = ui_workflow_to_api_prompt(workflow, object_info=object_info)
     _validate_model_loader_names(prompt, object_info)
+    if definition.id in {"qwen-2.1-image", "minimax-h3-video"}:
+        from .creation_profiles import bind_profile
+        effective = bind_profile(prompt, definition, spec, job_id, references)
+        effective["workflow_snapshot"] = workflow_execution_snapshot(root, definition, prompt, runtime_workflow_filename=runtime_workflow_filename)
+        return prompt, effective
     effective = copy.deepcopy(dict(spec))
     effective.setdefault("width", definition.default_width)
     effective.setdefault("height", definition.default_height)
@@ -1028,11 +998,7 @@ def build_workflow_prompt(
 
     if definition.media_type == "image":
         if definition.id == "anima-2.9b-image":
-            # The workflow's paired Turbo LoRAs are calibrated for these
-            # sampler values. Agent-supplied generic defaults must not replace
-            # the user's verified 4-step configuration.
-            effective["steps"] = definition.default_steps
-            effective["cfg"] = definition.default_cfg
+            # Unspecified sampler values belong to the saved workflow.
             selected_loras = _configure_image_loras(
                 prompt, effective.get("lora_choices")
             )
@@ -1045,19 +1011,22 @@ def build_workflow_prompt(
             str(effective.get("prompt") or ""),
             str(effective.get("negative_prompt") or ""),
         )
-        _set_first(prompt, "EmptyLatentImage", "width", int(effective["width"]))
-        _set_first(prompt, "EmptyLatentImage", "height", int(effective["height"]))
+        if spec.get("width") is not None:
+            _set_first(prompt, "EmptyLatentImage", "width", int(effective["width"]))
+        if spec.get("height") is not None:
+            _set_first(prompt, "EmptyLatentImage", "height", int(effective["height"]))
         _set_first(prompt, "EmptyLatentImage", "batch_size", int(effective.get("batch_size") or 1))
-        _set_image_output_dimensions(
-            prompt, int(effective["width"]), int(effective["height"])
-        )
+        if spec.get("width") is not None or spec.get("height") is not None:
+            _set_image_output_dimensions(prompt, int(effective["width"]), int(effective["height"]))
         # 无敌图片.json has two samplers (base pass + refinement pass).  Both
         # must receive the request's deterministic controls; changing only the
         # first one leaves the second pass on a stale seed/step count.
         for sampler in _nodes_of_type(prompt, "KSampler") + _nodes_of_type(prompt, "KSamplerAdvanced"):
             sampler["inputs"]["seed"] = seed
-            sampler["inputs"]["steps"] = int(effective["steps"])
-            sampler["inputs"]["cfg"] = float(effective["cfg"])
+            if spec.get("steps") is not None:
+                sampler["inputs"]["steps"] = int(effective["steps"])
+            if spec.get("cfg") is not None:
+                sampler["inputs"]["cfg"] = float(effective["cfg"])
         if not _set_first(prompt, "SaveImage", "filename_prefix", output_prefix):
             raise ValueError("图片工作流缺少 SaveImage。")
     else:

@@ -119,12 +119,15 @@ export function useSettings(deps) {
       deps.runtimeSettingsBusy.value = false
     }
   }
-  async function loadMioProfileSettings({ quiet = false } = {}) {
+  async function loadMioProfileSettings({ quiet = false, discardDraft = false } = {}) {
     if (deps.mioProfileBusy.value) return
+    if (!discardDraft && deps.isSettingsSectionDirty('profile')) return
     deps.mioProfileBusy.value = true
     try {
       const result = await settingsApi.loadProfileSettings()
-      deps.mioProfileDraft.value = result.profile || null
+      if (!result.profile) throw new Error('人格设定为空，请重试')
+      if (!discardDraft && deps.isSettingsSectionDirty('profile')) return
+      deps.mioProfileDraft.value = result.profile
       deps.mioProfileNotesDraft.value = (result.profile?.preferences?.custom_notes || []).join('\n')
       deps.mioProfileAvoidDraft.value = (result.profile?.speaking_style?.avoid || []).join('\n')
       deps.savedMioProfile.value = deps.serializeSettings({ profile: deps.mioProfileDraft.value, notes: deps.mioProfileNotesDraft.value, avoid: deps.mioProfileAvoidDraft.value })
@@ -135,8 +138,14 @@ export function useSettings(deps) {
       deps.profileAvatarNonce.value = Date.now()
       deps.userAvatarNonce.value = Date.now()
       deps.chatBackgroundNonce.value = Date.now()
+      if (deps.settingsFeedback.value.section === 'profile' && deps.settingsFeedback.value.message.startsWith('人格设定读取失败')) {
+        deps.settingsFeedback.value = { section: '', type: '', message: '' }
+      }
     } catch (error) {
       if (!quiet) deps.errorMessage.value = error.message
+      if (deps.activeView.value === 'settings' && deps.activeSettingsSection.value === 'profile') {
+        deps.showSettingsFeedback('profile', 'error', `人格设定读取失败：${error.message}`)
+      }
     } finally {
       deps.mioProfileBusy.value = false
     }
@@ -169,6 +178,7 @@ export function useSettings(deps) {
       deps.mioProfileAvoidDraft.value = (result.profile?.speaking_style?.avoid || []).join('\n')
       deps.savedMioProfile.value = deps.serializeSettings({ profile: deps.mioProfileDraft.value, notes: deps.mioProfileNotesDraft.value, avoid: deps.mioProfileAvoidDraft.value })
       deps.memoryData.value.profile = result.profile
+      localStorage.setItem('mio_profile_updated', String(Date.now()))
       deps.showSettingsFeedback('profile', 'success', '人格与属性已保存，下一轮对话开始生效')
       return true
     } catch (error) {
@@ -363,7 +373,12 @@ export function useSettings(deps) {
       }
     }
     if (section === 'profile') {
-      await loadMioProfileSettings({ quiet: true })
+      // Cancel uses the last saved snapshot, including while a background
+      // profile read is pending. The busy guard must not silently eat cancel.
+      const saved = JSON.parse(deps.savedMioProfile.value)
+      deps.mioProfileDraft.value = saved.profile
+      deps.mioProfileNotesDraft.value = saved.notes
+      deps.mioProfileAvoidDraft.value = saved.avoid
       return
     }
     if (section === 'conversation') {
@@ -385,7 +400,11 @@ export function useSettings(deps) {
   }
   async function openSettingsSection(sectionId) {
     const enteringSettings = deps.activeView.value !== 'settings'
-    if (!enteringSettings && sectionId === deps.activeSettingsSection.value) return
+    if (!enteringSettings && sectionId === deps.activeSettingsSection.value) {
+      if (sectionId === 'profile' && !deps.mioProfileReady.value) await loadMioProfileSettings({ quiet: true })
+      if (['general', 'conversation', 'diary', 'qq', 'advanced'].includes(sectionId) && !deps.runtimeSettingsReady.value) await loadRuntimeSettings()
+      return
+    }
     if (!enteringSettings && deps.isSettingsSectionDirty(deps.activeSettingsSection.value)) {
       const discard = await deps.showAppConfirm({ title: '放弃未保存的修改？', message: '当前分类的修改尚未保存，切换后会丢失。', confirmText: '放弃并切换', danger: true })
       if (!discard) return
@@ -396,8 +415,8 @@ export function useSettings(deps) {
       deps.activeView.value = 'settings'
     }
     deps.activeSettingsSection.value = sectionId
-    localStorage.setItem('mio_settings_section', sectionId)
-    if (sectionId === 'profile' && !deps.mioProfileReady.value) loadMioProfileSettings()
+    localStorage.setItem(new URLSearchParams(window.location.search).get('workspace') === 'agent' ? 'mio_agent_settings_section' : 'mio_settings_section', sectionId)
+    if (sectionId === 'profile') await loadMioProfileSettings({ quiet: true })
     if (sectionId === 'data') deps.refreshDataPrivacy()
     if (!deps.runtimeSettingsReady.value) loadRuntimeSettings()
   }

@@ -80,6 +80,7 @@ class ModelCostTests(unittest.TestCase):
         })
 
         self.assertEqual(payload["reasoning"]["effort"], "high")
+        self.assertEqual(payload["reasoning"]["summary"], "auto")
         self.assertEqual(payload["tools"][0]["name"], "lookup")
         self.assertEqual(content, "你好")
         self.assertEqual(calls[0].name, "lookup")

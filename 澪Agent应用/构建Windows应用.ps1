@@ -1,6 +1,8 @@
 param(
     [switch]$SkipInstaller,
-    [switch]$FastPackage
+    [switch]$FastPackage,
+    [switch]$SkipDependencyInstall,
+    [switch]$ReuseLive2DBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,18 +62,27 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Vue frontend build failed." }
 
     Write-Host "[3/8] Installing desktop build dependencies..."
+    if (-not $SkipDependencyInstall) {
     & $PythonExe -m pip install `
         --index-url $PipIndexUrl `
         --retries 2 `
         --progress-bar off `
         -r (Join-Path $DesktopRoot "requirements-desktop.txt")
     if ($LASTEXITCODE -ne 0) { throw "Desktop dependency installation failed." }
+    }
 
     Write-Host "[4/8] Creating Windows icon..."
     & $PythonExe (Join-Path $DesktopRoot "create_icon.py")
     if ($LASTEXITCODE -ne 0) { throw "Windows icon creation failed." }
 
     Write-Host "[5/8] Building independent Live2D desktop renderer..."
+    if ($ReuseLive2DBuild) {
+        $ExistingLive2D = Join-Path $Live2DDesktopRoot "release\win-unpacked"
+        $ExistingLive2DExecutable = @(Get-ChildItem -LiteralPath $ExistingLive2D -Filter *.exe -File -ErrorAction SilentlyContinue)
+        if ($ExistingLive2DExecutable.Count -ne 1 -or -not (Test-Path -LiteralPath (Join-Path $ExistingLive2D "resources\app.asar"))) {
+            throw "No complete existing Live2D build is available to reuse."
+        }
+    } else {
     $env:ELECTRON_MIRROR = $ElectronMirror
     $env:ELECTRON_BUILDER_BINARIES_MIRROR = $ElectronBuilderMirror
     Push-Location $Live2DDesktopRoot
@@ -84,6 +95,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Live2D desktop build failed." }
     } finally {
         Pop-Location
+    }
     }
 
     & $PythonExe (Join-Path $DesktopRoot "publish_update.py") prepare

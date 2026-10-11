@@ -29,7 +29,7 @@ async function load(event) {
       <small>置信度 {{ Math.round(Number(memory.confidence || 0) * 100) }}% · {{ memory.learned_at || memory.created_at }}</small>
       <blockquote v-if="evidence.source" style="white-space: pre-wrap; overflow-wrap: anywhere">{{ evidence.source.content }}<footer>{{ evidence.source.role === 'user' ? '用户原话' : '助手消息' }} · {{ evidence.source.created_at }}</footer></blockquote>
       <p v-else>原始消息不存在或未关联；不补造依据。</p>
-      <ul v-if="evidence.events.length"><li v-for="event in evidence.events" :key="event.id">{{ { correct: '修正', archive: '停用', confirm: '确认', restore: '恢复版本' }[event.action] }} · {{ event.created_at }}</li></ul>
+      <ul v-if="evidence.events.length"><li v-for="event in evidence.events" :key="event.id">{{ { correct: '修正', archive: '停用', confirm: '确认', restore: '恢复使用', sleep: '暂时搁置' }[event.action] || event.action }} · {{ event.created_at }}</li></ul>
     </template>
   </details>
 </template>

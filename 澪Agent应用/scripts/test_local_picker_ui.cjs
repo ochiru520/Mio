@@ -24,7 +24,7 @@ async function main(){
  })
  const evidence=process.env.MIO_UI_EVIDENCE||require('node:path').join(require('node:os').tmpdir(),'mio-local-picker-evidence')
  await fs.mkdir(evidence,{recursive:true})
- const category=async name=>page.getByRole('navigation',{name:'Agent 设置分类'}).getByRole('button',{name,exact:true}).click()
+ const category=async name=>page.getByRole('navigation',{name:'设置分类'}).getByRole('button',{name,exact:true}).click()
  try{
    await page.goto('http://127.0.0.1:1422/scripts/agent-settings-preview.html?view=settings')
    await category('创作环境')

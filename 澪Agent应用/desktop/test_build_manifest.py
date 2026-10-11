@@ -34,10 +34,13 @@ class BuildManifestTests(unittest.TestCase):
             release = root / "release"
             files = {
                 "Mio.exe": b"exe",
+                "_internal/build_identity.json": identity.read_bytes(),
                 "_internal/live2d_desktop/resources/app.asar": b"asar",
                 "_internal/agent_frontend/index.html": b"html",
                 "_internal/agent_frontend/assets/index-test.js": b"js",
                 "_internal/agent_frontend/assets/index-test.css": b"css",
+                "_internal/agent_frontend/assets/SettingsPage-test.js": b"lazy-js",
+                "_internal/app/main.pyc": b"backend-bytecode",
                 "_internal/default_voice/mio_v2_00.wav": b"reference",
                 "_internal/agent_scripts/deps/install-gpt-sovits.ps1": b"installer",
                 "_internal/agent_scripts/deps/install-mio-voice-package.py": b"package-installer",
@@ -51,7 +54,10 @@ class BuildManifestTests(unittest.TestCase):
 
             manifest = json.loads((release / "构建清单.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["build_id"], "mio-test-build")
-        self.assertEqual(len(manifest["artifacts"]), 8)
+        self.assertEqual(len(manifest["artifacts"]), 11)
+        paths = {item["path"] for item in manifest["artifacts"]}
+        self.assertIn("_internal/agent_frontend/assets/SettingsPage-test.js", paths)
+        self.assertIn("_internal/app/main.pyc", paths)
         self.assertFalse(any("MioVoice" in item["path"] for item in manifest["artifacts"]))
         executable = next(item for item in manifest["artifacts"] if item["name"] == "windows_executable")
         self.assertEqual(executable["sha256"], hashlib.sha256(b"exe").hexdigest().upper())
@@ -94,6 +100,7 @@ class BuildManifestTests(unittest.TestCase):
             release = root / "release"
             files = {
                 "Mio.exe": b"exe",
+                "_internal/build_identity.json": identity.read_bytes(),
                 "_internal/live2d_desktop/resources/app.asar": b"asar",
                 "_internal/agent_frontend/index.html": b"html",
                 "_internal/agent_frontend/assets/index-test.js": b"js",
@@ -108,5 +115,49 @@ class BuildManifestTests(unittest.TestCase):
 
             payload = finalize_manifest(identity, release)
 
-        self.assertEqual(len(payload["artifacts"]), 7)
+        self.assertEqual(len(payload["artifacts"]), 8)
         self.assertFalse(any(item["name"] == "mio_default_voice_reference" for item in payload["artifacts"]))
+
+    def test_finalize_rejects_new_identity_for_an_old_executable_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            identity = root / "identity.json"
+            identity.write_text(json.dumps({"schema_version": 1, "build_id": "new"}), encoding="utf-8")
+            embedded = root / "release/_internal/build_identity.json"
+            embedded.parent.mkdir(parents=True)
+            embedded.write_text(json.dumps({"schema_version": 1, "build_id": "old"}), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "内嵌身份不一致"):
+                finalize_manifest(identity, root / "release")
+            self.assertFalse((root / "release/构建清单.json").exists())
+
+    def test_capability_frontend_cannot_finalize_without_matching_backend_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            identity = root / "identity.json"
+            identity.write_text(json.dumps({"schema_version": 1, "build_id": "new"}), encoding="utf-8")
+            embedded = root / "release/_internal/build_identity.json"
+            embedded.parent.mkdir(parents=True)
+            embedded.write_bytes(identity.read_bytes())
+            asset = root / "release/_internal/agent_frontend/assets/SettingsPage-test.js"
+            asset.parent.mkdir(parents=True)
+            asset.write_text("fetch('/api/capabilities')", encoding="utf-8")
+            (asset.parent / "index-test.js").write_text("js", encoding="utf-8")
+            (asset.parent / "index-test.css").write_text("css", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "后端未完整打包"):
+                finalize_manifest(identity, root / "release")
+            self.assertFalse((root / "release/构建清单.json").exists())
+
+    def test_backend_files_cannot_hide_a_missing_frontend_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            identity = root / "identity.json"
+            identity.write_text(json.dumps({"schema_version": 1, "build_id": "new"}), encoding="utf-8")
+            embedded = root / "release/_internal/build_identity.json"
+            embedded.parent.mkdir(parents=True)
+            embedded.write_bytes(identity.read_bytes())
+            backend = embedded.parent / "app"
+            backend.mkdir()
+            for number in range(10):
+                (backend / f"module{number}.pyc").write_bytes(b"bytecode")
+            with self.assertRaisesRegex(RuntimeError, "前端入口 JS 或 CSS"):
+                finalize_manifest(identity, root / "release")

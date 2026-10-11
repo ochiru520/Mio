@@ -30,6 +30,11 @@ from . import (
     weekly_review_service,
 )
 from . import model_runtime
+from . import capability_checks
+from . import mobile_task_service, wechat_service
+from . import creative_batch_service, routine_service, media_compose_service, browser_service
+from .routes import workspace
+from .routes import wechat
 from .runtime_identity import runtime_identity
 from .config import settings
 from .companion_action_service import backfill_explicit_structured_memories
@@ -62,7 +67,12 @@ logger = logging.getLogger(__name__)
 
 
 BACKGROUND_TASK_FACTORIES = {
+    "creative_batch_worker": creative_batch_service.service_loop,
+    "routine_worker": routine_service.service_loop,
+    "media_assembly_worker": media_compose_service.service_loop,
     "agent_task_worker": agent_task_service.task_loop,
+    "mobile_task_delivery": mobile_task_service.delivery_loop,
+    "wechat_transport": wechat_service.service_loop,
     "runtime_diagnostics_task": runtime_diagnostics.monitor_loop,
     "voice_startup_task": companion_service.start_voice_on_app_startup,
     "qq_startup_task": proactive_service.start_qq_on_app_startup,
@@ -138,6 +148,7 @@ async def app_lifespan(app: FastAPI):
     companion_service.reset_frontend_ready()
     initialize_runtime()
     agent_task_service.recover_interrupted()
+    browser_service.recover()
     await creation_service.resume_active_jobs()
     await _start_background_tasks(app)
     maintenance_lock = asyncio.Lock()
@@ -148,8 +159,10 @@ async def app_lifespan(app: FastAPI):
         try:
             maintenance_service.begin(reason)
             maintenance_started = True
+            await capability_checks.cancel_all()
             await model_runtime.cancel_operations(reason="maintenance")
             await creation_service.shutdown()
+            await browser_service.shutdown()
             await _stop_background_tasks(app, exclude={"runtime_diagnostics_task"})
             await onebot.disconnect_all_connections(reason="Mio 正在执行数据维护")
             await asyncio.to_thread(maintenance_service.wait_for_quiescence, 30)
@@ -179,9 +192,15 @@ async def app_lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await capability_checks.cancel_all()
         await model_runtime.cancel_operations(reason="shutdown")
         await _stop_background_tasks(app)
         await creation_service.shutdown()
+        await browser_service.shutdown()
+        from . import extension_service
+        extension_service.stop_all()
+        from . import self_upgrade_service
+        self_upgrade_service.stop_all()
         try:
             await onebot.disconnect_all_connections(reason="Mio 后端正在关闭")
         except Exception:
@@ -195,6 +214,8 @@ async def app_lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="私人 AI 日记系统", lifespan=app_lifespan)
+    from .routes.capabilities import router as capabilities_router
+    app.include_router(capabilities_router)
     from .routes.runtime import router as runtime_router
     app.include_router(runtime_router)
     from .routes.artifacts import router as artifacts_router
@@ -253,6 +274,16 @@ def create_app() -> FastAPI:
         SecureAttachmentFiles(directory=str(settings.agent_attachment_dir), check_dir=False),
         name="agent-files",
     )
+    app.include_router(workspace.router)
+    from .routes import execution
+    app.include_router(execution.router)
+    from .routes import execution_policy
+    app.include_router(execution_policy.router)
+    from .routes import extensions, self_upgrade
+    app.include_router(extensions.router)
+    app.include_router(self_upgrade.router)
+    from .routes import agent_surface
+    app.include_router(agent_surface.router)
     app.include_router(chat.router)
     app.include_router(agent.router)
     app.include_router(autonomy.router)
@@ -266,6 +297,7 @@ def create_app() -> FastAPI:
     app.include_router(monthly.router)
     app.include_router(onboarding.router)
     app.include_router(onebot.router)
+    app.include_router(wechat.router)
     app.include_router(privacy.router)
     app.include_router(realtime.router)
     app.include_router(review.router)

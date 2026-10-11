@@ -28,7 +28,7 @@
         </nav>
       </header>
 
-      <form id="diary-edit-form" class="diary-editor">
+      <form id="diary-edit-form" class="diary-editor" data-revision="{{ revision }}">
         <label>
           今日成长
           <select id="daily-thirty-status">
@@ -89,6 +89,8 @@
               markdown_content: markdownContent.value,
               mood_tags: moodTags.value,
               daily_thirty_status: dailyThirtyStatus.value,
+              expected_revision: Number(form.dataset.revision || 0),
+              change_reason: "手动编辑",
             }),
           });
           if (!response.ok) throw new Error(await window.MioSite.readError(response));

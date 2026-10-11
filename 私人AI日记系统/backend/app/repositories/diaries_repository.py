@@ -5,6 +5,7 @@ from typing import Any, Callable
 from datetime import datetime
 import sqlite3
 from datetime import timedelta
+import hashlib
 
 
 class DiariesRepository:
@@ -89,13 +90,23 @@ class DiariesRepository:
         mood_tags: str = "",
         daily_thirty_status: str = "unknown",
         confirmed_at: str | None = None,
-    ) -> None:
+        *,
+        expected_revision: int | None = None,
+        change_reason: str = "",
+    ) -> int:
         timestamp = self._dep_now_iso()
         with self._dep_get_conn() as conn:
             current = conn.execute(
-                "SELECT confirmed_at FROM diaries WHERE date = ?",
+                "SELECT title, markdown_content, mood_tags, daily_thirty_status, confirmed_at FROM diaries WHERE date = ?",
                 (date,),
             ).fetchone()
+            revision_row = conn.execute(
+                "SELECT COALESCE(MAX(revision), 0) AS revision FROM diary_versions WHERE diary_date = ?",
+                (date,),
+            ).fetchone()
+            current_revision = int(revision_row["revision"] or 0)
+            if expected_revision is not None and expected_revision != current_revision:
+                raise ValueError(f"日记版本已变化，请刷新后再保存（当前 revision={current_revision}）。")
             if confirmed_at is None:
                 effective_confirmed_at = current["confirmed_at"] if current else ""
             else:
@@ -126,6 +137,45 @@ class DiariesRepository:
                     timestamp,
                 ),
             )
+            changed = current is None or any([
+                str(current["title"] or "") != str(title),
+                str(current["markdown_content"] or "") != str(markdown_content),
+                str(current["mood_tags"] or "") != str(mood_tags),
+                str(current["daily_thirty_status"] or "") != str(daily_thirty_status),
+                str(current["confirmed_at"] or "") != str(effective_confirmed_at or ""),
+            ])
+            if changed:
+                revision = current_revision + 1
+                content_hash = hashlib.sha256(markdown_content.encode("utf-8")).hexdigest()
+                conn.execute(
+                    """INSERT INTO diary_versions
+                    (diary_date, revision, title, markdown_content, mood_tags, daily_thirty_status,
+                     confirmed_at, change_reason, content_hash, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (date, revision, title, markdown_content, mood_tags, daily_thirty_status,
+                     effective_confirmed_at or "", change_reason[:500], content_hash, timestamp),
+                )
+            else:
+                revision = current_revision
+        return revision
+
+    def list_diary_versions(self, date: str) -> list[sqlite3.Row]:
+        with self._dep_get_conn() as conn:
+            return conn.execute(
+                """SELECT id, diary_date, revision, title, markdown_content, mood_tags,
+                   daily_thirty_status, confirmed_at, change_reason, content_hash, created_at
+                   FROM diary_versions WHERE diary_date = ? ORDER BY revision DESC""",
+                (date,),
+            ).fetchall()
+
+    def get_diary_version(self, date: str, revision: int) -> sqlite3.Row | None:
+        with self._dep_get_conn() as conn:
+            return conn.execute(
+                """SELECT id, diary_date, revision, title, markdown_content, mood_tags,
+                   daily_thirty_status, confirmed_at, change_reason, content_hash, created_at
+                   FROM diary_versions WHERE diary_date = ? AND revision = ?""",
+                (date, revision),
+            ).fetchone()
 
 
     def list_diaries(self) -> list[sqlite3.Row]:

@@ -121,6 +121,7 @@ get_total_message_token_usage = _messages_service.get_total_message_token_usage
 get_token_usage_summary = _messages_service.get_token_usage_summary
 list_recent_private_user_messages = _messages_service.list_recent_private_user_messages
 get_message_by_id = _messages_service.get_message_by_id
+update_message_attachments = _messages_service.update_message_attachments
 get_latest_message_id = _messages_service.get_latest_message_id
 get_messages_after_id = _messages_service.get_messages_after_id
 create_agent_conversation = _messages_service.create_agent_conversation
@@ -206,6 +207,9 @@ list_follow_up_results = _followups_service.list_follow_up_results
 resolve_pending_thread_by_id = _followups_service.resolve_pending_thread_by_id
 update_pending_thread_by_id = _followups_service.update_pending_thread_by_id
 delete_pending_thread_by_id = _followups_service.delete_pending_thread_by_id
+attach_pending_thread_source = _followups_service.attach_source
+mark_pending_thread_source_stale = _followups_service.mark_source_stale
+list_pending_thread_sources = _followups_service.list_sources
 
 from .repositories.agent_runs_repository import AgentRunsRepository
 _agent_runs_service = AgentRunsRepository(
@@ -217,6 +221,12 @@ create_agent_run = _agent_runs_service.create_agent_run
 get_agent_run = _agent_runs_service.get_agent_run
 get_agent_run_by_request = _agent_runs_service.get_agent_run_by_request
 get_agent_runs_by_requests = _agent_runs_service.get_agent_runs_by_requests
+append_agent_run_message = _agent_runs_service.append_agent_run_message
+list_agent_run_messages = _agent_runs_service.list_agent_run_messages
+append_agent_run_event = _agent_runs_service.append_agent_run_event
+list_agent_run_events = _agent_runs_service.list_agent_run_events
+list_agent_task_runs = _agent_runs_service.list_agent_task_runs
+list_agent_task_history = _agent_runs_service.list_agent_task_history
 save_model_route_observation = _agent_runs_service.save_model_route_observation
 list_model_route_observations = _agent_runs_service.list_model_route_observations
 relink_agent_run_source_message = _agent_runs_service.relink_agent_run_source_message
@@ -259,6 +269,8 @@ get_calendar_data = _diaries_service.get_calendar_data
 delete_diary = _diaries_service.delete_diary
 search_all = _diaries_service.search_all
 mark_materials_used = _diaries_service.mark_materials_used
+list_diary_versions = _diaries_service.list_diary_versions
+get_diary_version = _diaries_service.get_diary_version
 
 from .repositories.autonomy_repository import AutonomyRepository
 _autonomy_service = AutonomyRepository(

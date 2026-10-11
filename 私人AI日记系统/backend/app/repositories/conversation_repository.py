@@ -22,21 +22,36 @@ class ConversationRepository:
         self._timestamp_provider = timestamp_provider
         self._day_bounds_provider = day_bounds_provider
 
-    def get_recent_messages(self, limit: int = 30, conversation_id: str = "default") -> list[sqlite3.Row]:
+    def get_recent_messages(self, limit: int = 30, conversation_id: str = "default", before_id: int = 0) -> list[sqlite3.Row]:
+        # Historical WeChat receipts may be recovered after newer chat rows.
+        # Preserve their event time rather than their backfill insertion ID.
+        order = "created_at DESC, id DESC" if conversation_id.startswith("wechat_private_") else "id DESC"
         with self._connection_factory() as conn:
+            where = "conversation_id = ?"
+            params: tuple[object, ...] = (conversation_id,)
+            if before_id:
+                if conversation_id.startswith("wechat_private_"):
+                    anchor = conn.execute('SELECT created_at FROM messages WHERE id=? AND conversation_id=?', (before_id, conversation_id)).fetchone()
+                    if not anchor:
+                        return []
+                    where += " AND (created_at < ? OR (created_at = ? AND id < ?))"
+                    params += (anchor['created_at'], anchor['created_at'], before_id)
+                else:
+                    where += " AND id < ?"
+                    params += (before_id,)
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, role, content, source, conversation_id, created_at,
                        request_id, model_id, provider_model, reasoning_level, prompt_tokens,
                        cached_prompt_tokens, completion_tokens, reasoning_tokens,
                        request_cost_yuan, request_cost_source, attachments_json,
                        emotion, first_token_latency_ms, total_latency_ms
                 FROM messages
-                WHERE conversation_id = ?
-                ORDER BY id DESC
+                WHERE {where}
+                ORDER BY {order}
                 LIMIT ?
                 """,
-                (conversation_id, limit),
+                params + (limit,),
             ).fetchall()
         return list(reversed(rows))
 
@@ -249,9 +264,13 @@ class ConversationRepository:
                 conn.execute("DELETE FROM agent_task_runs WHERE task_id IN (SELECT id FROM agent_tasks WHERE conversation_id=?)", (conversation_id,))
                 conn.execute("DELETE FROM agent_tasks WHERE conversation_id=?", (conversation_id,))
             conn.execute("DELETE FROM agent_run_steps WHERE run_id IN (SELECT run_id FROM agent_runs WHERE conversation_id=?)", (conversation_id,))
+            conn.execute("DELETE FROM agent_run_messages WHERE run_id IN (SELECT run_id FROM agent_runs WHERE conversation_id=?)", (conversation_id,))
+            conn.execute("DELETE FROM agent_run_events WHERE run_id IN (SELECT run_id FROM agent_runs WHERE conversation_id=?)", (conversation_id,))
             conn.execute("DELETE FROM tool_execution_receipts WHERE conversation_id=?", (conversation_id,))
             conn.execute("DELETE FROM agent_runs WHERE conversation_id=?", (conversation_id,))
             if "creation_jobs" in tables:
+                if 'creation_job_owners' in tables:
+                    conn.execute('DELETE FROM creation_job_owners WHERE job_id IN (SELECT id FROM creation_jobs WHERE conversation_id=?)', (conversation_id,))
                 conn.execute("DELETE FROM creation_jobs WHERE conversation_id=?", (conversation_id,))
             conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
             conn.execute("DELETE FROM pending_threads WHERE conversation_id = ?", (conversation_id,))
@@ -357,6 +376,7 @@ class ConversationRepository:
             ).fetchall()
 
     def get_last_message(self, conversation_id: str = "default", role: str | None = None) -> sqlite3.Row | None:
+        order = "created_at DESC, id DESC" if conversation_id.startswith("wechat_private_") else "id DESC"
         where = "WHERE conversation_id = ?"
         params: tuple[object, ...] = (conversation_id,)
         if role:
@@ -368,7 +388,7 @@ class ConversationRepository:
                 SELECT id, role, content, source, conversation_id, created_at
                 FROM messages
                 {where}
-                ORDER BY id DESC
+                ORDER BY {order}
                 LIMIT 1
                 """,
                 params,

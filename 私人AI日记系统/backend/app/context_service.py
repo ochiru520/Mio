@@ -231,13 +231,15 @@ def build_temporal_evidence_context(
         return ""
 
     message_candidates: list[tuple[int, Row]] = []
+    from .memory_revision_service import sanitize_history
     for row in db.list_recent_private_user_messages(limit=2000):
         if before_message_id and int(row["id"]) >= before_message_id:
             continue
-        score = _evidence_score(row["content"], terms)
+        content = sanitize_history(str(row['content']), source_message_id=int(row['id']))
+        score = _evidence_score(content, terms)
         if score:
             same_conversation_bonus = 25 if str(row["conversation_id"]) == conversation_id else 0
-            message_candidates.append((score + same_conversation_bonus, row))
+            message_candidates.append((score + same_conversation_bonus, {**dict(row), 'content': content}))
     message_candidates.sort(key=lambda item: (item[0], int(item[1]["id"])), reverse=True)
 
     diary_candidates: list[tuple[int, Row]] = []
@@ -388,7 +390,9 @@ def build_recent_user_timeline_context(conversation_id: str) -> str:
                 time_label = written.strftime("%H:%M")
             except (TypeError, ValueError):
                 time_label = str(row["created_at"])[11:16] or "时间未知"
-            lines.append(f"- {time_label} 用户：{_compact_text(_row_content(row), 180)}")
+            from .memory_revision_service import sanitize_history
+            content = sanitize_history(_row_content(row), source_message_id=int(row['id']))
+            lines.append(f"- {time_label} 用户：{_compact_text(content, 180)}")
         sections.append(f"{label}（记录日 {logical_day}）：\n" + "\n".join(lines))
     if not sections:
         return ""
@@ -708,7 +712,9 @@ def build_periodic_memory_context(
             continue
         day = str(row["created_at"])[:10]
         samples_by_day.setdefault(day, [])
-        samples_by_day[day].append(_compact_text(_row_content(row), 90))
+        from .memory_revision_service import sanitize_history
+        content = sanitize_history(_row_content(row), source_message_id=int(row['id']))
+        samples_by_day[day].append(_compact_text(content, 90))
 
     if samples_by_day:
         lines = []

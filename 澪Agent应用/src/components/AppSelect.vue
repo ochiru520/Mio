@@ -109,14 +109,14 @@ watch(() => [props.options, props.disabled], close)
 </template>
 
 <style scoped>
-.app-select { display: flex; width: 100%; min-width: 0; min-height: 40px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.app-select { display: flex; width: 100%; min-width: 0; min-height: 40px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-raised); color: var(--ink); font: inherit; font-size: calc(12px * var(--fs, 1)); text-align: left; cursor: pointer; }
 .app-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-select svg { flex-shrink: 0; color: var(--muted); transition: transform .15s; }
 .app-select svg.opened { transform: rotate(180deg); }
 .app-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .app-select:disabled { opacity: .5; cursor: default; }
-.app-select-menu { position: fixed; z-index: 10000; margin: 0; padding: 5px; overflow: auto; list-style: none; border: 1px solid var(--line); border-radius: 11px; background: #fff; color: var(--ink); box-shadow: 0 12px 36px #263c4a24; }
-.app-select-menu li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; padding: 8px 10px; border-radius: 7px; font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
+.app-select-menu { position: fixed; z-index: 10000; margin: 0; padding: 5px; overflow: auto; list-style: none; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-raised); color: var(--ink); box-shadow: 0 12px 36px var(--shadow-strong); }
+.app-select-menu li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; padding: 8px 10px; border-radius: 7px; font-size: calc(12px * var(--fs, 1)); cursor: pointer; overflow-wrap: anywhere; }
 .app-select-menu li.highlighted { background: var(--accent-soft); }
 .app-select-menu li[aria-selected=true] { color: var(--accent-dark); font-weight: 650; }
 .app-select-menu svg { flex-shrink: 0; }

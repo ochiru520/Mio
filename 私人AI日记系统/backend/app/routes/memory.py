@@ -33,6 +33,9 @@ class PendingThreadRequest(BaseModel):
     content: str = Field(min_length=1, max_length=500)
     conversation_id: str = Field(default="default", max_length=120)
     follow_up_after: str = Field(default="", max_length=40)
+    source_type: str = Field(default="", max_length=20)
+    source_id: str = Field(default="", max_length=300)
+    source_revision: int = Field(default=0, ge=0)
 
 
 class FollowUpResultRequest(BaseModel):
@@ -92,6 +95,9 @@ def _memory_data() -> dict[str, object]:
         {**dict(row), "conversation_label": _conversation_label(str(row["conversation_id"]))}
         for row in db.list_all_open_pending_threads(limit=50)
     ]
+    for thread in threads:
+        thread["sources"] = [dict(item) for item in db.list_pending_thread_sources(int(thread["id"]))]
+        thread["needs_recheck"] = any(item["state"] == "stale" for item in thread["sources"])
     summaries = [
         {
             "conversation_id": str(row["tags"] or ""),
@@ -275,6 +281,8 @@ async def api_create_thread(payload: PendingThreadRequest):
         payload.content,
         _normalize_follow_up(payload.follow_up_after),
     )
+    if payload.source_type and payload.source_id:
+        db.attach_pending_thread_source(thread_id, payload.source_type, payload.source_id, payload.source_revision)
     return {"id": thread_id, "saved": True}
 
 
@@ -282,6 +290,8 @@ async def api_create_thread(payload: PendingThreadRequest):
 async def api_update_thread(thread_id: int, payload: PendingThreadRequest):
     if not db.update_pending_thread_by_id(thread_id, payload.content, _normalize_follow_up(payload.follow_up_after)):
         raise HTTPException(status_code=404, detail="没有找到这个待跟进话题。")
+    if payload.source_type and payload.source_id:
+        db.attach_pending_thread_source(thread_id, payload.source_type, payload.source_id, payload.source_revision)
     return {"id": thread_id, "saved": True}
 
 

@@ -1,5 +1,6 @@
 <script setup>
-import { inject } from 'vue'
+import { computed, inject } from 'vue'
+import { groupExecutionRecords } from '../executionRecordPresentation.js'
 import {
   Activity,
   Check,
@@ -19,6 +20,7 @@ import {
 
 const context = inject('mio-records-page')
 if (!context) throw new Error('任务页上下文未初始化')
+const executionGroups = computed(() => groupExecutionRecords(context.filteredAgentTasks))
 </script>
 
 <template>
@@ -65,31 +67,32 @@ if (!context) throw new Error('任务页上下文未初始化')
           <RefreshCw class="spin" :size="22" />
           <span>正在读取执行记录</span>
         </div>
+        <div v-else-if="context.tasksError" class="tasks-empty"><p role="alert">执行记录读取失败：{{ context.tasksError }}</p><button type="button" @click="context.loadAgentTasks()">重新读取</button></div>
         <div v-else-if="!context.filteredAgentTasks.length" class="tasks-empty">
           <ListChecks :size="28" />
           <strong>这里暂时没有任务</strong>
           <span>Mio 实际修改日记、状态、记忆或属性后，会在这里留下记录</span>
         </div>
         <div v-else class="task-list">
-          <article v-for="task in context.filteredAgentTasks" :key="task.id" class="task-row">
+          <component v-for="group in executionGroups" :key="String(group.technical)" :is="group.technical ? 'details' : 'div'" :class="{ 'task-technical-records': group.technical }">
+          <summary v-if="group.technical">技术记录 · {{ group.items.length }} 次任务进度更新</summary>
+          <article v-for="{ record: task, presentation } in group.items" :key="task.id" class="task-row">
             <div :class="['task-state-mark', `status-${task.status}`]">
               <RefreshCw v-if="['queued', 'running'].includes(task.status)" :class="{ spin: task.status === 'running' }" :size="16" />
               <Clock3 v-else-if="task.status === 'needs_confirmation'" :size="16" />
-              <Check v-else-if="task.status === 'executed'" :size="16" />
+              <Check v-else-if="['executed', 'completed'].includes(task.status)" :size="16" />
               <X v-else :size="16" />
             </div>
             <div class="task-row-main">
               <header>
-                <div><strong>{{ task.title }}</strong><span :class="`status-${task.status}`">{{ context.taskStatusLabel(task.status) }}</span></div>
-                <time>{{ context.formatRealTime(task.finished_at || task.created_at) }}</time>
+                <div><strong>{{ presentation.label }}</strong><span :class="`status-${task.status}`">{{ context.taskStatusLabel(task.status) }}</span></div>
+                <time v-if="task.finished_at || task.created_at">{{ context.formatRealTime(task.finished_at || task.created_at) }}</time>
               </header>
-              <p>{{ context.taskPayloadSummary(task) }}</p>
-              <div class="task-meta">
-                <span>对话：{{ task.conversation_id || '默认对话' }}</span>
-                <span v-if="task.source_message_id">来源消息 #{{ task.source_message_id }}</span>
-                <span>任务 #{{ task.id }}</span>
-              </div>
-              <div v-if="task.result" :class="['task-result', { error: ['failed', 'skipped', 'cancelled'].includes(task.status) }]">{{ task.result }}</div>
+              <p :class="{ 'task-summary-error': ['failed', 'skipped'].includes(task.status) }">{{ presentation.summary }}</p>
+              <details v-if="presentation.details.length" class="task-record-details">
+                <summary>技术详情</summary>
+                <dl><template v-for="detail in presentation.details" :key="detail.label"><dt>{{ detail.label }}</dt><dd>{{ detail.value }}</dd></template></dl>
+              </details>
             </div>
             <div v-if="task.status === 'needs_confirmation'" class="task-actions">
               <button type="button" :disabled="Boolean(context.taskBusy)" @click="context.cancelAgentTask(task)">取消</button>
@@ -99,10 +102,14 @@ if (!context) throw new Error('任务页上下文未初始化')
               </button>
             </div>
           </article>
+          </component>
         </div>
       </template>
 
       <template v-else-if="context.taskCenterTab === 'goals'">
+        <p v-if="context.autonomyLoading" role="status">正在读取目标与权限…</p>
+        <div v-else-if="context.autonomyError" class="tasks-empty"><p role="alert">目标与权限读取失败：{{ context.autonomyError }}</p><button type="button" @click="context.loadAutonomy()">重新读取</button></div>
+        <template v-else-if="context.autonomyLoaded">
         <section class="autonomy-policy-panel">
           <header>
             <div><ShieldCheck :size="18" /><div><strong>自主权限</strong><span>{{ context.autonomyData.policy.paused ? '全部自主行为已暂停' : '只对活动目标评估事件' }}</span></div></div>
@@ -176,11 +183,13 @@ if (!context) throw new Error('任务页上下文未初始化')
             </article>
           </div>
         </section>
+        </template>
       </template>
 
       <template v-else>
         <div v-if="context.autonomyLoading && !context.autonomyLoaded" class="center-state tasks-center-state"><RefreshCw class="spin" :size="22" /><span>正在读取主动记录</span></div>
-        <template v-else>
+        <div v-else-if="context.autonomyError" class="tasks-empty"><p role="alert">主动记录读取失败：{{ context.autonomyError }}</p><button type="button" @click="context.loadAutonomy()">重新读取</button></div>
+        <template v-else-if="context.autonomyLoaded">
           <section class="autonomy-log-section">
             <header><div><MessageSquareText :size="18" /><div><strong>主动行为</strong><span>包含决策原因和最终投递状态</span></div></div></header>
             <div v-if="!context.autonomyData.behaviors.length" class="tasks-empty compact"><MessageSquareText :size="25" /><strong>还没有主动行为</strong><span>只有通过权限、时段、预算和相关性门禁后才会出现</span></div>
@@ -219,3 +228,7 @@ if (!context) throw new Error('任务页上下文未初始化')
     </div>
   </section>
 </template>
+
+<style scoped>
+.task-record-details{margin-top:9px;font-size:11px;color:var(--muted)}.task-record-details summary,.task-technical-records>summary{cursor:pointer}.task-record-details dl{display:grid;grid-template-columns:70px minmax(0,1fr);gap:8px;margin:10px 0}.task-record-details dt{color:var(--muted)}.task-record-details dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}.task-technical-records>summary{padding:14px 18px;color:var(--muted);font-size:12px}.task-row-main>p.task-summary-error{color:var(--danger)}.task-row-main>p{overflow-wrap:anywhere}@media(max-width:600px){.task-row-main>header{align-items:flex-start;flex-direction:column;gap:7px}.task-row-main>header>div{flex-wrap:wrap}.task-record-details dl{grid-template-columns:60px minmax(0,1fr)}}
+</style>

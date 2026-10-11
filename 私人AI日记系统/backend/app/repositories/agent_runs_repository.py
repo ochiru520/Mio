@@ -90,6 +90,103 @@ class AgentRunsRepository:
             ).fetchone()
 
 
+    def append_agent_run_message(
+        self,
+        run_id: str,
+        turn_index: int,
+        message_key: str,
+        role: str,
+        content_json: str,
+        *,
+        metadata_json: str = "{}",
+    ) -> sqlite3.Row:
+        clean_key = str(message_key or "").strip()[:200]
+        clean_role = str(role or "").strip()[:40]
+        if not clean_key or not clean_role:
+            raise ValueError("Agent 消息键和角色不能为空。")
+        with self._dep_get_conn() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO agent_run_messages (
+                    run_id, turn_index, message_key, role, content_json,
+                    metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(run_id or "").strip()[:80],
+                    max(0, int(turn_index)),
+                    clean_key,
+                    clean_role,
+                    str(content_json or "null"),
+                    str(metadata_json or "{}"),
+                    self._dep_now_iso(),
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM agent_run_messages WHERE message_key = ?",
+                (clean_key,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Agent 消息历史持久化失败。")
+        return row
+
+
+    def list_agent_run_messages(self, run_id: str, *, after_id: int = 0, limit: int = 200) -> list[sqlite3.Row]:
+        with self._dep_get_conn() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM agent_run_messages
+                WHERE run_id = ? AND id > ?
+                ORDER BY id ASC LIMIT ?
+                """,
+                (str(run_id or "").strip()[:80], max(0, int(after_id)), max(1, min(int(limit), 500))),
+            ).fetchall()
+
+
+    def append_agent_run_event(
+        self,
+        run_id: str,
+        event_key: str,
+        event_type: str,
+        payload_json: str = "{}",
+    ) -> sqlite3.Row:
+        clean_key = str(event_key or "").strip()[:200]
+        clean_type = str(event_type or "").strip()[:80]
+        if not clean_key or not clean_type:
+            raise ValueError("Agent 事件键和类型不能为空。")
+        with self._dep_get_conn() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO agent_run_events (
+                    run_id, event_key, event_type, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(run_id or "").strip()[:80], clean_key, clean_type,
+                    str(payload_json or "{}"), self._dep_now_iso(),
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM agent_run_events WHERE event_key = ?",
+                (clean_key,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Agent 事件持久化失败。")
+        return row
+
+
+    def list_agent_run_events(self, run_id: str, *, after_id: int = 0, limit: int = 200) -> list[sqlite3.Row]:
+        with self._dep_get_conn() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM agent_run_events
+                WHERE run_id = ? AND id > ?
+                ORDER BY id ASC LIMIT ?
+                """,
+                (str(run_id or "").strip()[:80], max(0, int(after_id)), max(1, min(int(limit), 500))),
+            ).fetchall()
+
+
     def get_agent_runs_by_requests(self, request_ids: list[str]) -> list[sqlite3.Row]:
         normalized = list(dict.fromkeys(
             str(request_id or "").strip()[:80]
@@ -103,6 +200,27 @@ class AgentRunsRepository:
             return conn.execute(
                 f"SELECT * FROM agent_runs WHERE request_id IN ({placeholders})",
                 tuple(normalized),
+            ).fetchall()
+
+    def list_agent_task_runs(self, task_id: str, *, limit: int = 100, offset: int = 0) -> list[sqlite3.Row]:
+        with self._dep_get_conn() as conn:
+            return conn.execute(
+                """SELECT a.* FROM agent_runs a JOIN agent_task_runs t ON t.run_id=a.run_id
+                WHERE t.task_id=? ORDER BY t.rowid DESC LIMIT ? OFFSET ?""",
+                (task_id, max(1, min(int(limit), 500)), max(0, int(offset))),
+            ).fetchall()
+
+    def list_agent_task_history(self, task_id: str, *, kind: str, run_id: str = "",
+                                after_id: int = 0, limit: int = 200) -> list[sqlite3.Row]:
+        if kind not in {"messages", "events"}:
+            raise ValueError("未知的执行历史类型。")
+        with self._dep_get_conn() as conn:
+            return conn.execute(
+                f"""SELECT h.* FROM agent_run_{kind} h
+                JOIN agent_task_runs t ON t.run_id=h.run_id
+                WHERE t.task_id=? AND (?='' OR h.run_id=?) AND h.id>?
+                ORDER BY h.id ASC LIMIT ?""",
+                (task_id, run_id, run_id, max(0, int(after_id)), max(1, min(int(limit), 501))),
             ).fetchall()
 
 

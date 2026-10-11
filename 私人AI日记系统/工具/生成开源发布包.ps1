@@ -83,6 +83,9 @@ function Test-ExcludedPath {
         if ($path -eq '文档/试用记录.md') { return $true }
     }
     if ($RepositoryName -eq "澪Agent应用") {
+        # Browser acceptance captures can contain conversation or account data.
+        if ($path -match '^(ui-evidence|ui-tool-picker)(/|$)') { return $true }
+        if ($path -match '^\.frontend-backup-[^/]+(/|$)|^\.tmp-[^/]+$|^预览(/|$)') { return $true }
         if ($path -match '(^|/)(mio-avatar|mio-workspace-bg)\.png$') { return $true }
     }
     return $false

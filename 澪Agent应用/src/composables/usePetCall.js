@@ -5,8 +5,10 @@
 import { bargeInThreshold } from '../petCallAudio.js'
 import { bytesToBase64 } from '../petCallAudio.js'
 import { encodePcmWav } from '../petCallAudio.js'
+import { acquireAudioOwner, releaseAudioOwner } from '../audioCoordinator.js'
 
 export function usePetCall(deps) {
+  let callGeneration = 0
   function handlePetChatKeydown(event) {
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -31,6 +33,7 @@ export function usePetCall(deps) {
   }
   function resetPetCallCapture() {
     deps.petCallFrames = []
+    deps.petCallPreRoll = []
     deps.petCallSpeechStartedAt = 0
     deps.petCallSpeechCandidateStartedAt = 0
     deps.petCallLastVoiceAt = 0
@@ -146,18 +149,32 @@ export function usePetCall(deps) {
     }
   }
   async function startPetCall() {
-    if (deps.petCallActive.value) return
+    if (deps.petCallActive.value || deps.petCallState.value === 'connecting') return
+    const generation = ++callGeneration
+    let startingStream = null
+    let startingContext = null
+    let startingSessionId = ''
+    const releaseStaleStartup = async () => {
+      for (const track of startingStream?.getTracks?.() || []) track.stop()
+      if (startingContext) await startingContext.close().catch(() => {})
+      if (startingSessionId) await deps.request('/api/companion/call/stop', {
+        method: 'POST', body: JSON.stringify({ call_session_id: startingSessionId, response_id: '' }),
+      }).catch(() => {})
+    }
     deps.petCallError.value = ''
     deps.petCallState.value = 'connecting'
     try {
+      acquireAudioOwner('pet-call')
       const result = await deps.request('/api/companion/call/start', { method: 'POST' })
-      deps.petCallSessionId = String(result.call_session_id || '')
+      startingSessionId = String(result.call_session_id || '')
+      if (generation !== callGeneration) { await releaseStaleStartup(); return }
+      deps.petCallSessionId = startingSessionId
       deps.petCallNextTurnId = Number(result.next_turn_id || 1)
       deps.petCallResponseId = ''
       deps.petCallAwaitingVoiceSince = 0
       if (!deps.petCallSessionId) throw new Error('电话服务没有返回会话 ID')
       deps.petCallSettings.value = { ...deps.petCallSettings.value, ...(result.settings || {}) }
-      deps.petCallStream = await navigator.mediaDevices.getUserMedia({
+      startingStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -166,11 +183,17 @@ export function usePetCall(deps) {
           sampleRate: { ideal: 16000 },
         },
       })
-      deps.petCallAudioContext = new AudioContext({ latencyHint: 'interactive' })
-      await deps.petCallAudioContext.resume()
+      if (generation !== callGeneration) { await releaseStaleStartup(); return }
+      startingContext = new AudioContext({ latencyHint: 'interactive' })
+      await startingContext.resume()
+      if (generation !== callGeneration) { await releaseStaleStartup(); return }
+      deps.petCallStream = startingStream
+      deps.petCallAudioContext = startingContext
       deps.petCallSource = deps.petCallAudioContext.createMediaStreamSource(deps.petCallStream)
       deps.petCallProcessor = deps.petCallAudioContext.createScriptProcessor(2048, 1, 1)
-      deps.petCallProcessor.onaudioprocess = processPetCallAudio
+      deps.petCallProcessor.onaudioprocess = event => {
+        if (generation === callGeneration) processPetCallAudio(event)
+      }
       deps.petCallSource.connect(deps.petCallProcessor)
       deps.petCallProcessor.connect(deps.petCallAudioContext.destination)
       const microphoneTrack = deps.petCallStream.getAudioTracks()[0]
@@ -225,12 +248,17 @@ export function usePetCall(deps) {
         } catch (_) {}
       }, 250)
     } catch (error) {
+      if (generation !== callGeneration) { await releaseStaleStartup(); return }
+      // Startup resources are local until resume succeeds; stop owns them on failure.
+      if (!deps.petCallStream) deps.petCallStream = startingStream
+      if (!deps.petCallAudioContext) deps.petCallAudioContext = startingContext
       deps.petCallError.value = error.message
       deps.petCallState.value = 'error'
       await stopPetCall({ notifyServer: true, preserveError: true })
     }
   }
   async function stopPetCall({ notifyServer = true, preserveError = false } = {}) {
+    ++callGeneration
     const wasActive = deps.petCallActive.value || deps.petCallState.value === 'connecting'
     const callSessionId = deps.petCallSessionId
     const responseId = deps.petCallResponseId
@@ -249,13 +277,15 @@ export function usePetCall(deps) {
       try { deps.petCallSource.disconnect() } catch (_) {}
     }
     for (const track of deps.petCallStream?.getTracks?.() || []) track.stop()
-    if (deps.petCallAudioContext) await deps.petCallAudioContext.close().catch(() => {})
+    const stoppedContext = deps.petCallAudioContext
     deps.petCallProcessor = null
     deps.petCallSource = null
     deps.petCallStream = null
     deps.petCallAudioContext = null
     deps.petCallTurnPending = false
+    releaseAudioOwner('pet-call')
     if (!preserveError) deps.petCallState.value = 'idle'
+    if (stoppedContext) await stoppedContext.close().catch(() => {})
     if (notifyServer && wasActive && callSessionId) {
       await deps.request('/api/companion/call/stop', {
         method: 'POST',
@@ -264,7 +294,7 @@ export function usePetCall(deps) {
     }
   }
   async function togglePetCall() {
-    if (deps.petCallActive.value) await stopPetCall()
+    if (deps.petCallActive.value || deps.petCallState.value === 'connecting') await stopPetCall()
     else await startPetCall()
   }
   async function sendPetChat() {

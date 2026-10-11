@@ -74,6 +74,28 @@
         {% endif %}
       </section>
 
+      <section class="version-panel">
+        <h2>修订历史</h2>
+        <p>每次实际修改都会保留正文、状态和来源哈希。</p>
+        {% if versions %}
+          <div class="diary-version-list">
+            {% for version in versions %}
+              <article class="diary-version-item">
+                <strong>revision {{ version.revision }}</strong>
+                <small>{{ version.created_at }}{% if version.change_reason %} · {{ version.change_reason }}{% endif %}</small>
+                <details><summary>查看正文</summary><pre>{{ version.markdown_content }}</pre></details>
+                <div class="detail-actions">
+                  <a href="/api/diaries/{{ diary.date }}/versions/{{ version.revision }}/diff" target="_blank" rel="noopener">查看与当前差异</a>
+                  {% if not loop.first %}<button type="button" class="restore-diary-version" data-revision="{{ version.revision }}">恢复此版本</button>{% endif %}
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="muted">尚未形成历史版本。</p>
+        {% endif %}
+      </section>
+
       <div class="detail-actions">
         <button
           type="button"
@@ -101,6 +123,18 @@
     const confirmDiaryBtn = document.getElementById('confirm-diary-btn');
     const deleteDiaryBtn = document.getElementById('delete-diary-btn');
     const notice = document.getElementById('notice');
+    document.querySelectorAll('.restore-diary-version').forEach(button => {
+      button.addEventListener('click', async () => {
+        const revision = button.dataset.revision;
+        if (!window.confirm(`恢复 revision ${revision}？当前正文会作为新的版本保留。`)) return;
+        notice.textContent = '恢复中...';
+        try {
+          const response = await fetch(`/api/diaries/{{ diary.date }}/versions/${revision}/restore`, { method: 'POST' });
+          if (!response.ok) throw new Error(await window.MioSite.readError(response));
+          window.location.reload();
+        } catch (error) { notice.textContent = '恢复失败：' + error.message; }
+      });
+    });
 
     confirmDiaryBtn.addEventListener('click', async () => {
       const confirmed = confirmDiaryBtn.dataset.confirmed !== 'true';

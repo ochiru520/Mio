@@ -352,7 +352,19 @@ def normalize_root(value: str | Path) -> Path:
 
 def python_for(root: Path) -> Path | None:
     candidates = [root / "python/python.exe", root / ".venv/Scripts/python.exe", root / "venv/Scripts/python.exe", root / ".venv/bin/python", root.parent / "python_embeded/python.exe", root.parent / "python_embedded/python.exe"]
+    # The user's accelerated install has a separate compatible Python runtime.
+    # Its named launcher is an installation marker; never execute/parse a BAT
+    # as arbitrary shell commands from the application.
+    if (root / "启动千问生图加速版.bat").is_file():
+        candidates.insert(0, root / "python-qwen312/python.exe")
     return next((path.resolve() for path in candidates if path.is_file()), None)
+
+
+def launch_options(root: Path, executable: Path) -> list[str]:
+    if (root / "启动千问生图加速版.bat").is_file() and executable.resolve() == (root / "python-qwen312/python.exe").resolve():
+        return ["--database-url", "sqlite:///user/comfyui.db", "--preview-method", "auto",
+                "--use-sage-attention", "--cuda-malloc", "--temp-directory", str(root / "qwen_accel/runtime-temp")]
+    return []
 
 
 def environment_config() -> dict:

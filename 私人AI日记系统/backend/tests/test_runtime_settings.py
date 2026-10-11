@@ -159,6 +159,33 @@ class RuntimeSettingsTest(unittest.TestCase):
         self.assertEqual(Path(loaded["voice_training_dir"]), installed_root.resolve())
         self.assertEqual(settings.voice_training_dir, installed_root.resolve())
 
+    def test_explicit_voice_root_survives_api_reload_and_other_setting_saves(self) -> None:
+        installed_root = Path(self.temp_dir.name) / "Data" / "音色训练"
+        custom_root = Path(self.temp_dir.name) / "用户选择的音色目录"
+        with patch.dict(os.environ, {"MIO_VOICE_TRAINING_DIR": str(installed_root)}):
+            with TestClient(create_app()) as client:
+                original = client.get("/api/settings/runtime").json()
+                response = client.patch("/api/settings/runtime", json={"voice_training_dir": str(custom_root)},
+                                        headers={"If-Match": original["revision"]})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(Path(response.json()["settings"]["voice_training_dir"]), custom_root.resolve())
+                self.assertEqual(response.json()["application"]["restart_required"], ["voice_training_dir"])
+                loaded = client.get("/api/settings/runtime").json()
+                self.assertEqual(Path(loaded["settings"]["voice_training_dir"]), custom_root.resolve())
+                self.assertEqual(loaded["revision"], response.json()["revision"])
+                response = client.patch("/api/settings/runtime", json={"chat_context_max_chars": 28000},
+                                        headers={"If-Match": loaded["revision"]})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(Path(response.json()["settings"]["voice_training_dir"]), custom_root.resolve())
+            # Startup reconstructs Settings with the launcher default before
+            # reading persisted user choices again.
+            object.__setattr__(settings, "voice_training_dir", installed_root)
+            self.assertEqual(Path(load_runtime_settings()["voice_training_dir"]), custom_root.resolve())
+
+    def test_voice_root_override_cannot_be_submitted_as_an_internal_setting(self) -> None:
+        with self.assertRaisesRegex(ValueError, "不支持的运行设置"):
+            save_runtime_settings({"_voice_training_dir_override": "untrusted"})
+
     def test_invalid_old_config_does_not_block_saving_another_setting(self) -> None:
         settings.runtime_config_path.write_text(
             json.dumps({"timezone": "Mars/Olympus"}),

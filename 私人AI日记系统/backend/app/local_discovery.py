@@ -21,6 +21,8 @@ def linked(path: Path) -> bool:
 
 
 def walk(roots: list[Path], query: str, *, suffixes: set[str], limit: int = 100) -> dict:
+    from .execution_policy_service import protected, configuration
+    broad = configuration()['read_scope'] == 'computer'
     deadline = time.monotonic() + 4
     pending = [(root, 0) for root in roots]
     visited, matches, count = set(), [], 0
@@ -43,6 +45,8 @@ def walk(roots: list[Path], query: str, *, suffixes: set[str], limit: int = 100)
                         truncated = True
                         break
                     path = Path(entry.path)
+                    if protected(path,broad=broad) and not path.resolve().is_relative_to(files.workspace()):
+                        continue
                     if entry.name.startswith('.') or entry.name.casefold() in SKIP or linked(path):
                         continue
                     if files._private_path(path.resolve()) and not path.resolve().is_relative_to(files.workspace()):
@@ -63,7 +67,8 @@ def walk(roots: list[Path], query: str, *, suffixes: set[str], limit: int = 100)
 
 
 def search_files(query: str = '', path: str = '', limit: int = 100) -> dict:
-    roots = [files.resolve_read(path)] if path else [Path(p) for p in files.roots()]
+    from .execution_policy_service import document_roots
+    roots = [files.resolve_read(path)] if path else [Path(p) for p in document_roots(files.roots())]
     if any(not p.is_dir() for p in roots):
         raise ValueError('请选择要搜索的文件夹。')
     return walk(roots, query, suffixes=files.READABLE, limit=max(1, min(limit, 100)))

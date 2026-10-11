@@ -1,6 +1,8 @@
 import { apiRequest } from './api.js'
 
 export const loadDependencies = () => apiRequest('/api/dependencies')
+export const loadDependencyPackage = (depId) => apiRequest(`/api/dependencies/${encodeURIComponent(depId)}/package`)
+export const saveDependencyPackageSource = (depId, urls) => apiRequest(`/api/dependencies/${encodeURIComponent(depId)}/package-source`, { method: 'PUT', body: JSON.stringify({ urls }) })
 export const verifyDependency = (depId) => apiRequest(`/api/dependencies/${encodeURIComponent(depId)}/verify`, { method: 'POST', body: '{}', timeoutMs: 75_000 })
 export const installDependency = (depId) => apiRequest(`/api/dependencies/${encodeURIComponent(depId)}/install`, { method: 'POST', body: '{}' })
 export const loadDependencyStatus = (depId) => apiRequest(`/api/dependencies/${encodeURIComponent(depId)}/status`)

@@ -20,6 +20,7 @@ from app.creation_service import (
     _assert_public_url,
     _image_urls_from_payload,
     _comfyui_launch_target,
+    _comfy_output_targets,
     _require_comfy_root,
     _request_remote_image,
     build_workflow_prompt,
@@ -75,6 +76,26 @@ def _canvas_fixture(specs, wires):
 
 
 class CreationFeatureTests(unittest.TestCase):
+    def test_video_submission_does_not_accept_reference_preview_as_output(self) -> None:
+        # ComfyUI otherwise accepts the PreviewImage even when the video branch
+        # fails validation, yielding a successful history with no usable video.
+        prompt = {"100": {"class_type": "PreviewImage", "inputs": {"images": ["97", 0]}},
+                  "299": {"class_type": "VHS_VideoCombine", "inputs": {"images": ["296", 0]}}}
+        self.assertEqual(_comfy_output_targets(prompt, "video"), ["299"])
+        self.assertEqual(prompt["100"]["class_type"], "PreviewImage")
+
+    def test_submission_rejects_preview_without_requested_media_output(self) -> None:
+        with self.assertRaisesRegex(ValueError, "预览图不能"):
+            _comfy_output_targets({"1": {"class_type": "PreviewImage"}}, "image")
+        with self.assertRaises(ValueError):
+            _comfy_output_targets({"1": {"class_type": "SaveImage"}}, "video")
+
+    def test_mixed_media_submission_preserves_all_requested_file_outputs(self) -> None:
+        prompt = {"1": {"class_type": "SaveImage"}, "2": {"class_type": "SaveVideo"},
+                  "3": {"class_type": "VHS_VideoCombine"}, "4": {"class_type": "SaveImage"}}
+        self.assertEqual(_comfy_output_targets(prompt, "video"), ["2", "3"])
+        self.assertEqual(_comfy_output_targets(prompt, "image"), ["1", "4"])
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
@@ -109,11 +130,13 @@ class CreationFeatureTests(unittest.TestCase):
             content="silver-gray hair",
             reference_asset_ids=[asset["id"]],
         ))
-        with patch("app.creation_service.schedule_job"):
+        # Exercise preset handling independently of optional workflow pauses.
+        qwen = replace(require_workflow("qwen-2.1-image", include_disabled=True), pending_reason="")
+        with patch("app.creation_service.schedule_job"), patch.dict("app.creation_workflows.WORKFLOWS", {qwen.id: qwen}):
             job, created = create_job(CreationJobRequest(
                 media_type="image",
                 backend="comfyui",
-                workflow_id="anima-2.9b-image",
+                workflow_id="qwen-2.1-image",
                 prompt="standing in rain",
                 character_preset_id=preset["id"],
             ))
@@ -450,10 +473,10 @@ class CreationFeatureTests(unittest.TestCase):
         self.assertEqual(prompt["5"]["inputs"]["text"], "bad")
         self.assertEqual(prompt["8"]["inputs"]["seed"], 123)
         self.assertEqual(prompt["28"]["inputs"]["seed"], 123)
-        self.assertEqual(prompt["8"]["inputs"]["steps"], 4)
-        self.assertEqual(prompt["28"]["inputs"]["steps"], 4)
-        self.assertEqual(prompt["8"]["inputs"]["cfg"], 1.0)
-        self.assertEqual(prompt["28"]["inputs"]["cfg"], 1.0)
+        self.assertEqual(prompt["8"]["inputs"]["steps"], 30)
+        self.assertEqual(prompt["28"]["inputs"]["steps"], 30)
+        self.assertEqual(prompt["8"]["inputs"]["cfg"], 7.5)
+        self.assertEqual(prompt["28"]["inputs"]["cfg"], 7.5)
         self.assertEqual(prompt["8"]["inputs"]["denoise"], 1.0)
         self.assertEqual(prompt["28"]["inputs"]["denoise"], 0.36)
         self.assertTrue(prompt["23"]["inputs"]["lora_1"]["on"])
@@ -462,12 +485,12 @@ class CreationFeatureTests(unittest.TestCase):
         self.assertFalse(prompt["23"]["inputs"]["lora_4"]["on"])
         self.assertTrue(prompt["23"]["inputs"]["lora_5"]["on"])
         self.assertFalse(prompt["23"]["inputs"]["lora_6"]["on"])
-        self.assertEqual(prompt["16"]["inputs"]["width"], 864)
-        self.assertEqual(prompt["16"]["inputs"]["height"], 1536)
+        self.assertEqual(prompt["16"]["inputs"]["width"], 512)
+        self.assertEqual(prompt["16"]["inputs"]["height"], 512)
         self.assertEqual(prompt["22"]["inputs"]["filename_prefix"], "MioJobs/job_unit/image")
         self.assertEqual(effective["seed"], 123)
-        self.assertEqual(effective["steps"], 4)
-        self.assertEqual(effective["cfg"], 1.0)
+        self.assertEqual(effective["steps"], 30)
+        self.assertEqual(effective["cfg"], 7.5)
         self.assertEqual(effective["lora_choices"], ["clear_lineart"])
         snapshot = effective["workflow_snapshot"]
         self.assertEqual(snapshot["mode"], "exact_workflow")
@@ -481,7 +504,7 @@ class CreationFeatureTests(unittest.TestCase):
 
     def test_selected_video_workflow_prunes_alternate_branches(self) -> None:
         root = Path(self.temp_dir.name) / "video-mapping"
-        workflow = require_workflow("minimax-h3-video", "video")
+        workflow = replace(require_workflow("minimax-h3-video", "video"), id="legacy-video-fixture")
         canvas = _canvas_fixture([
             (138, "LoadImage", {"image": "old.png"}),
             (135, "PrimitiveFloat", {"value": 3.0}),
@@ -508,8 +531,8 @@ class CreationFeatureTests(unittest.TestCase):
             job_id="video_unit",
             uploaded_reference="reference.png",
         )
-        self.assertEqual(workflow.filename, "黑鹤.json")
-        self.assertEqual(effective["runtime_workflow_filename"], "黑鹤.json")
+        self.assertEqual(workflow.filename, "MINIMAX-H3双采样_8G显存版.json")
+        self.assertEqual(effective["runtime_workflow_filename"], "MINIMAX-H3双采样_8G显存版.json")
         self.assertEqual(prompt["133"]["inputs"]["prompt"], "a short test")
         self.assertEqual(prompt["186"]["inputs"]["seed"], 321)
         self.assertEqual(prompt["188"]["inputs"]["fps"], 30)
@@ -619,7 +642,7 @@ class CreationFeatureTests(unittest.TestCase):
         workflow_root.mkdir()
         reference_graph = {"nodes": [{"id": 1, "type": "MiniMaxH3ReferenceToVideo", "mode": 0}]}
         first_frame_graph = {"nodes": [{"id": 1, "type": "MiniMaxH3ImageToVideo", "mode": 0}]}
-        (workflow_root / "黑鹤.json").write_text(json.dumps(reference_graph), encoding="utf-8")
+        (workflow_root / "MINIMAX-H3双采样_8G显存版.json").write_text(json.dumps(reference_graph), encoding="utf-8")
         (workflow_root / "MiniMaxH3_accel_fixed.json").write_text(json.dumps(first_frame_graph), encoding="utf-8")
         object_info = {
             "UNETLoader": {"input": {"required": {"unet_name": [["minimax_h3_fl2va_pruned_int8_convrot.safetensors"]]}}}
@@ -629,7 +652,7 @@ class CreationFeatureTests(unittest.TestCase):
             require_workflow("minimax-h3-video", "video"),
             object_info,
         )
-        self.assertEqual(filename, "黑鹤.json")
+        self.assertEqual(filename, "MINIMAX-H3双采样_8G显存版.json")
         self.assertEqual(workflow["nodes"][0]["type"], "MiniMaxH3ReferenceToVideo")
 
     def test_creation_routes_return_job_and_confirmation_state(self) -> None:

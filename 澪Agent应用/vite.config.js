@@ -13,8 +13,10 @@ const localBackendProxy = () => ({
 
 export default defineConfig({
   base: './',
+  build: { rollupOptions: { input: { index: 'index.html' } } },
   plugins: [vue()],
   server: {
+    watch: { ignored: ['**/release/**', '**/desktop/build/**', '**/desktop/generated/**', '**/.desktop-cache/**'] },
     port: 1420,
     strictPort: false,
     proxy: {

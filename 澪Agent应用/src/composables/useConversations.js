@@ -5,20 +5,76 @@
 import { apiRequest } from '../services/api.js'
 import * as chatApi from '../services/chatApi.js'
 import { filterConversationsForWorkspace } from '../workspaceState.js'
-import { nextTick } from 'vue'
+import { nextTick, ref } from 'vue'
+import { captureReadingPosition, restoreReadingPosition } from '../conversationScroll.js'
 
 export function useConversations(deps) {
+  let pendingChat = null
+  let reconciliationInFlight = false
+  function finishPendingChat(pending) {
+    if (pendingChat !== pending) return
+    pendingChat = null
+    deps.chatAbortController = null
+    deps.activeChatCancelPayload = null
+    deps.sending.value = false
+  }
+  async function reconcilePendingChat() {
+    const pending = pendingChat
+    if (!pending || reconciliationInFlight) return
+    reconciliationInFlight = true
+    try {
+      const status = await deps.request(`/api/agent/chat/requests/${encodeURIComponent(pending.clientRequestId)}?conversation_id=${encodeURIComponent(pending.conversationId)}`)
+      if (pendingChat !== pending) return
+      if (status.status === 'pending') return
+      if (deps.selectedConversationId.value === pending.conversationId) {
+        deps.errorMessage.value = status.status === 'succeeded' ? '' : (status.error?.message || '后台回复失败，请查看任务状态')
+        if (status.response?.context_usage) deps.contextUsage.value = status.response.context_usage
+        if (status.response?.task_handoff?.task_id) deps.latestTaskHandoff.value = status.response.task_handoff
+      }
+      finishPendingChat(pending)
+    } catch (error) {
+      if (error?.status === 404 && pendingChat === pending) {
+        if (deps.selectedConversationId.value === pending.conversationId) deps.errorMessage.value = '后台没有收到这条请求，请重新发送'
+        finishPendingChat(pending)
+      }
+      // Reconnecting must never resubmit a paid request or cancel backend work.
+    } finally {
+      reconciliationInFlight = false
+    }
+  }
+  const historyLoading=ref(false), historyHasMore=ref(true)
+  async function loadOlderMessages() {
+    if(historyLoading.value || !historyHasMore.value || deps.loading.value)return
+    const id=deps.selectedConversationId.value,first=deps.messages.value[0]?.id
+    if(!Number.isSafeInteger(first))return
+    historyLoading.value=true
+    try {
+      const older=await deps.request(`/api/agent/messages?limit=120&before_id=${first}&conversation_id=${encodeURIComponent(id)}`)
+      if(id!==deps.selectedConversationId.value)return
+      const scroll=deps.chatScroll?.value,position=captureReadingPosition(scroll)
+      const ids=new Set(deps.messages.value.map(item=>item.id))
+      deps.messages.value=[...older.filter(item=>!ids.has(item.id)),...deps.messages.value]
+      historyHasMore.value=older.length===120
+      await nextTick();restoreReadingPosition(scroll,position)
+    }catch(error){deps.errorMessage.value=error.message}finally{historyLoading.value=false}
+  }
   async function refreshMessages() {
+    await reconcilePendingChat()
     const conversationId = deps.selectedConversationId.value
     if (!conversationId || deps.messageRefreshInFlight) return
     deps.messageRefreshInFlight = true
     try {
+      await refreshConversations()
       const data = await deps.request(`/api/agent/messages?limit=120&conversation_id=${encodeURIComponent(conversationId)}`)
       if (deps.selectedConversationId.value !== conversationId) return
       const previousLastId = deps.messages.value.at(-1)?.id
-      deps.messages.value = data
-      if (data.at(-1)?.id !== previousLastId) {
-        await Promise.all([deps.scrollToBottom(), deps.refreshContextUsage()])
+      const scroll=deps.chatScroll?.value,position=captureReadingPosition(scroll)
+      const first=data[0]?.id
+      const prefix=Number.isSafeInteger(first) ? deps.messages.value.filter(item=>Number.isSafeInteger(item.id) && item.id<first) : []
+      deps.messages.value = [...prefix,...data]
+      await nextTick();restoreReadingPosition(scroll,position)
+      if (data.at(-1)?.id !== previousLastId || deps.isAgentWorkspace) {
+        await deps.refreshContextUsage()
       }
     } catch {
       // Polling failures are reflected by the next bootstrap/status action.
@@ -58,6 +114,7 @@ export function useConversations(deps) {
     if ((!content && !deps.attachments.value.length) || deps.sending.value) return
     const conversationId = deps.selectedConversationId.value
     const clientRequestId = createClientRequestId()
+    const creationWorkflowId = deps.isAgentWorkspace ? deps.creationWorkflowId?.value || '' : ''
     const outgoingAttachments = deps.attachments.value.map((item) => ({
       kind: item.kind,
       name: item.name,
@@ -108,8 +165,10 @@ export function useConversations(deps) {
             conversation_id: conversationId,
             attachments: outgoingAttachments,
             creation_tools_enabled: deps.isAgentWorkspace,
+            creation_workflow_id: creationWorkflowId,
             agent_workspace: deps.isAgentWorkspace,
             mode: deps.isAgentWorkspace ? 'agent' : 'companion',
+            surface_mode: deps.agentSurfaceMode?.value || 'work',
             client_request_id: clientRequestId,
           }
       const controller = new AbortController()
@@ -124,6 +183,9 @@ export function useConversations(deps) {
         method: 'POST',
         body: JSON.stringify(payload),
         signal: controller.signal,
+        // An Agent request covers multiple model calls and tools. Its execution
+        // budget is enforced by the backend, rather than a single HTTP deadline.
+        ...(deps.isAgentWorkspace ? { timeoutMs: 0 } : {}),
       })
       if (result.context_usage && deps.selectedConversationId.value === conversationId) {
         deps.contextUsage.value = result.context_usage
@@ -149,23 +211,22 @@ export function useConversations(deps) {
       }
       await refreshConversations()
     } catch (error) {
-      let cancellationError = ''
-      if (error?.code === 'request_timeout' && deps.activeChatCancelPayload) {
-        try {
-          await requestChatCancellation(deps.activeChatCancelPayload)
-        } catch (cancelError) {
-          cancellationError = cancelError.message
-        }
+      const reconnect = ['request_timeout', 'network_error'].includes(error?.code)
+      if (reconnect && deps.activeChatCancelPayload) {
+        pendingChat = { conversationId, clientRequestId }
       }
-      deps.errorMessage.value = error?.code === 'request_cancelled'
-        ? '已停止这次回复'
-        : `${deps.modelRequestError(error)}${cancellationError ? `；后端取消确认失败：${cancellationError}` : ''}`
+      if (deps.selectedConversationId.value === conversationId) {
+        deps.errorMessage.value = reconnect ? '连接暂时中断，正在核对后台回复；任务仍可在后台继续，可点击停止'
+          : error?.code === 'request_cancelled' ? '已停止这次回复' : deps.modelRequestError(error)
+      }
       await refreshMessages()
       await refreshConversations()
     } finally {
-      deps.chatAbortController = null
-      deps.activeChatCancelPayload = null
-      deps.sending.value = false
+      if (!pendingChat) {
+        deps.chatAbortController = null
+        deps.activeChatCancelPayload = null
+        deps.sending.value = false
+      }
     }
   }
   async function requestChatCancellation(cancelPayload) {
@@ -181,6 +242,11 @@ export function useConversations(deps) {
     deps.chatAbortController.abort('user_cancelled')
     try {
       await requestChatCancellation(cancelPayload)
+      if (pendingChat) {
+        finishPendingChat(pendingChat)
+        deps.errorMessage.value = '已停止这次回复'
+        await refreshMessages()
+      }
     } catch (error) {
       if (error?.code !== 'request_cancelled') deps.errorMessage.value = `停止回复失败：${error.message}`
     }
@@ -198,13 +264,13 @@ export function useConversations(deps) {
   async function selectConversation(conversationId) {
     if (!conversationId || conversationId === deps.selectedConversationId.value) {
       deps.activeView.value = 'chat'
-      await deps.settleChatScrollToBottom()
       return
     }
     deps.activeView.value = 'chat'
     deps.loading.value = true
     deps.errorMessage.value = ''
     deps.selectedConversationId.value = conversationId
+    historyHasMore.value=true
     const loadVersion = ++deps.conversationLoadVersion
     localStorage.setItem(deps.conversationStorageKey, conversationId)
     try {
@@ -214,6 +280,7 @@ export function useConversations(deps) {
       ])
       if (loadVersion !== deps.conversationLoadVersion || deps.selectedConversationId.value !== conversationId) return
       deps.messages.value = selectedMessages
+      historyHasMore.value=selectedMessages.length===120
       deps.contextUsage.value = selectedUsage
     } catch (error) {
       if (loadVersion === deps.conversationLoadVersion && deps.selectedConversationId.value === conversationId) {
@@ -225,12 +292,12 @@ export function useConversations(deps) {
     if (loadVersion !== deps.conversationLoadVersion || deps.selectedConversationId.value !== conversationId) return
     await deps.settleChatScrollToBottom()
   }
-  async function createNewConversation() {
+  async function createNewConversation(mode = deps.agentSurfaceMode?.value || 'work') {
     deps.activeView.value = 'chat'
     deps.errorMessage.value = ''
     try {
       const conversation = await chatApi.createConversation(
-        deps.isAgentWorkspace ? '新建创作对话' : '新对话',
+        deps.isAgentWorkspace ? ({ chat: '新对话', work: '新任务', learn: '新学习对话', image: '新生图对话' }[mode] || '新任务') : '新对话',
         deps.isAgentWorkspace ? 'agent' : 'main',
       )
       deps.conversations.value = [conversation, ...deps.conversations.value]
@@ -325,5 +392,5 @@ export function useConversations(deps) {
       return false
     }
   }
-  return { refreshMessages, requestStartupGreeting, createClientRequestId, openAgentHandoff, sendMessage, requestChatCancellation, cancelActiveChat, refreshConversations, selectConversation, createNewConversation, renameConversation, deleteConversation, deleteConversationMessages }
+  return { historyLoading, historyHasMore, loadOlderMessages, refreshMessages, requestStartupGreeting, createClientRequestId, openAgentHandoff, sendMessage, requestChatCancellation, cancelActiveChat, refreshConversations, selectConversation, createNewConversation, renameConversation, deleteConversation, deleteConversationMessages }
 }

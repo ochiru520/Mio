@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .config import settings
+from . import windows_compat
 from .model_registry import list_model_profiles
 from .napcat_service import _incomplete_napcat_shells, _napcat_launchers
 from .ollama_model_files import manifest_complete as _ollama_manifest_complete
@@ -329,6 +330,10 @@ def _whisper_runtime_layout(root: Path) -> dict[str, object]:
         and (site_packages / "ctranslate2" / "__init__.py").is_file()
         for site_packages in site_packages_candidates
     )
+    capture_ready = any(
+        (site_packages / "soundcard" / "__init__.py").is_file()
+        for site_packages in site_packages_candidates
+    )
     model = _whisper_model_directory(root)
     return {
         "root": root,
@@ -336,8 +341,9 @@ def _whisper_runtime_layout(root: Path) -> dict[str, object]:
         "cache": root / "cache" / "faster-whisper",
         "model": model,
         "python_ready": python.is_file() and package_ready,
+        "capture_ready": capture_ready,
         "model_ready": model is not None,
-        "ready": python.is_file() and package_ready and model is not None,
+        "ready": python.is_file() and package_ready and capture_ready and model is not None,
     }
 
 
@@ -577,11 +583,8 @@ def _ollama_model_ready(models_root: Path) -> bool:
 
 
 def _windows_label() -> str:
-    if os.name != "nt":
-        return platform.platform()
-    version = sys.getwindowsversion()
-    product = "Windows 11" if version.build >= 22000 else "Windows 10"
-    return f"{product} · 构建 {version.build}"
+    current = windows_compat.snapshot()
+    return f"{current['os']} · 构建 {current['build']}"
 
 
 @lru_cache(maxsize=1)
@@ -706,9 +709,10 @@ def _database_check() -> tuple[bool, str]:
 
 
 def _required_checks() -> tuple[list[dict[str, object]], dict[str, object]]:
-    windows_ready = os.name == "nt" and platform.system().lower() == "windows"
+    compatibility = windows_compat.snapshot()
+    windows_ready = compatibility['version_supported']
     architecture = platform.machine() or "未知"
-    architecture_ready = architecture.lower() in {"amd64", "x86_64", "arm64"} and sys.maxsize > 2**32
+    architecture_ready = compatibility['architecture_supported']
     writable, data_path, free_bytes = _data_directory_check()
     database_ready, database_detail = _database_check()
     webview_version = _webview2_version()
@@ -716,7 +720,8 @@ def _required_checks() -> tuple[list[dict[str, object]], dict[str, object]]:
 
     os_label = _windows_label()
     checks = [
-        _item("windows", "Windows 系统", "available" if windows_ready else "unsupported", os_label),
+        _item("windows", "Windows 系统", "available" if windows_ready else "unsupported", os_label,
+              action=compatibility['reason'] if not windows_ready else ''),
         _item("architecture", "64 位运行环境", "available" if architecture_ready else "unsupported", architecture),
         _item(
             "webview2",
@@ -748,6 +753,7 @@ def _required_checks() -> tuple[list[dict[str, object]], dict[str, object]]:
         _item("backend", "内置后端", "available", "当前环境检查接口运行正常"),
     ]
     return checks, {
+        "compatibility": compatibility,
         "os": os_label,
         "architecture": architecture,
         "python_bundled": bool(getattr(sys, "frozen", False)),
@@ -830,6 +836,8 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
             missing_parts.append("可运行的 faster-whisper Python 环境")
         if not partial["model_ready"]:
             missing_parts.append("完整本地模型")
+        if not partial.get("capture_ready"):
+            missing_parts.append("soundcard 系统声音采集组件")
         audio_detail = f"电脑上发现部分文件，但缺少{'、'.join(missing_parts)}：{partial['root']}"
     elif not whisper_worker_ok:
         audio_detail = "程序缺少系统声音转写工作器"
@@ -837,6 +845,8 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
         audio_detail = "尚未找到可运行的 faster-whisper 环境与完整本地模型"
 
 
+    from .ffmpeg_runtime import installation_status as ffmpeg_installation_status
+    ffmpeg = ffmpeg_installation_status()
     return [
         _item(
             "cloud_model",
@@ -892,6 +902,13 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
             "available" if audio_ready else "unconfigured",
             audio_detail,
             action="一键安装会补齐运行环境和模型" if not audio_ready else "",
+        ),
+        _item(
+            "ffmpeg",
+            "音视频转换（FFmpeg）",
+            ffmpeg["status"],
+            ffmpeg["detail"],
+            action="在环境与模型中心安装",
         ),
     ]
 

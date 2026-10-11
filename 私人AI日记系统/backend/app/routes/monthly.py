@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from .. import db
 from ..llm import LLMConfigError
 from ..monthly_review_service import generate_monthly_review, month_bounds, normalize_month
+from ..review_sources import metadata, period_payload
 
 
 router = APIRouter()
@@ -23,6 +24,7 @@ async def api_monthly_list():
     for month, item in items.items():
         month_start, month_end = month_bounds(month)
         item.update(month_start=month_start, month_end=month_end, diary_count=len(item["source_diaries"]))
+        item.update(metadata("monthly", month, period_payload(month_start, month_end)))
     return sorted(items.values(), key=lambda item: item["month"], reverse=True)
 
 
@@ -43,4 +45,5 @@ async def api_generate_monthly_review(month: str):
         "month_start": result.month_start,
         "month_end": result.month_end,
         "markdown": result.markdown_content,
+        **metadata("monthly", result.month, period_payload(result.month_start, result.month_end)),
     }

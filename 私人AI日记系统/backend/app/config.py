@@ -528,12 +528,11 @@ def _load_runtime_settings() -> dict[str, Any]:
                 valid[key] = _coerce_runtime_setting(key, value)
             except ValueError:
                 continue
-        # Frozen builds own their optional voice runtime under the selected
-        # data root.  A runtime settings file may have been copied from an
-        # older source checkout, so never let that stale absolute path win
-        # over the launcher's resolved installation path.
+        # Ignore paths copied from older source checkouts, while preserving
+        # paths explicitly selected through this installation's settings API.
         configured_voice_root = os.getenv("MIO_VOICE_TRAINING_DIR", "").strip()
-        if configured_voice_root:
+        explicit_voice_root = saved.get("_voice_training_dir_override")
+        if configured_voice_root and explicit_voice_root != str(valid.get("voice_training_dir")):
             valid["voice_training_dir"] = Path(configured_voice_root).expanduser().resolve()
         minimum_idle = int(valid.get("qq_proactive_min_idle_minutes", settings.qq_proactive_min_idle_minutes))
         maximum_idle = int(valid.get("qq_proactive_max_idle_minutes", settings.qq_proactive_max_idle_minutes))
@@ -588,6 +587,15 @@ def _save_runtime_settings(changes: dict[str, object]) -> dict[str, Any]:
         key: str(value) if isinstance(value, Path) else ",".join(value) if isinstance(value, tuple) else value
         for key, value in normalized.items()
     }
+    if "voice_training_dir" in changes:
+        serializable["_voice_training_dir_override"] = serializable["voice_training_dir"]
+    else:
+        try:
+            previous = json.loads(settings.runtime_config_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous = {}
+        if isinstance(previous, dict) and previous.get("_voice_training_dir_override") == serializable["voice_training_dir"]:
+            serializable["_voice_training_dir_override"] = serializable["voice_training_dir"]
     settings.runtime_config_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = settings.runtime_config_path.with_name(f"{settings.runtime_config_path.name}.{uuid.uuid4().hex}.tmp")
     try:

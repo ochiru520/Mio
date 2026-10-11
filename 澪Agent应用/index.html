@@ -3,8 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f7f9" />
+    <!-- 运行时会按当前主题改写，这里的值只是默认主题「宣纸」的底色 -->
+    <meta name="theme-color" content="#f3efe9" />
     <title>Mio</title>
+    <script>
+      // 在首屏渲染前就把主题写到 <html> 上，避免深色主题启动瞬间闪白。
+      try {
+        var saved = JSON.parse(localStorage.getItem('mio_app_preferences') || '{}')
+        var id = saved && saved.theme
+        if (typeof id === 'string' && id) document.documentElement.dataset.theme = id
+        var fontSize = saved && saved.font_size
+        document.documentElement.dataset.fontSize = ['small', 'medium', 'large'].includes(fontSize) ? fontSize : 'medium'
+      } catch (error) {
+        /* 读不到偏好时用默认主题，交给应用启动后补齐 */
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

@@ -680,10 +680,34 @@ def _private_send_action(user_id: str, message: str) -> dict[str, Any]:
     }
 
 
+class TaskApiRejected(RuntimeError):
+    """An explicit negative acknowledgement, distinct from an unknown outcome."""
+
+
+def has_task_connection(self_id: str) -> bool:
+    return any(item.self_id == self_id and not item.closing for item in _active_connections.values())
+
+
+async def request_task_api(origin: dict, action: str, params: dict) -> dict:
+    from .. import mobile_task_service as mobile
+    if (not settings.qq_bot_enabled or not mobile.valid_origin(origin) or mobile.channel(origin) != 'qq'
+            or action not in {'send_private_msg', 'upload_private_file', 'get_private_file_url'}):
+        raise TaskApiRejected('QQ 任务通道未授权或未开启。')
+    if action != 'get_private_file_url' and str(params.get('user_id')) != origin['user_id']:
+        raise TaskApiRejected('QQ 收件人不匹配。')
+    connection = next((item for item in _active_connections.values() if item.self_id == origin['self_id'] and not item.closing), None)
+    if connection is None:
+        raise TaskApiRejected('对应的 QQ 机器人未连接。')
+    result = await _enqueue_connection(connection, {'action': action, 'params': params, 'echo': 'qq-task-' + uuid.uuid4().hex})
+    if not isinstance(result, dict):
+        raise RuntimeError('QQ 回执格式无效。')
+    return result
+
+
 async def _send_with_lock(connection: OneBotConnection, payload: dict[str, Any]) -> dict[str, Any] | None:
     echo = _as_id(payload.get("echo"))
     last_error: Exception | None = None
-    attempts = max(0, int(settings.qq_delivery_max_retries)) + 1
+    attempts = 1 if echo.startswith('qq-task-') else max(0, int(settings.qq_delivery_max_retries)) + 1
     for attempt in range(attempts):
         ack_future: asyncio.Future[dict[str, Any]] | None = None
         try:
@@ -701,7 +725,7 @@ async def _send_with_lock(connection: OneBotConnection, payload: dict[str, Any])
                 if str(response.get("status") or "ok").lower() != "ok" or int(
                     response.get("retcode") or 0
                 ) != 0:
-                    raise RuntimeError(str(response.get("message") or "QQ接口拒绝了消息"))
+                    raise TaskApiRejected('QQ 接口拒绝了请求，请检查 NapCat 状态。')
                 response_payload = response
             _delivery_debug.update(
                 sent_count=int(_delivery_debug["sent_count"]) + 1,
@@ -991,6 +1015,11 @@ class OneBotEventDebouncer:
         self.tasks: set[asyncio.Task[None]] = set()
 
     def enqueue(self, event: dict[str, Any]) -> bool:
+        from .. import mobile_task_service as mobile, mobile_file_service as files
+        normalized = files.normalize_event(event)
+        if mobile.origin_from_event(normalized):
+            # Preserve stable message IDs, documents, and immediate pause/cancel.
+            return False
         if event.get("post_type") != "message":
             return False
 
@@ -1148,10 +1177,45 @@ async def _process_group_event(
     return True
 
 
-async def process_onebot_event(
+_mobile_intake_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+async def process_onebot_event(event: dict[str, Any], send_json: SendJson, record_debug: bool = True) -> bool:
+    from .. import mobile_task_service as mobile, mobile_file_service as files
+    event = files.normalize_event(event)
+    origin = mobile.origin_from_event(event)
+    if origin is None:
+        return await _process_onebot_event(event, send_json, record_debug)
+    if not _authorization_result(event)[0]:
+        return False
+    key = mobile.request_key(event, origin)
+    if not mobile.claim_event(key, origin):
+        return True
+    interrupted = False
+    try:
+        message = _extract_text_message(event)
+        # Control commands bypass a pending model call so stopping remains responsive.
+        if mobile.urgent_command(message) and await mobile.handle_command(event, origin, message, key):
+            return True
+        async with _mobile_intake_locks.setdefault((origin['self_id'], origin['user_id']), asyncio.Lock()):
+            received = await files.receive(event, origin, key)
+            if received and not message:
+                return True
+            if await mobile.handle_command(event, origin, message, key):
+                return True
+            return await _process_onebot_event(event, send_json, record_debug, task_origin=origin, task_request_id=key)
+    except BaseException:
+        interrupted = True
+        raise
+    finally:
+        mobile.finish_event(key, interrupted=interrupted)
+
+
+async def _process_onebot_event(
     event: dict[str, Any],
     send_json: SendJson,
     record_debug: bool = True,
+    *, task_origin: dict | None = None, task_request_id: str = '',
 ) -> bool:
     user_message = _extract_text_message(event)
     image_sources = _extract_image_sources(event)
@@ -1232,7 +1296,13 @@ async def process_onebot_event(
             history_rows=database.get_recent_messages(limit=12, conversation_id=conversation_id),
             image_count=len(image_attachments),
         )
-        route_request_id = f"qq-{uuid.uuid4().hex}"
+        route_request_id = task_request_id or f"qq-{uuid.uuid4().hex}"
+        mobile_options = {}
+        if task_origin:
+            from .. import mobile_task_service as mobile
+            target, hint = mobile.input_context(task_origin)
+            mobile_options = {'task_origin': target, 'extra_system_context': hint,
+                              'agent_tools_enabled': False, 'handoff_enabled': True}
         result = await chat_with_ai(
             user_message,
             conversation_id=conversation_id,
@@ -1244,7 +1314,11 @@ async def process_onebot_event(
             fallback_reasoning_level=str(getattr(automatic_route, "fallback_reasoning_level", "") or ""),
             voice_reply_requested=voice_reply_requested,
             request_id=route_request_id,
+            **mobile_options,
         )
+        if task_origin and result.task_handoff:
+            _record_processed_message()
+            return True
         replies = result.replies
         _record_qq_route_success(
             automatic_route,

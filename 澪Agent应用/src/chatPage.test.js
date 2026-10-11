@@ -15,7 +15,7 @@ const integratedCssSource = fs.readFileSync(path.join(root, 'styles', 'integrate
 test('unpinned conversation drawer closes from the outside backdrop', () => {
   assert.match(chatPageSource, /conversationDrawerOpen && !conversationDrawerPinned/)
   assert.match(chatPageSource, /class="conversation-drawer-backdrop"/)
-  assert.match(chatPageSource, /@click="conversationDrawerOpen = false"/)
+  assert.match(chatPageSource, /@click="closeConversationDrawer"/)
   assert.match(integratedCssSource, /\.conversation-drawer-backdrop \{[^}]*z-index: 11;[^}]*inset: 0;/)
 })
 

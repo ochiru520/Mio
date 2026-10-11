@@ -14,6 +14,7 @@ import hashlib
 import os
 import subprocess
 import threading
+import uuid
 from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -67,7 +68,7 @@ _DEPENDENCY_DEFS: tuple[dict[str, Any], ...] = (
         "size_label": "音色包约 227 MB；需先安装 Genie 引擎",
         "what": "Mio 的角色音色、参考音频和情绪素材；只负责“声音是谁”，不包含推理引擎。",
         "missing_effect": "没有它就不能使用 Mio 本地原声音色，但 Genie 引擎和云端语音仍可用。",
-        "how": "先完成 Genie 引擎，再点击这里下载或查找音色包；安装后会注册、预热并播放试听。",
+        "how": "先完成 Genie 引擎，再选择已有音色 ZIP 包或配置实际获取地址；安装后会注册、预热并播放试听。",
     },
     {
         "id": "napcat",
@@ -106,6 +107,18 @@ _DEPENDENCY_DEFS: tuple[dict[str, Any], ...] = (
         "manual_label": "手动安装：项目页",
     },
     {
+        "id": "ffmpeg",
+        "label": "音视频转换（FFmpeg）",
+        "kind": "script",
+        "script": "install-ffmpeg.ps1",
+        "size_label": "约 110 MB",
+        "what": "为音视频附件解析、格式转换和视频组装提供本地工具。",
+        "missing_effect": "缺少时相关音视频处理不可用，聊天不受影响。",
+        "how": "点击「一键安装」下载经校验的固定版本到 Mio 的工具目录。",
+        "manual_url": "https://www.gyan.dev/ffmpeg/builds/",
+        "manual_label": "手动安装：Windows 构建页",
+    },
+    {
         "id": "screen_capture",
         "label": "屏幕观察与截图",
         "kind": "builtin",
@@ -124,6 +137,9 @@ _operation_lock = threading.RLock()
 
 @contextmanager
 def dependency_operation(dep_id: str):
+    from .capability_checks import _active
+    if _active:
+        raise ValueError('能力实测正在进行，请先完成或取消检查。')
     # Voice packages share directories; serialize launch, verify and removal.
     group = 'voice' if dep_id in {'genie_runtime', 'gpt_sovits', 'whisper'} else dep_id
     with _operation_lock, _cross_process_install_lock('operation-' + group):
@@ -170,6 +186,7 @@ def _install_path(dep_id: str) -> str:
         "napcat": settings.napcat_dir,
         "ollama_vision": settings.local_vision_dir,
         "whisper": settings.voice_training_dir / "cache" / "faster-whisper",
+        "ffmpeg": settings.voice_training_dir / "cache" / "bin",
     }
     path = paths.get(str(dep_id))
     return str(path.resolve()) if path is not None else ""
@@ -205,9 +222,17 @@ def _read_status(dep_id: str) -> dict[str, Any]:
     path = _status_path(dep_id)
     try:
         value = json.loads(path.read_text(encoding="utf-8-sig"))
-        return value if isinstance(value, dict) else {}
+        value = value if isinstance(value, dict) else {}
     except (OSError, json.JSONDecodeError):
-        return {}
+        value = {}
+    # A separate launch receipt cannot be overwritten by progress writers.
+    try:
+        identity = json.loads(path.with_suffix(".process.json").read_text(encoding="utf-8"))
+        if identity.get("install_id") and identity.get("install_id") == value.get("install_id"):
+            value.update(identity)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return value
 
 
 def _detect_status(
@@ -326,10 +351,12 @@ def list_dependencies() -> list[dict[str, Any]]:
         entry = dict(dep)
         if dep["id"] in {"genie_runtime", "gpt_sovits"}:
             source = _package_source(dep["id"])
+            from .dependency_package_service import find_local_package
+            entry["local_package_available"] = bool(find_local_package(source))
             entry["offline_only"] = not bool(source.get("urls"))
             entry["package_name"] = source.get("file_name", "")
             if entry["offline_only"]:
-                entry["how"] = "先安装所需引擎；此版本暂未提供在线包。选择对应离线 ZIP 包安装，音色安装后会预热、试听。"
+                entry["how"] = "此版本未提供公开下载地址。可安装已找到的本地包、选择离线 ZIP 或配置实际获取地址；音色需先安装引擎，安装后会预热、试听。"
         entry["install_path"] = _install_path(str(dep["id"]))
         detected = _detect_status(dep, environment)
         entry["status"] = detected["status"]
@@ -365,7 +392,7 @@ def _install_running(dep_id: str) -> bool:
             pid = None
     if pid is None:
         return False
-    if not _pid_alive(pid):
+    if not _pid_matches_status(pid, _read_status(dep_id)):
         # 进程已退出：清理脏 pid，避免 pid 复用导致的“永久安装中”。
         with _install_lock:
             _running_installs.pop(str(dep_id), None)
@@ -378,13 +405,54 @@ def _pid_alive(pid: int) -> bool:
         import ctypes
 
         kernel32 = ctypes.windll.kernel32
+        from ctypes import wintypes
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
         handle = kernel32.OpenProcess(0x1000, False, pid)
         if not handle:
             return False
-        kernel32.CloseHandle(handle)
-        return True
+        try:
+            code = wintypes.DWORD()
+            return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel32.CloseHandle(handle)
     except (AttributeError, OSError):
         return False
+
+
+def _process_started_ticks(pid: int) -> int | None:
+    """Windows creation FILETIME identifies a process even after PID reuse."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        try:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                return None
+            return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        finally:
+            kernel32.CloseHandle(handle)
+    except (AttributeError, OSError):
+        return None
+
+
+def _pid_matches_status(pid: int, progress: dict[str, Any]) -> bool:
+    if not _pid_alive(pid):
+        return False
+    expected = progress.get("console_started_ticks")
+    if expected:
+        return str(_process_started_ticks(pid)) == str(expected)
+    return True  # Legacy receipts have only a PID.
 
 
 def _scripts_dir() -> Path:
@@ -580,10 +648,15 @@ def _install_dependency(dep_id: str, package_path: str = "") -> dict[str, Any]:
 
     if dep_id in {"genie_runtime", "gpt_sovits"}:
         source = _package_source(dep_id)
+        if not package_path:
+            from .dependency_package_service import find_local_package
+            local_package = find_local_package(source)
+            if local_package:
+                package_path = str(local_package)
         if package_path:
             _validate_package(source, Path(package_path))
         elif not source.get("urls"):
-            raise ValueError("此组件暂未提供在线包，请选择对应离线 ZIP 包安装。")
+            raise ValueError("此组件尚未提供公开下载入口。请选择已有离线 ZIP 包，或在获取配置中填写真实的 HTTPS 包地址。")
     elif package_path:
         raise ValueError("此组件不支持音色离线包。")
     status_path = _status_path(dep_id)
@@ -599,6 +672,7 @@ def _install_dependency(dep_id: str, package_path: str = "") -> dict[str, Any]:
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "done": False,
         "error": "",
+        "install_id": uuid.uuid4().hex,
     }
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
@@ -610,6 +684,10 @@ def _install_dependency(dep_id: str, package_path: str = "") -> dict[str, Any]:
     env["MIO_LOCAL_VISION_DIR"] = str(settings.local_vision_dir.resolve())
     env["MIO_NAPCAT_DIR"] = str(settings.napcat_dir.resolve())
     env["MIO_STATUS_FILE"] = str(status_path.resolve())
+    env["MIO_INSTALL_ID"] = initial_status["install_id"]
+    env["MIO_INSTALL_STARTED_AT"] = initial_status["started_at"]
+    if dep_id in {"genie_runtime", "gpt_sovits"}:
+        env["MIO_PACKAGE_SOURCE_JSON"] = json.dumps(source, ensure_ascii=False)
     if package_path:
         env["MIO_GENIE_PACKAGE" if dep_id == "genie_runtime" else "MIO_VOICE_PACKAGE"] = str(Path(package_path).resolve())
     # 线程锁与命名 Mutex 同时保护“检查 -> 启动 -> 持久化 pid”，可覆盖多后端实例。
@@ -620,7 +698,7 @@ def _install_dependency(dep_id: str, package_path: str = "") -> dict[str, Any]:
                 existing_pid = int(_read_status(dep_id).get("console_pid") or 0) or None
             except (TypeError, ValueError):
                 existing_pid = None
-        if existing_pid is not None and _pid_alive(existing_pid):
+        if existing_pid is not None and _pid_matches_status(existing_pid, _read_status(dep_id)):
             raise ValueError("这个项目正在安装，请稍候。")
         status_path.write_text(
             json.dumps(initial_status, ensure_ascii=False),
@@ -635,9 +713,13 @@ def _install_dependency(dep_id: str, package_path: str = "") -> dict[str, Any]:
                 cwd=str(script.parent), env=env, creationflags=creation_flags, **output,
             )
         _running_installs[dep_id] = process.pid
-        status = _read_status(dep_id)
-        status["console_pid"] = process.pid
-        status_path.write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
+        identity = {"install_id": initial_status["install_id"], "console_pid": process.pid,
+                    "started_at": initial_status["started_at"],
+                    "console_started_ticks": _process_started_ticks(process.pid)}
+        receipt = status_path.with_suffix(".process.json")
+        temporary = receipt.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(identity), encoding="utf-8")
+        temporary.replace(receipt)
         threading.Thread(
             target=_watch_install,
             args=(dep_id, process),
@@ -692,9 +774,10 @@ def _package_source(dep_id: str) -> dict:
     try:
         source = json.loads((_scripts_dir() / name).read_text(encoding="utf-8-sig"))
         source["urls"] = [url for url in source.get("urls", []) if isinstance(url, str) and url.startswith("https://")]
-        return source
     except (OSError, ValueError, TypeError):
         return {}
+    from .dependency_package_service import effective_source
+    return effective_source(dep_id, source)
 
 
 def _validate_package(source: dict, path: Path) -> None:

@@ -71,6 +71,10 @@ def write_status(
         return
     payload = {
         "id": DEPENDENCY_ID,
+        "install_id": os.environ.get("MIO_INSTALL_ID", ""),
+        "console_pid": int(os.environ.get("MIO_INSTALL_PID", "0") or "0"),
+        "console_started_ticks": os.environ.get("MIO_INSTALL_STARTED_TICKS", ""),
+        "started_at": os.environ.get("MIO_INSTALL_STARTED_AT", ""),
         "stage": STAGE,
         "percent": max(0, min(100, int(percent))),
         "message": message,

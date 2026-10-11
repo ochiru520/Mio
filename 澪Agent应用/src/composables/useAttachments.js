@@ -150,7 +150,13 @@ export function useAttachments(deps) {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   }
   function turnAttachments(turn) {
-    return turn.parts.flatMap((part) => part.attachments || [])
+    // Citations and execution metadata share the storage field, but are not files.
+    return (turn?.parts || []).flatMap((part) => part.attachments || []).filter(isVisibleAttachment)
   }
   return { readFileAsDataUrl, isTextAttachment, fileExtension, isImageAttachment, isDocumentAttachment, addSelectedFiles, handleFileSelection, handleComposerPaste, dragContainsFiles, handleFileDragEnter, handleFileDragOver, handleFileDragLeave, handleFileDrop, removeAttachment, formatFileSize, turnAttachments }
+}
+
+export function isVisibleAttachment(item) {
+  return Boolean(item && ['image', 'video', 'audio', 'document', 'text', 'file'].includes(item.kind)
+    && (item.name || item.url || item.data_url || item.preview_url))
 }

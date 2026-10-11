@@ -25,6 +25,8 @@ RUNTIME_SENSITIVE_KEYS = (
 )
 
 PAUSE_ACTION_LABELS = {
+    "project_browser": "项目浏览器",
+    "capability_checks": "停止能力实测",
     "runtime_settings": "关闭联网、QQ 与自动任务设置",
     "companion_settings": "关闭屏幕、系统声音与主动语音设置",
     "autonomy_policy": "暂停自主行为",
@@ -85,6 +87,7 @@ def _disable_sensitive_settings() -> list[str]:
 
 
 def _capabilities() -> list[dict[str, object]]:
+    from . import wechat_service
     runtime = load_runtime_settings()
     companion = companion_service.load_config()
     screen_status = companion_service.window_observer.status()
@@ -109,6 +112,13 @@ def _capabilities() -> list[dict[str, object]]:
             "enabled": bool(runtime.get("qq_bot_enabled")),
             "destination": "QQ 消息进入本地后端；回复会发送到 QQ",
             "control": "qq_bot_enabled",
+        },
+        {
+            "id": "wechat",
+            "label": "微信私聊与手机任务",
+            "enabled": bool(wechat_service.public_status().get('enabled')) and not bool(_load_state().get('paused')),
+            "destination": "扫码账号的微信消息进入本地；回复和任务成果通过腾讯 iLink 回传",
+            "control": "设置 → 微信与QQ；隐私总控会停止收发与自动任务",
         },
         {
             "id": "qq_images",
@@ -209,8 +219,10 @@ async def pause_sensitive_capabilities() -> dict[str, Any]:
     run("screen_session", screen_observation_service.end_session)
     run("system_audio", system_audio_service.stop)
     run("autonomy_policy", lambda: autonomy_service.update_policy({"paused": True}))
-    from . import agent_task_service, monthly_review_service, daily_diary_service, model_runtime
+    from . import agent_task_service, monthly_review_service, daily_diary_service, model_runtime, capability_checks, browser_service
     for action, callback in (
+        ("capability_checks", capability_checks.cancel_all),
+        ("project_browser", browser_service.shutdown),
         ("model_operations", lambda: model_runtime.cancel_operations(automatic_only=True, reason="privacy")),
         ("agent_tasks", lambda: agent_task_service.stop_tasks(stop_linked_jobs=True)),
         ("monthly_generation", monthly_review_service.cancel_active),

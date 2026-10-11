@@ -23,6 +23,7 @@ SOURCE_SNAPSHOT_EXCLUDES = {
     "dist",
     "node_modules",
     "release",
+    "generated",
 }
 
 
@@ -109,7 +110,17 @@ def prepare_manifest(desktop_root: Path, backend_project_root: Path, output: Pat
             "backend": repository_state(backend_project_root),
             "desktop": repository_state(desktop_root),
         },
+        "local_upgrade_protocol": 1,
+        "source_paths": {"backend": str(backend_project_root.resolve()), "desktop": str(desktop_root.resolve())},
     }
+    # Conservative compatibility: an intentional schema-core change disables
+    # proactive version rollback until compatibility is explicitly designed.
+    schema_digest = hashlib.sha256()
+    for name in ("db.py", "migration_service.py"):
+        source = backend_project_root / "backend" / "app" / name
+        if source.is_file():
+            schema_digest.update(name.encode("utf-8")); schema_digest.update(source.read_bytes())
+    payload["data_schema_compatibility"] = schema_digest.hexdigest()
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     payload["build_id"] = f"mio-{payload['app_version']}-{stamp}-{hashlib.sha256(canonical).hexdigest()[:10]}"
@@ -121,6 +132,7 @@ def _artifact_paths(release_root: Path) -> list[tuple[str, Path]]:
     frontend_root = release_root / "_internal" / "agent_frontend"
     artifacts: list[tuple[str, Path]] = [
         ("windows_executable", release_root / "Mio.exe"),
+        ("embedded_build_identity", release_root / "_internal" / "build_identity.json"),
         ("live2d_app_asar", release_root / "_internal" / "live2d_desktop" / "resources" / "app.asar"),
         ("frontend_index", frontend_root / "index.html"),
         ("mio_voice_installer", release_root / "_internal" / "agent_scripts" / "deps" / "install-gpt-sovits.ps1"),
@@ -133,9 +145,18 @@ def _artifact_paths(release_root: Path) -> list[tuple[str, Path]]:
     default_voice_reference = release_root / "_internal" / "default_voice" / "mio_v2_00.wav"
     if default_voice_reference.is_file():
         artifacts.append(("mio_default_voice_reference", default_voice_reference))
-    for target in sorted((frontend_root / "assets").glob("index-*.*")):
+    for target in sorted((frontend_root / "assets").glob("*")):
         if target.suffix.lower() in {".js", ".css"}:
-            artifacts.append((f"frontend_bundle_{target.suffix.lower()[1:]}", target))
+            name = (f"frontend_bundle_{target.suffix.lower()[1:]}" if target.name.startswith("index-")
+                    else f"frontend_chunk_{target.name}")
+            artifacts.append((name, target))
+    browser_node = release_root / "_internal" / "playwright" / "driver" / "node.exe"
+    browser_cli = release_root / "_internal" / "playwright" / "driver" / "package" / "cli.js"
+    if browser_node.is_file() or browser_cli.is_file():
+        artifacts.extend([("browser_driver_node", browser_node), ("browser_driver_cli", browser_cli)])
+    backend_root = release_root / "_internal" / "app"
+    for target in sorted(backend_root.rglob("*.pyc")):
+        artifacts.append((f"backend_module_{target.relative_to(backend_root).as_posix()}", target))
     return artifacts
 
 
@@ -143,6 +164,28 @@ def finalize_manifest(identity_path: Path, release_root: Path) -> dict[str, Any]
     payload = json.loads(identity_path.read_text(encoding="utf-8"))
     if int(payload.get("schema_version") or 0) != SCHEMA_VERSION or not payload.get("build_id"):
         raise RuntimeError("构建身份文件无效。")
+    embedded_path = release_root / "_internal" / "build_identity.json"
+    if not embedded_path.is_file():
+        raise RuntimeError("发布程序缺少内嵌构建身份；必须重新打包，不能只生成顶层清单。")
+    embedded = json.loads(embedded_path.read_text(encoding="utf-8"))
+    if embedded != payload:
+        raise RuntimeError("请求的构建身份与程序内嵌身份不一致；请部署同一次完整构建。")
+    frontend_assets = release_root / "_internal" / "agent_frontend" / "assets"
+    if not any(frontend_assets.glob("index-*.js")) or not any(frontend_assets.glob("index-*.css")):
+        raise RuntimeError("发布文件不完整，缺少前端入口 JS 或 CSS bundle。")
+    uses_capabilities = any("/api/capabilities" in target.read_text(encoding="utf-8")
+                            for target in frontend_assets.glob("*.js"))
+    if uses_capabilities:
+        expected = ("main.pyc", "capability_checks.pyc", "capability_probe_worker.pyc", "routes/capabilities.pyc")
+        missing = [name for name in expected if not (release_root / "_internal" / "app" / name).is_file()]
+        if missing:
+            raise RuntimeError("前端已启用能力实测，但后端未完整打包：" + ", ".join(missing))
+    uses_browser = any("/browser/login" in target.read_text(encoding="utf-8")
+                       for target in frontend_assets.glob("*.js"))
+    if uses_browser and not all(path.is_file() for path in (
+            release_root / "_internal" / "playwright" / "driver" / "node.exe",
+            release_root / "_internal" / "playwright" / "driver" / "package" / "cli.js")):
+        raise RuntimeError("前端已启用项目浏览器，但浏览器驱动未完整打包。")
     artifacts: list[dict[str, object]] = []
     required = _artifact_paths(release_root)
     if len(required) < 7:

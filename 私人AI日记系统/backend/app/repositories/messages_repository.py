@@ -210,8 +210,8 @@ class MessagesRepository:
         return value if isinstance(value, dict) else {}
 
 
-    def get_recent_messages(self, limit: int = 30, conversation_id: str = "default") -> list[sqlite3.Row]:
-        return self._dep__conversation_repository().get_recent_messages(limit, conversation_id)
+    def get_recent_messages(self, limit: int = 30, conversation_id: str = "default", before_id: int = 0) -> list[sqlite3.Row]:
+        return self._dep__conversation_repository().get_recent_messages(limit, conversation_id, before_id)
 
 
     def get_total_message_token_usage(self) -> int:
@@ -338,6 +338,10 @@ class MessagesRepository:
 
     def get_message_by_id(self, message_id: int) -> sqlite3.Row | None:
         return self._dep__conversation_repository().get_message_by_id(message_id)
+
+    def update_message_attachments(self, message_id: int, attachments_json: str) -> None:
+        with self._dep_get_conn() as conn:
+            conn.execute("UPDATE messages SET attachments_json=? WHERE id=?", (attachments_json, int(message_id)))
 
 
     def get_latest_message_id(self, role: str = "", conversation_id: str = "") -> int:

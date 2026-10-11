@@ -1,0 +1,547 @@
+/* ============================================================================
+ * Mio 设计令牌 —— 全应用唯一的颜色与尺度来源
+ *
+ * 两层结构：
+ *   1. 尺度层（与主题无关）：字号、圆角、阴影、动效
+ *   2. 语义层（每个主题覆盖这一层）：底色、表面、文字、边框、强调色、状态色
+ *
+ * 主题通过根元素上的 [data-theme="<id>"] 属性切换，而不是 class 列表。
+ * 新增一个主题 = 在下面加一个 [data-theme=...] 块，不需要改任何选择器。
+ *
+ * 旧变量名（--ink / --line / --muted / --accent ...）保留为别名，指向新的
+ * 语义令牌，这样尚未迁移的历史样式在深色主题下也能自动正确，不会出现
+ * “一半跟随主题、一半不跟随”的割裂。
+ * ========================================================================== */
+
+/* ---------------------------------------------------------------------------
+ * 尺度层：与主题无关
+ * ------------------------------------------------------------------------- */
+:root[data-font-size="small"] { --fs: 0.92; }
+:root[data-font-size="medium"] { --fs: 1; }
+:root[data-font-size="large"] { --fs: 1.12; }
+
+:root {
+  /* 字号阶梯。用 calc(--fs × 系数) 而不是 rem，这样字体大小开关只影响
+     文本尺寸，不会连带缩放所有用 rem 表达的间距和圆角。 */
+  --fs: 1;
+  --text-xs: calc(10px * var(--fs));
+  --text-sm: calc(11px * var(--fs));
+  --text-base: calc(12px * var(--fs));
+  --text-md: calc(13px * var(--fs));
+  --text-lg: calc(15px * var(--fs));
+  --text-xl: calc(17px * var(--fs));
+  --text-2xl: calc(21px * var(--fs));
+  --text-3xl: calc(28px * var(--fs));
+
+  --leading-tight: 1.35;
+  --leading-normal: 1.6;
+  --leading-relaxed: 1.8;
+
+  /* 圆角：把原来 22 种漂移值收敛成 4 档 */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* 阴影：一律用当前文字色的低透明度表达，深浅主题都成立 */
+  --shadow-sm: 0 1px 2px var(--shadow-tint);
+  --shadow-md: 0 4px 14px var(--shadow-tint);
+  --shadow-lg: 0 12px 36px var(--shadow-strong);
+  --shadow-pop: 0 18px 48px var(--shadow-strong);
+
+  /* 动效 */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 280ms;
+
+  /* 层级 */
+  --z-sidebar: 2;
+  --z-titlebar: 30;
+  --z-drawer: 11;
+  --z-modal: 100;
+  --z-popover: 10000;
+
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC",
+    "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+  font-synthesis: none;
+  letter-spacing: 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------------------------------------------------------------------------
+ * 主题：宣纸（默认，东方雅致 · 浅）
+ * ------------------------------------------------------------------------- */
+:root,
+[data-theme="xuan"] {
+  color-scheme: light;
+
+  /* 底色与表面 */
+  --bg: #f3efe9;
+  --bg-elevated: #faf7f2;
+  --surface: #fdfbf7;
+  --surface-raised: #ffffff;
+  --surface-soft: #f4efe8;
+  --surface-sunken: #ece6dd;
+  --surface-warm: #f6f1ea;
+  --overlay: rgb(38 32 26 / 42%);
+
+  /* 文字 */
+  --text: #2e2a26;
+  --text-muted: #6f665d;
+  --text-faint: #9c9287;
+  --text-inverse: #fdfbf7;
+
+  /* 边框 */
+  --border: #e0d8cd;
+  --border-strong: #cdc2b4;
+
+  /* 强调色：松烟墨青 */
+  --accent: #4a6b74;
+  --accent-hover: #3a565e;
+  --accent-soft: #e3ebec;
+  --accent-contrast: #fdfbf7;
+
+  /* 状态色 */
+  --success: #4d7a5f;
+  --success-soft: #e4efe7;
+  --warning: #95692c;
+  --warning-soft: #f8eeda;
+  --danger: #a85048;
+  --danger-soft: #f9e6e3;
+  --info: #4a6b8a;
+  --info-soft: #e4ecf3;
+
+  /* 阴影与焦点 */
+  --shadow-tint: rgb(60 48 34 / 8%);
+  --shadow-strong: rgb(48 38 26 / 18%);
+  --focus-ring: color-mix(in srgb, var(--accent) 38%, transparent);
+
+  /* 滚动条 */
+  --scrollbar-thumb: rgb(120 108 94 / 34%);
+  --scrollbar-thumb-hover: rgb(96 86 74 / 58%);
+
+  /* 侧栏 */
+  --sidebar-bg: rgb(250 247 242 / 94%);
+  --sidebar-active: #e6ecec;
+
+  /* 标题栏 */
+  --titlebar-bg: rgb(249 245 240 / 94%);
+
+  /* 每个视图的强调色（首页/对话/记录/桌宠各自偏一点色相） */
+  --view-accent: var(--accent);
+  --view-accent-soft: var(--accent-soft);
+}
+
+/* ---------------------------------------------------------------------------
+ * 青瓷（东方雅致 · 浅）
+ * ------------------------------------------------------------------------- */
+[data-theme="celadon"] {
+  color-scheme: light;
+  --bg: #eef2f1;
+  --bg-elevated: #f7faf9;
+  --surface: #fbfdfc;
+  --surface-raised: #ffffff;
+  --surface-soft: #eff4f3;
+  --surface-sunken: #e4ebe9;
+  --surface-warm: #f2f6f5;
+  --overlay: rgb(26 38 36 / 42%);
+  --text: #26302e;
+  --text-muted: #63716e;
+  --text-faint: #93a09d;
+  --text-inverse: #fbfdfc;
+  --border: #d8e2df;
+  --border-strong: #c2d0cc;
+  --accent: #45806f;
+  --accent-hover: #356657;
+  --accent-soft: #dfeee8;
+  --accent-contrast: #fbfdfc;
+  --success: #3f7d5e;
+  --success-soft: #dff0e6;
+  --warning: #8a6a2e;
+  --warning-soft: #f7efdb;
+  --danger: #a4524c;
+  --danger-soft: #f8e7e4;
+  --info: #3f7391;
+  --info-soft: #e0edf4;
+  --shadow-tint: rgb(30 50 46 / 8%);
+  --shadow-strong: rgb(24 42 38 / 18%);
+  --scrollbar-thumb: rgb(104 122 118 / 34%);
+  --scrollbar-thumb-hover: rgb(80 98 94 / 58%);
+  --sidebar-bg: rgb(246 250 249 / 94%);
+  --sidebar-active: #e1ede9;
+  --titlebar-bg: rgb(245 249 248 / 94%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 竹青（东方雅致 · 浅）
+ * ------------------------------------------------------------------------- */
+[data-theme="bamboo"] {
+  color-scheme: light;
+  --bg: #eff2ec;
+  --bg-elevated: #f8faf5;
+  --surface: #fcfdf9;
+  --surface-raised: #ffffff;
+  --surface-soft: #f0f4ec;
+  --surface-sunken: #e5eadd;
+  --surface-warm: #f4f6ef;
+  --overlay: rgb(32 40 26 / 42%);
+  --text: #2b3227;
+  --text-muted: #6a7362;
+  --text-faint: #98a191;
+  --text-inverse: #fcfdf9;
+  --border: #dce3d4;
+  --border-strong: #c8d2bc;
+  --accent: #5f7f4a;
+  --accent-hover: #4b6739;
+  --accent-soft: #e5eedb;
+  --accent-contrast: #fcfdf9;
+  --success: #557f42;
+  --success-soft: #e6f0da;
+  --warning: #8d6a2c;
+  --warning-soft: #f7eeda;
+  --danger: #a5524a;
+  --danger-soft: #f8e7e3;
+  --info: #4a7391;
+  --info-soft: #e3edf4;
+  --shadow-tint: rgb(40 50 30 / 8%);
+  --shadow-strong: rgb(32 42 24 / 18%);
+  --scrollbar-thumb: rgb(112 122 100 / 34%);
+  --scrollbar-thumb-hover: rgb(88 98 78 / 58%);
+  --sidebar-bg: rgb(247 250 243 / 94%);
+  --sidebar-active: #e6eedd;
+  --titlebar-bg: rgb(246 249 242 / 94%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 蔷薇（东方雅致 · 浅）
+ * ------------------------------------------------------------------------- */
+[data-theme="rose"] {
+  color-scheme: light;
+  --bg: #f4eff1;
+  --bg-elevated: #fbf7f8;
+  --surface: #fdfafb;
+  --surface-raised: #ffffff;
+  --surface-soft: #f6eef1;
+  --surface-sunken: #ebe1e5;
+  --surface-warm: #f7f1f3;
+  --overlay: rgb(40 30 34 / 42%);
+  --text: #322b2e;
+  --text-muted: #746a6e;
+  --text-faint: #a3969b;
+  --text-inverse: #fdfafb;
+  --border: #e6dade;
+  --border-strong: #d3c3c9;
+  --accent: #a3627a;
+  --accent-hover: #8a4e64;
+  --accent-soft: #f4e2e9;
+  --accent-contrast: #fdfafb;
+  --success: #557f66;
+  --success-soft: #e4efe7;
+  --warning: #906829;
+  --warning-soft: #f8eeda;
+  --danger: #ac4f56;
+  --danger-soft: #fae5e6;
+  --info: #6b6f9a;
+  --info-soft: #eaeaf5;
+  --shadow-tint: rgb(60 38 46 / 8%);
+  --shadow-strong: rgb(48 28 36 / 18%);
+  --scrollbar-thumb: rgb(122 106 112 / 34%);
+  --scrollbar-thumb-hover: rgb(98 82 88 / 58%);
+  --sidebar-bg: rgb(251 247 249 / 94%);
+  --sidebar-active: #f2e4ea;
+  --titlebar-bg: rgb(250 246 247 / 94%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 晨雾（清透现代 · 浅）
+ * ------------------------------------------------------------------------- */
+[data-theme="mist"] {
+  color-scheme: light;
+  --bg: #f2f4f6;
+  --bg-elevated: #f9fafb;
+  --surface: #fcfdfd;
+  --surface-raised: #ffffff;
+  --surface-soft: #f1f4f6;
+  --surface-sunken: #e7ebee;
+  --surface-warm: #f3f5f6;
+  --overlay: rgb(28 34 40 / 42%);
+  --text: #262c33;
+  --text-muted: #656e78;
+  --text-faint: #959da6;
+  --text-inverse: #fcfdfd;
+  --border: #dce1e6;
+  --border-strong: #c6cdd5;
+  --accent: #3d6b96;
+  --accent-hover: #2f567a;
+  --accent-soft: #e2ebf4;
+  --accent-contrast: #fcfdfd;
+  --success: #3f7a58;
+  --success-soft: #e0eee6;
+  --warning: #8a672a;
+  --warning-soft: #f7eeda;
+  --danger: #a54d4d;
+  --danger-soft: #f8e6e6;
+  --info: #3d6b96;
+  --info-soft: #e2ebf4;
+  --shadow-tint: rgb(30 40 50 / 8%);
+  --shadow-strong: rgb(24 32 42 / 16%);
+  --scrollbar-thumb: rgb(106 116 126 / 32%);
+  --scrollbar-thumb-hover: rgb(84 94 104 / 56%);
+  --sidebar-bg: rgb(248 250 251 / 96%);
+  --sidebar-active: #e5ebf1;
+  --titlebar-bg: rgb(247 249 251 / 96%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 陶土（暖色自然 · 浅）
+ * ------------------------------------------------------------------------- */
+[data-theme="clay"] {
+  color-scheme: light;
+  --bg: #f4ede6;
+  --bg-elevated: #fbf6f0;
+  --surface: #fdf9f4;
+  --surface-raised: #ffffff;
+  --surface-soft: #f6ece2;
+  --surface-sunken: #e9dcd0;
+  --surface-warm: #f7f0e8;
+  --overlay: rgb(46 34 24 / 42%);
+  --text: #35291f;
+  --text-muted: #78685a;
+  --text-faint: #a59585;
+  --text-inverse: #fdf9f4;
+  --border: #e5d7c9;
+  --border-strong: #d2beab;
+  --accent: #a8683f;
+  --accent-hover: #8c5330;
+  --accent-soft: #f4e2d4;
+  --accent-contrast: #fdf9f4;
+  --success: #5c7a4a;
+  --success-soft: #e6efdc;
+  --warning: #94691f;
+  --warning-soft: #f8eed6;
+  --danger: #a85141;
+  --danger-soft: #f9e5e0;
+  --info: #56708f;
+  --info-soft: #e6ecf3;
+  --shadow-tint: rgb(66 46 28 / 9%);
+  --shadow-strong: rgb(54 36 20 / 19%);
+  --scrollbar-thumb: rgb(128 108 90 / 34%);
+  --scrollbar-thumb-hover: rgb(104 84 66 / 58%);
+  --sidebar-bg: rgb(251 245 238 / 94%);
+  --sidebar-active: #f2e3d7;
+  --titlebar-bg: rgb(250 244 237 / 94%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 秋叶（暖色自然 · 浅）
+ * ------------------------------------------------------------------------- */
+[data-theme="autumn"] {
+  color-scheme: light;
+  --bg: #f3eee6;
+  --bg-elevated: #faf6ee;
+  --surface: #fdfaf3;
+  --surface-raised: #ffffff;
+  --surface-soft: #f5eee1;
+  --surface-sunken: #e8ddca;
+  --surface-warm: #f6f0e5;
+  --overlay: rgb(44 36 22 / 42%);
+  --text: #332b1e;
+  --text-muted: #736751;
+  --text-faint: #a2977f;
+  --text-inverse: #fdfaf3;
+  --border: #e3d9c4;
+  --border-strong: #cfc0a4;
+  --accent: #996a2f;
+  --accent-hover: #7d5421;
+  --accent-soft: #f3e6cd;
+  --accent-contrast: #fdfaf3;
+  --success: #5e7742;
+  --success-soft: #e8eeda;
+  --warning: #8f6519;
+  --warning-soft: #f7edd2;
+  --danger: #a45338;
+  --danger-soft: #f8e5dd;
+  --info: #5b6f8a;
+  --info-soft: #e7ecf3;
+  --shadow-tint: rgb(64 50 26 / 9%);
+  --shadow-strong: rgb(52 40 18 / 19%);
+  --scrollbar-thumb: rgb(126 112 84 / 34%);
+  --scrollbar-thumb-hover: rgb(102 88 62 / 58%);
+  --sidebar-bg: rgb(250 245 235 / 94%);
+  --sidebar-active: #f1e5cd;
+  --titlebar-bg: rgb(249 244 234 / 94%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 墨夜（深色 · 默认深色主题）
+ * ------------------------------------------------------------------------- */
+[data-theme="ink"] {
+  color-scheme: dark;
+  --bg: #1a1a1d;
+  --bg-elevated: #212125;
+  --surface: #26262b;
+  --surface-raised: #2d2d33;
+  --surface-soft: #232328;
+  --surface-sunken: #17171a;
+  --surface-warm: #26242a;
+  --overlay: rgb(0 0 0 / 58%);
+  --text: #e6e4e0;
+  --text-muted: #a3a09b;
+  --text-faint: #79766f;
+  --text-inverse: #1a1a1d;
+  --border: #35353b;
+  --border-strong: #47474f;
+  --accent: #7fa5b0;
+  --accent-hover: #96b8c2;
+  --accent-soft: #2b373b;
+  --accent-contrast: #14181a;
+  --success: #7aab8c;
+  --success-soft: #24322a;
+  --warning: #c9a160;
+  --warning-soft: #332b1d;
+  --danger: #d08a84;
+  --danger-soft: #372524;
+  --info: #86a8cc;
+  --info-soft: #232c37;
+  --shadow-tint: rgb(0 0 0 / 32%);
+  --shadow-strong: rgb(0 0 0 / 52%);
+  --scrollbar-thumb: rgb(150 150 158 / 28%);
+  --scrollbar-thumb-hover: rgb(176 176 184 / 48%);
+  --sidebar-bg: rgb(30 30 34 / 94%);
+  --sidebar-active: #2f3438;
+  --titlebar-bg: rgb(28 28 32 / 94%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 深海（深色 · 冷调）
+ * ------------------------------------------------------------------------- */
+[data-theme="abyss"] {
+  color-scheme: dark;
+  --bg: #12181d;
+  --bg-elevated: #182027;
+  --surface: #1c262e;
+  --surface-raised: #232f38;
+  --surface-soft: #19222a;
+  --surface-sunken: #0e1317;
+  --surface-warm: #1b242b;
+  --overlay: rgb(0 4 8 / 60%);
+  --text: #dbe5ea;
+  --text-muted: #93a4ae;
+  --text-faint: #6b7c86;
+  --text-inverse: #12181d;
+  --border: #2a3740;
+  --border-strong: #3b4a55;
+  --accent: #6fa8bd;
+  --accent-hover: #88bccf;
+  --accent-soft: #1f333d;
+  --accent-contrast: #0b1114;
+  --success: #6faa8c;
+  --success-soft: #1a2f28;
+  --warning: #c49b5c;
+  --warning-soft: #2e2718;
+  --danger: #cb8880;
+  --danger-soft: #322222;
+  --info: #7ba6c9;
+  --info-soft: #1c2a35;
+  --shadow-tint: rgb(0 4 10 / 34%);
+  --shadow-strong: rgb(0 4 10 / 56%);
+  --scrollbar-thumb: rgb(126 152 166 / 28%);
+  --scrollbar-thumb-hover: rgb(150 178 192 / 48%);
+  --sidebar-bg: rgb(21 28 34 / 94%);
+  --sidebar-active: #212f38;
+  --titlebar-bg: rgb(20 27 33 / 94%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 暗樱（深色 · 暖调）
+ * ------------------------------------------------------------------------- */
+[data-theme="dusk"] {
+  color-scheme: dark;
+  --bg: #1c1618;
+  --bg-elevated: #241d20;
+  --surface: #2a2225;
+  --surface-raised: #332a2e;
+  --surface-soft: #251e21;
+  --surface-sunken: #150f11;
+  --surface-warm: #282023;
+  --overlay: rgb(10 4 6 / 58%);
+  --text: #ece3e5;
+  --text-muted: #b0a1a5;
+  --text-faint: #857679;
+  --text-inverse: #1c1618;
+  --border: #3d3236;
+  --border-strong: #514348;
+  --accent: #c98ba0;
+  --accent-hover: #d9a2b4;
+  --accent-soft: #3a2a31;
+  --accent-contrast: #1a1114;
+  --success: #8bab8a;
+  --success-soft: #262f26;
+  --warning: #c69f6b;
+  --warning-soft: #33291d;
+  --danger: #d18d8d;
+  --danger-soft: #382424;
+  --info: #a79bc7;
+  --info-soft: #2a2637;
+  --shadow-tint: rgb(8 2 4 / 34%);
+  --shadow-strong: rgb(8 2 4 / 54%);
+  --scrollbar-thumb: rgb(158 136 143 / 28%);
+  --scrollbar-thumb-hover: rgb(184 160 168 / 48%);
+  --sidebar-bg: rgb(32 25 28 / 94%);
+  --sidebar-active: #352a2e;
+  --titlebar-bg: rgb(30 24 27 / 94%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 兼容别名
+ *
+ * 历史样式仍在引用这些旧名字。把它们指到上面的语义令牌，而不是各自再写一份
+ * 颜色，这样深色主题下旧规则也会跟着正确，不需要逐条排查。
+ * 迁移完成后这些别名可以逐步删除。
+ * ------------------------------------------------------------------------- */
+:root,
+[data-theme] {
+  /* Small labels still need readable contrast on every theme surface. */
+  --text-faint: color-mix(in srgb, var(--text-muted) 85%, var(--text));
+  --ink: var(--text);
+  --muted: var(--text-muted);
+  --muted-light: var(--text-faint);
+  --line: var(--border);
+  --line-strong: var(--border-strong);
+  --accent-dark: var(--accent-hover);
+  --green: var(--success);
+  --amber: var(--warning);
+  --mist-blue: var(--info);
+  --mist-blue-soft: var(--info-soft);
+  --app-bg: var(--bg);
+
+  /* 角色卡等面板的历史别名 */
+  --mio-border: var(--border);
+  --mio-line: var(--border);
+  --mio-soft-bg: var(--surface-soft);
+  --mio-accent: var(--accent);
+  --mio-muted: var(--text-muted);
+  --mio-panel: var(--surface);
+
+  /* 曾经被引用但从未定义过的名字（--panel / --text / --bg / --page 等），
+     这里补齐，避免无效声明导致整条规则被丢弃 */
+  --panel: var(--surface);
+  --page: var(--bg);
+
+  /* 视图强调色默认跟随主题强调色 */
+  --view-accent: var(--accent);
+  --view-accent-dark: var(--accent-hover);
+  --view-accent-soft: var(--accent-soft);
+}

@@ -1,10 +1,14 @@
 <script setup>
+import { mergeLoadedItems } from '../scrollCollections.js'
+import WorkspacePager from './WorkspacePager.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check, ChevronDown, ListChecks, Pause, Play, RefreshCw, Settings, X } from '@lucide/vue'
 import { apiRequest } from '../services/api.js'
 import { canResumeTask, taskStatusLabel } from '../agentTaskState.js'
 import RuntimeTimeline from './RuntimeTimeline.vue'
 import JobRecovery from './JobRecovery.vue'
+import AgentTaskProgress from './AgentTaskProgress.vue'
+import AgentTaskFollowUp from './AgentTaskFollowUp.vue'
 
 const props = defineProps({ compact: Boolean, conversationId: { type: String, default: '' } })
 const emit = defineEmits(['open-settings'])
@@ -39,7 +43,7 @@ async function load() {
   try {
     const data = await apiRequest(`/api/agent/work?conversation_id=${encodeURIComponent(props.conversationId)}&status=${requestedFilter}&offset=${requestedOffset}`)
     if (disposed || conversationId !== props.conversationId || requestedFilter !== filter.value || requestedOffset !== offset.value) return
-    tasks.value = data.tasks || []
+    tasks.value = mergeLoadedItems(tasks.value,data.tasks || [],requestedOffset)
     hasMore.value = !!data.has_more
     budgetEnabled.value = !!data.limits?.enabled
     loaded.value = true
@@ -79,6 +83,8 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.rem
       <section v-if="expanded" class="goal-details" aria-label="任务详情">
         <header><strong>任务详情</strong><button type="button" title="收起任务详情" @click="expanded = false"><X :size="14" /></button></header>
         <p>{{ task.snapshot?.goal || task.original_goal }}</p>
+        <AgentTaskProgress :task-id="task.id" :task="task" />
+        <AgentTaskFollowUp :key="task.id" :task-id="task.id" :disabled="task.status === 'cancelled'" @changed="load" />
         <p v-if="task.snapshot?.blocker" class="task-blocker">{{ task.snapshot.blocker }}</p>
         <p v-if="task.snapshot?.next_step">下一步：{{ task.snapshot.next_step }}</p>
         <ol v-if="task.snapshot?.plan?.length"><li v-for="(step,index) in task.snapshot.plan" :key="index">{{ step }}</li></ol>
@@ -101,6 +107,7 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.rem
     <p v-else-if="loaded && !error && !visible.length && !compact" class="empty-tasks">暂无{{ filter === 'active' ? '进行中的' : '' }}任务</p>
     <article v-for="task in visible" :key="task.id" class="task-item">
       <header><strong>{{ task.snapshot.goal || task.original_goal }}</strong><span>{{ taskStatusLabel(task.status) }}</span></header>
+      <details><summary>实时进展与补充要求</summary><AgentTaskProgress :task-id="task.id" :task="task" /><AgentTaskFollowUp :key="task.id" :task-id="task.id" :disabled="task.status === 'cancelled'" @changed="load" /></details>
       <p v-if="task.snapshot.blocker" class="task-blocker">{{ task.snapshot.blocker }}</p>
       <p v-if="task.snapshot.next_step">下一步：{{ task.snapshot.next_step }}</p>
       <ol v-if="task.snapshot.plan?.length"><li v-for="(step,index) in task.snapshot.plan" :key="index">{{ step }}</li></ol>
@@ -117,22 +124,22 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.rem
         <button v-if="!['completed','cancelled'].includes(task.status)" title="取消任务及关联后台工作，已完成结果保留" :disabled="!!busy" @click="action(task, 'cancel')"><X :size="16" />取消任务</button>
       </footer>
     </article>
-    <footer v-if="!compact && (offset || hasMore)" class="task-heading"><button :disabled="!offset || loading" @click="offset = Math.max(0, offset - 50)">上一页</button><span>第 {{ offset / 50 + 1 }} 页</span><button :disabled="!hasMore || loading" @click="offset += 50">下一页</button></footer>
+    <WorkspacePager v-if="!compact" label="任务" :has-more="hasMore" :busy="loading" @page="offset += 50" />
   </section>
 </template>
 
 <style scoped>
-.agent-tasks{padding:24px;max-width:1000px;width:100%;margin:0 auto;box-sizing:border-box;color:var(--text-primary,#26332f);overflow:auto}
-.task-goal-strip{position:relative;width:100%;min-width:0;margin:0 0 6px;color:var(--muted);font-size:12px}
+.agent-tasks{padding:24px;max-width:1000px;width:100%;margin:0 auto;box-sizing:border-box;color:var(--text);overflow:auto}
+.task-goal-strip{position:relative;width:100%;min-width:0;margin:0 0 6px;color:var(--muted);font-size:calc(12px * var(--fs, 1))}
 .goal-row{display:flex;align-items:center;gap:3px;min-height:30px;padding:0 4px}
 .task-goal-strip button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-width:28px;height:28px;padding:0 5px;border:0;border-radius:5px;color:inherit;background:transparent;cursor:pointer}
-.task-goal-strip button:hover{background:var(--surface-soft,#f4f2f5);color:var(--ink)}
+.task-goal-strip button:hover{background:var(--surface-soft);color:var(--ink)}
 .task-goal-strip button:focus-visible{outline:2px solid var(--muted);outline-offset:1px}
-.goal-row .goal-summary{flex:1;min-width:0;justify-content:flex-start;text-align:left;font-size:12px}
+.goal-row .goal-summary{flex:1;min-width:0;justify-content:flex-start;text-align:left;font-size:calc(12px * var(--fs, 1))}
 .goal-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.goal-status{flex-shrink:0;font-size:11px}.goal-row svg{flex-shrink:0}.rotated{transform:rotate(180deg)}
-.goal-details{position:absolute;bottom:calc(100% + 6px);left:0;right:0;z-index:30;max-height:min(280px,40vh);overflow:auto;padding:14px 16px;border:1px solid var(--line,#e4dfe7);border-radius:12px;background:var(--surface,#fff);color:var(--ink);box-shadow:0 8px 28px #32243d12;overflow-wrap:anywhere}
-.goal-details header{display:flex;align-items:center;justify-content:space-between}.goal-details p,.goal-details li{font-size:12px;line-height:1.6}.goal-details small{display:block;margin-top:10px;color:var(--muted)}.goal-confirm{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.goal-confirm button{border:1px solid var(--line)}.goal-error{display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);font-size:11px;max-height:48px;overflow:auto}
+.goal-status{flex-shrink:0;font-size:calc(11px * var(--fs, 1))}.goal-row svg{flex-shrink:0}.rotated{transform:rotate(180deg)}
+.goal-details{position:absolute;bottom:calc(100% + 6px);left:0;right:0;z-index:30;max-height:min(280px,40vh);overflow:auto;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);box-shadow:0 8px 28px var(--shadow-tint);overflow-wrap:anywhere}
+.goal-details header{display:flex;align-items:center;justify-content:space-between}.goal-details p,.goal-details li{font-size:calc(12px * var(--fs, 1));line-height:1.6}.goal-details small{display:block;margin-top:10px;color:var(--muted)}.goal-confirm{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.goal-confirm button{border:1px solid var(--line)}.goal-error{display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);font-size:calc(11px * var(--fs, 1));max-height:48px;overflow:auto}
 .task-heading,.task-heading h2,.task-item header,.task-item footer{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.task-heading h2{font-size:20px;margin-right:auto}.task-item{border-bottom:1px solid #d7deda;padding:18px 0}.task-item header strong{flex:1;min-width:120px;overflow-wrap:anywhere}.task-item header span{font-size:12px;color:#356957}.task-item p,.task-item li{font-size:13px;overflow-wrap:anywhere;line-height:1.6}.task-item footer{margin-top:12px}.task-item footer small{margin-right:auto;color:#64706c}.task-item button,.task-heading button,.task-limits button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 9px;border:1px solid #cbd6d0;border-radius:5px;background:var(--surface,#fff);color:inherit;cursor:pointer}.task-error,.task-blocker{color:#a24237}.task-confirm{display:flex;gap:12px;align-items:center;margin:12px 0}.task-limits{margin-top:24px}.task-limits>div{display:flex;gap:16px;flex-wrap:wrap;padding-top:16px}.task-limits label{display:grid;gap:6px;font-size:12px}.task-limits input{width:100px;padding:6px;border:1px solid #cbd6d0;border-radius:4px}.empty-tasks{padding:32px 0;color:#65716b}details summary{cursor:pointer;font-size:13px}code{margin-right:12px}button:disabled{opacity:.5;cursor:wait}@media(max-width:600px){.agent-tasks{padding:14px}.task-item header{align-items:flex-start}.task-item footer small{width:100%}}
+.task-heading h2{font-size:calc(20px * var(--fs, 1));margin-right:auto}.task-item{border-bottom:1px solid var(--border);padding:18px 0}.task-item header strong{flex:1;min-width:120px;overflow-wrap:anywhere}.task-item header span{font-size:calc(12px * var(--fs, 1));color:var(--success)}.task-item p,.task-item li{font-size:calc(13px * var(--fs, 1));overflow-wrap:anywhere;line-height:1.6}.task-item footer{margin-top:12px}.task-item footer small{margin-right:auto;color:var(--text-muted)}.task-item button,.task-heading button,.task-limits button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 9px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:inherit;cursor:pointer}.task-error,.task-blocker{color:var(--danger)}.task-confirm{display:flex;gap:12px;align-items:center;margin:12px 0}.task-limits{margin-top:24px}.task-limits>div{display:flex;gap:16px;flex-wrap:wrap;padding-top:16px}.task-limits label{display:grid;gap:6px;font-size:calc(12px * var(--fs, 1))}.task-limits input{width:100px;padding:6px;border:1px solid var(--border);border-radius:4px}.empty-tasks{padding:32px 0;color:var(--text-muted)}details summary{cursor:pointer;font-size:calc(13px * var(--fs, 1))}code{margin-right:12px}button:disabled{opacity:.5;cursor:wait}@media(max-width:600px){.agent-tasks{padding:14px}.task-item header{align-items:flex-start}.task-item footer small{width:100%}}
 </style>

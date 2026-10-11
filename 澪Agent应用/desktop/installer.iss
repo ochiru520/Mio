@@ -1,5 +1,5 @@
-#define MyAppName "Mio"
-#define MyAppVersion "0.3.1"
+﻿#define MyAppName "Mio"
+#define MyAppVersion "0.4.0"
 #define MyAppPublisher "Mio Project"
 #define MyAppExeName "Mio.exe"
 
@@ -14,7 +14,7 @@ UsePreviousTasks=yes
 DisableDirPage=no
 DefaultGroupName={#MyAppName}
 OutputDir=..\release
-OutputBaseFilename=Mio-0.3.1-Windows-x64-Setup
+OutputBaseFilename=Mio-0.4.0-Windows-x64-Setup
 SetupIconFile=mio.ico
 #ifdef MioFastPackage
 Compression=zip
@@ -25,6 +25,7 @@ SolidCompression=yes
 #endif
 WizardStyle=modern
 PrivilegesRequired=lowest
+MinVersion=10.0.19045
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
@@ -41,6 +42,15 @@ Source: "..\release\Mio\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdir
 
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\_internal\agent_frontend\assets"
+; User-retired product entry points only; persisted DB/media/certificates stay in the data root.
+Type: files; Name: "{app}\_internal\agent_frontend\mobile.html"
+Type: files; Name: "{app}\_internal\agent_frontend\mobile-sw.js"
+Type: files; Name: "{app}\_internal\agent_frontend\mobile.webmanifest"
+Type: files; Name: "{app}\_internal\agent_frontend\mobile-icon.svg"
+Type: files; Name: "{app}\_internal\app\mobile_gateway.pyc"
+Type: files; Name: "{app}\_internal\app\music_service.pyc"
+Type: files; Name: "{app}\_internal\app\sticker_service.pyc"
+Type: files; Name: "{app}\_internal\app\moments_service.pyc"
 Type: filesandordirs; Name: "{app}\_internal\agent_frontend\live2d-pet\models\fili"
 Type: files; Name: "{app}\_internal\agent_frontend\live2d-pet\licenses\FILI-CC0.txt"
 

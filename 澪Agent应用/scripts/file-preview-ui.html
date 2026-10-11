@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>文件预览检查</title></head>
+<body><div id="app"></div><script type="module">
+import { createApp, h } from 'vue'
+import Preview from '../src/components/AgentFilesPreview.vue'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+import '../src/styles/refinements.css'
+import '../src/styles/agent-settings.css'
+import '../src/styles/agent-surface.css'
+import '../src/styles/ui-polish.css'
+const item = { id: new URLSearchParams(location.search).get('id') || 'docx', name: '预览检查.docx', mime_type: 'application/octet-stream', version: 1, size: 100, sha256: 'test', url: '/api/artifacts/docx/download' }
+createApp({ render: () => h('div', { class:'mio-agent-surface', style:'height:100vh;display:block' }, [h('aside', { class:'mio-agent-preview-sidebar', style:'position:relative; width:min(440px,100%);height:100vh;margin-left:auto' }, [h(Preview, { artifact:item, conversationId:'preview-test' })])]) }).mount('#app')
+</script></body></html>

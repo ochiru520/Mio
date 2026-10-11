@@ -438,7 +438,11 @@ def _ensure_call_asr_ready() -> dict[str, object]:
     forced["asr_engine"] = resolved_engine
     if resolved_engine == "whisper":
         forced["asr_model"] = CALL_ASR_MODEL
-    current = system_audio_service.start(forced)
+    if (not config.get("screen_audio_enabled", True)
+            or not companion_service.window_observer.status().get("running")):
+        current = system_audio_service.start(forced, transcription_only=True)
+    else:
+        current = system_audio_service.start(forced)
     return current
 
 
@@ -614,6 +618,8 @@ def _start_observation_runtime(
         companion_service.save_config({"screen_audio_enabled": True})
         if not _pet_call_resource_owner:
             system_audio_service.start(companion_service.load_config())
+        else:
+            _ensure_call_asr_ready()
     return result
 
 
@@ -623,6 +629,8 @@ def _stop_observation_runtime() -> dict[str, object]:
     companion_service.save_config({"screen_audio_enabled": False})
     if not _pet_call_resource_owner:
         system_audio_service.stop()
+    else:
+        _ensure_call_asr_ready()
     return result
 
 
@@ -1190,6 +1198,7 @@ async def cancel_companion_chat(payload: CompanionChatCancelRequest):
         DESKTOP_PET_CONVERSATION_ID,
         source="desktop_pet",
         reason=f"user_cancelled:{payload.client_request_id or 'unknown'}",
+        expected_request_id=payload.client_request_id,
     )
     return {
         "cancelled": cancelled,

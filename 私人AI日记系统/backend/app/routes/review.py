@@ -7,6 +7,7 @@ from .. import db
 from ..llm import LLMConfigError
 from ..markdown_rendering import render_safe_markdown
 from ..review_service import generate_review_for_date
+from ..review_sources import daily_payload, metadata
 from ..web import templates
 from .diary import _validated_diary_date
 
@@ -28,7 +29,10 @@ async def reviews_list_page(request: Request):
 
 @router.get("/api/reviews")
 async def api_reviews_list():
-    return [dict(row) for row in db.list_reviews()]
+    return [
+        {**dict(row), **metadata("daily", str(row["date"]), daily_payload(str(row["date"])))}
+        for row in db.list_reviews()
+    ]
 
 
 @router.get("/reviews/{date}", response_class=HTMLResponse)
@@ -39,6 +43,7 @@ async def review_page(request: Request, date: str):
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
 
     review = db.get_daily_review(date)
+    review_metadata = metadata("daily", date, daily_payload(date)) if review else None
     return templates.TemplateResponse(
         "每日回顾.html",
         {
@@ -47,6 +52,7 @@ async def review_page(request: Request, date: str):
             "diary": diary,
             "review": review,
             "body_html": render_safe_markdown(review["markdown_content"]) if review else "",
+            "review_metadata": review_metadata,
         },
     )
 
@@ -67,4 +73,5 @@ async def api_generate_review(date: str):
         "date": date,
         "markdown": result.markdown_content,
         "review_url": f"/reviews/{date}",
+        **metadata("daily", date, daily_payload(date)),
     }

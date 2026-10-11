@@ -120,6 +120,15 @@ def load_ticket(path: Path) -> dict:
         raise UpdateError('升级任务没有本机安装锁。')
     if not isinstance(ticket.get('parent_pid'), int) or ticket['parent_pid'] <= 0:
         raise UpdateError('升级任务缺少有效父进程。')
+    if ticket.get('update_kind') not in (None, 'local_candidate'):
+        raise UpdateError('未知升级任务种类。')
+    if ticket.get('update_kind') == 'local_candidate':
+        pin = str(ticket.get('local_manifest_sha256', ''))
+        if len(pin) != 64 or ticket.get('authorization') != 'explicit_local_application':
+            raise UpdateError('本地升级缺少应用授权及固定清单。')
+        package = ensure_plain_path(Path(ticket.get('package', '')))
+        if package != state / 'updates' / 'local-candidates' / pin / 'program':
+            raise UpdateError('本地候选不在原生更新缓存内。')
     return ticket
 
 
@@ -257,11 +266,19 @@ class UpgradeTransaction:
             if recovery_only or self.journal['phase'] != 'waiting_parent':
                 self.recover('检测到上次升级中断。')
                 return
-            release = verify_manifest((self.job / 'manifest.json').read_bytes(), self.channel)
             package = ensure_plain_path(Path(self.ticket['package']))
-            if package.parent != self.state / 'updates' / 'downloads' or package.name != release.sha256 + '.exe':
-                raise UpdateError('安装包不在已验证的更新缓存中。')
-            verify_file(package, release)
+            local = self.ticket.get('update_kind') == 'local_candidate'
+            if local:
+                from types import SimpleNamespace
+                from .local_candidate import verify_candidate
+                candidate = verify_candidate(package, self.job / 'manifest.json',
+                    self.ticket['local_manifest_sha256'], base_build_id=self.ticket['previous_build_id'])
+                release = SimpleNamespace(build_id=candidate['build_id'], version=candidate.get('app_version', 'local'))
+            else:
+                release = verify_manifest((self.job / 'manifest.json').read_bytes(), self.channel)
+                if package.parent != self.state / 'updates' / 'downloads' or package.name != release.sha256 + '.exe':
+                    raise UpdateError('安装包不在已验证的更新缓存中。')
+                verify_file(package, release)
             if release.build_id != self.ticket['target_build_id']:
                 raise UpdateError('目标版本身份不一致。')
             originals = [name for name in MANAGED_NAMES if (self.install / name).exists()]
@@ -274,12 +291,22 @@ class UpgradeTransaction:
                     ensure_plain_path(self.install / name)
                     copy_managed_entry(self.install / name, self.backup / name)
                 self._phase('installing')
-                result = self._command([str(package), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/SP-',
-                    '/NORESTART', '/NORESTARTAPPLICATIONS', '/NOCLOSEAPPLICATIONS', '/UPDATE=1',
-                    '/DIR='+str(self.install), '/DataDir='+str(self.state),
-                    '/LOG='+str(self.job / 'installer.log')], 600)
-                if result.returncode != 0:
-                    raise UpdateError(f'安装器退出码 {result.returncode}，正在回退。')
+                if local:
+                    # No downloaded installer, registry edits, data or model copies.
+                    # Re-check after the backup wait and publish managed entries only.
+                    verify_candidate(package, self.job / 'manifest.json', self.ticket['local_manifest_sha256'],
+                                     base_build_id=self.ticket['previous_build_id'])
+                    for name in ('Mio.exe', 'MioUpdater.exe', '_internal', '构建清单.json'):
+                        source = package / name
+                        if source.exists():
+                            copy_managed_entry(source, self.install / name)
+                else:
+                    result = self._command([str(package), '/VERYSILENT', '/SUPPRESSMSGBOXES', '/SP-',
+                        '/NORESTART', '/NORESTARTAPPLICATIONS', '/NOCLOSEAPPLICATIONS', '/UPDATE=1',
+                        '/DIR='+str(self.install), '/DataDir='+str(self.state),
+                        '/LOG='+str(self.job / 'installer.log')], 600)
+                    if result.returncode != 0:
+                        raise UpdateError(f'安装器退出码 {result.returncode}，正在回退。')
                 marker = (self.install / '数据目录.txt').read_text('utf-8-sig').strip()
                 if Path(marker).resolve() != self.state.resolve():
                     raise UpdateError('升级改变了数据目录，已阻止启动。')

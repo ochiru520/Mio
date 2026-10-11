@@ -102,8 +102,10 @@ def _rules() -> list[dict]:
     # Read-only prompt construction must work before database initialization.
     try:
         with db.get_conn() as conn:
-            controls = conn.execute('SELECT c.*,m.content,m.status FROM memory_user_controls c JOIN structured_memories m '
-                                    'ON m.id=c.memory_id ORDER BY c.updated_at DESC').fetchall()
+            controls = conn.execute('SELECT c.*,m.content,m.status,COALESCE(s.id,0) AS source_message_id '
+                                    'FROM memory_user_controls c JOIN structured_memories m ON m.id=c.memory_id '
+                                    'LEFT JOIN messages s ON s.id=m.source_message_id AND s.conversation_id=m.source_conversation_id '
+                                    'ORDER BY c.updated_at DESC').fetchall()
             result = []
             for item in controls:
                 old = [str(r[0]) for r in conn.execute(
@@ -119,10 +121,15 @@ def _rules() -> list[dict]:
         return []
 
 
-def sanitize_history(text: str) -> str:
+def sanitize_history(text: str, *, source_message_id: int = 0) -> str:
     """Change only prompt copies; never rewrite source messages or saved diaries."""
     replacements = {}
     for rule in _rules():
+        if source_message_id and rule['source_message_id'] == source_message_id:
+            if rule['status'] != 'active':
+                return '[该来源消息包含已停用的记忆，本轮不作为事实依据]'
+            if rule['action'] == 'correct':
+                return '[该来源消息的事实已纠正，以用户当前确认的记忆为准]'
         for old in rule['old']:
             if old and (rule['status'] != 'active' or old != rule['content']):
                 replacements[old] = '[已停用的记忆，不作为事实]' if rule['status'] != 'active' else '[已纠正的旧说法]'

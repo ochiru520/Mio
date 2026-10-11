@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,7 +23,14 @@ TERMINAL_STEP_STATUSES = {
     "needs_confirmation",
     "skipped",
 }
+from .execution_tools import NAMES as EXECUTION_TOOL_NAMES
+from .learning_tools import NAMES as LEARNING_TOOL_NAMES
+from .extension_tools import NAMES as EXTENSION_TOOL_NAMES
+from .self_upgrade_tools import NAMES as SELF_UPGRADE_TOOL_NAMES
+
 PRIVATE_DATA_TOOLS = {
+    'skill_list', 'skill_read', 'agent_read_task_inputs',
+    'agent_read_tool_result',
     "creation_inspect_workflow", "creation_read_workflow_source", "creation_remember_workflow",
     "agent_search_files", "creation_find_local_workflows", "creation_import_local_workflow", "creation_read_local_workflow",
     "agent_list_files", "agent_read_document", "agent_write_document", "birefnet_remove_background", "agent_task_update",
@@ -32,6 +40,7 @@ PRIVATE_DATA_TOOLS = {
     "creation_list_presets",
     "creation_list_loras",
     "creation_list_assets",
+    "creation_use_reference",
     "add_diary_material",
     "set_daily_thirty",
     "set_daily_mood",
@@ -43,7 +52,7 @@ PRIVATE_DATA_TOOLS = {
     "edit_today_diary",
     "generate_today_diary",
     "update_profile",
-}
+} | EXECUTION_TOOL_NAMES | LEARNING_TOOL_NAMES | EXTENSION_TOOL_NAMES | SELF_UPGRADE_TOOL_NAMES
 
 
 @dataclass(frozen=True)
@@ -58,6 +67,8 @@ class ToolExecutionContext:
     source: str = "desktop"
     tool_call_id: str = ""
     task_id: str = ""
+    creation_workflow_id: str = ""
+    round_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -74,6 +85,7 @@ class ToolExecutionResult:
     def public_dict(self) -> dict[str, Any]:
         return {
             "tool_name": self.tool_name,
+            "display_name": tool_registry.get(self.tool_name).description if tool_registry.get(self.tool_name) else '执行操作',
             "status": self.status,
             "result": self.result,
             "step_id": self.step_id,
@@ -84,8 +96,22 @@ class ToolExecutionResult:
         }
 
 
-def _json(value: object, max_chars: int = 12000) -> str:
+def _json_full(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _json(value: object, max_chars: int = 12000) -> str:
+    full = _json_full(value)
+    if len(full) <= max_chars:
+        return full
+    if isinstance(value, list):
+        preview = value[:3]
+    elif isinstance(value, dict):
+        preview = {key: value[key] for key in list(value)[:12]}
+    else:
+        preview = str(value)[: max(0, max_chars // 2)]
+    bounded = _json_full({'preview': preview, 'preview_only': True, 'total_chars': len(full)})
+    return bounded if len(bounded) <= max_chars else _json_full({'preview_only': True, 'total_chars': len(full)})
 
 
 def _parsed_object(value: object) -> dict[str, Any]:
@@ -99,7 +125,7 @@ def _parsed_object(value: object) -> dict[str, Any]:
 
 
 def _idempotency_key(run_id: str, tool_name: str, arguments: dict[str, Any]) -> str:
-    payload = _json(arguments, 8000)
+    payload = _json_full(arguments)
     digest = hashlib.sha256(f"{tool_name}\x1f{payload}".encode("utf-8")).hexdigest()
     return f"agent-tool:{str(run_id)[:80]}:{digest}"
 
@@ -147,7 +173,25 @@ def _safe_row(row: object, *, max_text: int = 3000) -> dict[str, Any] | None:
     return result
 
 
-async def _dispatch_read_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+async def _dispatch_read_tool(name: str, arguments: dict[str, Any], context: ToolExecutionContext | None = None) -> dict[str, Any]:
+    from .extension_tools import NAMES as EXTENSIONS, dispatch as extension_dispatch
+    from .self_upgrade_tools import NAMES as UPGRADES, dispatch as upgrade_dispatch
+    if name in EXTENSIONS:
+        return await extension_dispatch(name, arguments, context)
+    if name in UPGRADES:
+        return await upgrade_dispatch(name, arguments, context)
+    if name == 'agent_discover_tools':
+        from .tool_discovery import discover
+        return discover(arguments['names'],context)
+    from .learning_tools import NAMES as LEARNING_NAMES, dispatch as learning_dispatch
+    if name in LEARNING_NAMES:
+        return await learning_dispatch(name, arguments, context)
+    from .execution_tools import NAMES as EXECUTION_NAMES, dispatch as execution_dispatch
+    if name in EXECUTION_NAMES:
+        return await execution_dispatch(name, arguments, context)
+    from .workspace_tools import NAMES, dispatch
+    if name in NAMES:
+        return await dispatch(name, arguments, context)
     if name == 'creation_read_workflow_reference':
         from .workflow_research import read_reference
         return await read_reference(arguments['url'])
@@ -170,7 +214,7 @@ async def _dispatch_read_tool(name: str, arguments: dict[str, Any]) -> dict[str,
         from . import agent_file_service
         if name == "agent_list_files":
             return agent_file_service.list_files(**arguments)
-        return agent_file_service.read_document(**arguments)
+        return agent_file_service.read_document(**arguments, task_id=context.task_id if context else "")
 
     if name == "get_self_state":
         scopes = tuple(str(item).strip() for item in arguments.get("scopes", []) if str(item).strip())
@@ -242,6 +286,10 @@ async def _dispatch_read_tool(name: str, arguments: dict[str, Any]) -> dict[str,
                 "requires_reference": item.get("requires_reference"),
                 "filename": item.get("filename"),
                 "media_type": item.get("media_type"),
+                "description": item.get("description"),
+                "selection_hint": item.get("selection_hint"),
+                "max_reference_images": item.get("max_reference_images", 0),
+                "defaults": item.get("defaults", {}),
                 "status": item.get("status"),
                 "errors": list(item.get("errors") or [])[:5],
                 "missing_nodes": list((item.get("nodes") or {}).get("missing") or [])[:20],
@@ -279,12 +327,33 @@ async def _dispatch_write_tool(
     arguments: dict[str, Any],
     context: ToolExecutionContext,
 ) -> dict[str, Any]:
+    from . import execution_policy_service as policy
+    if name not in policy.CONTROL:
+        policy.require_write(context, '写入或电脑操作')
+    from .extension_tools import NAMES as EXTENSIONS, dispatch as extension_dispatch
+    from .self_upgrade_tools import NAMES as UPGRADES, dispatch as upgrade_dispatch
+    if name in EXTENSIONS:
+        return await extension_dispatch(name, arguments, context)
+    if name in UPGRADES:
+        return await upgrade_dispatch(name, arguments, context)
+    from .learning_tools import NAMES as LEARNING_NAMES, dispatch as learning_dispatch
+    if name in LEARNING_NAMES:
+        return await learning_dispatch(name, arguments, context)
+    from .execution_tools import NAMES as EXECUTION_NAMES, dispatch as execution_dispatch
+    if name in EXECUTION_NAMES:
+        return await execution_dispatch(name, arguments, context)
+    from .workspace_tools import NAMES, dispatch
+    if name in NAMES:
+        return await dispatch(name, arguments, context)
     if name == 'creation_remember_workflow':
         from .workflow_research import remember
         return await remember(**arguments)
     if name == "creation_import_local_workflow":
         from .local_discovery import import_local_workflow
         return await import_local_workflow(**arguments)
+    if name == "creation_use_reference":
+        from .creation_reference_service import use_reference
+        return await asyncio.to_thread(use_reference, arguments, context)
     if name == "handoff_to_agent":
         from .agent_handoff_service import create_handoff
         return create_handoff(arguments, context)
@@ -320,7 +389,7 @@ async def _dispatch_write_tool(
             "character_preset_id": arguments.get("character_preset_id") or "",
             "style_preset_id": arguments.get("style_preset_id") or "",
             "project_preset_id": arguments.get("project_preset_id") or "",
-            "reference_asset_ids": [arguments["reference_asset_id"]] if arguments.get("reference_asset_id") else [],
+            "reference_asset_ids": list(dict.fromkeys([*([arguments["reference_asset_id"]] if arguments.get("reference_asset_id") else []), *(arguments.get("reference_asset_ids") or [])])),
             "width": arguments.get("width"),
             "height": arguments.get("height"),
             "steps": arguments.get("steps"),
@@ -341,6 +410,9 @@ async def _dispatch_write_tool(
             source=context.source,
             conversation_id=context.conversation_id,
             parent_job_id=parent_job_id,
+            task_id=context.task_id,
+            run_id=context.run_id,
+            source_message_id=context.source_message_id,
         )
         return {"job": job, "created": created, "message": "创作任务已创建；请根据任务状态等待完成或确认。"}
     if name == "creation_cancel_job":
@@ -390,6 +462,8 @@ async def execute_tool_call(
     context: ToolExecutionContext,
 ) -> ToolExecutionResult:
     definition = tool_registry.require(tool_name)
+    from .agent_creation_selection import bind_selected_workflow
+    arguments = bind_selected_workflow(tool_name, arguments, context.creation_workflow_id)
     try:
         validated = definition.validate_arguments(arguments)
     except ValidationError as exc:
@@ -398,7 +472,7 @@ async def execute_tool_call(
         raise ValueError(f"工具参数不符合 Schema：{exc}") from exc
 
     scope = f"{context.task_id}:{context.source_message_id}" if context.task_id else context.run_id
-    if definition.permission == ToolPermission.READ_ONLY or definition.name == "agent_task_update":
+    if definition.permission == ToolPermission.READ_ONLY or definition.name == "agent_task_update" or not definition.idempotent:
         scope = f"{context.run_id}:{context.step_index}"
     key = _idempotency_key(scope, definition.name, validated)
     created, step = db.claim_agent_run_step(
@@ -409,10 +483,13 @@ async def execute_tool_call(
         tool_call_id=context.tool_call_id,
         tool_name=definition.name,
         permission=definition.permission.name.lower(),
-        arguments_json=_json(validated, 8000),
+        arguments_json=_json_full(validated),
     )
     if not created and str(step["status"] or "") in TERMINAL_STEP_STATUSES:
         return _existing_result(step, definition.name)
+    if not created and definition.permission != ToolPermission.READ_ONLY and str(step['status']) in {'running', 'unknown'}:
+        from .agent_result_context import AgentCheckpointError
+        raise AgentCheckpointError('这项写入的旧回执尚未确认，已停止自动重复执行。请先核对结果。')
     step_id = int(step["id"])
 
     available, unavailable_reason = tool_availability(definition)
@@ -424,7 +501,7 @@ async def execute_tool_call(
         db.update_agent_run_step(
             step_id,
             "failed",
-            result_json=_json(result),
+            result_json=_json_full(result),
             error=unavailable_reason,
         )
         return ToolExecutionResult(
@@ -435,17 +512,19 @@ async def execute_tool_call(
             error=unavailable_reason,
         )
 
-    # Intent is the model's responsibility.  Explicit-intent regexes remain
-    # descriptive metadata for compatibility, but they must not silently
-    # authorize a high-risk mutation.  The runtime always gates that class;
-    # local creation and other low-risk actions can proceed automatically.
-    requires_confirmation = definition.permission == ToolPermission.HIGH_RISK_WRITE
+    from . import execution_policy_service as policy
+    policy_decision, policy_reason = policy.decision(definition, validated, context)
+    if policy_decision == 'deny':
+        db.update_agent_run_step(step_id, 'failed', error=policy_reason,
+            result_json=_json_full({'available': False, 'reason': policy_reason}))
+        return ToolExecutionResult(definition.name, 'failed', {}, step_id, error=policy_reason)
+    requires_confirmation = policy_decision == 'ask'
     action_id = 0
     if definition.permission != ToolPermission.READ_ONLY:
         action_id = db.log_companion_action(
             context.conversation_id,
             definition.name,
-            _json({"type": definition.name, **validated}, 4000),
+            _json_full({"type": definition.name, **validated}),
             "needs_confirmation" if requires_confirmation else "running",
             source_message_id=context.source_message_id,
             requires_confirmation=requires_confirmation,
@@ -459,7 +538,7 @@ async def execute_tool_call(
         context.conversation_id,
         definition.name,
         definition.permission.name.lower(),
-        _json(validated, 4000),
+        _json_full(validated),
         "needs_confirmation" if requires_confirmation else "running",
         request_id=context.request_id,
         trace_id=context.trace_id,
@@ -478,7 +557,7 @@ async def execute_tool_call(
     if requires_confirmation:
         result = {"task_id": action_id, "message": "等待用户确认后执行。"}
         db.finish_tool_execution_receipt(receipt_id, "needs_confirmation", f"task:{action_id}")
-        db.update_agent_run_step(step_id, "needs_confirmation", result_json=_json(result))
+        db.update_agent_run_step(step_id, "needs_confirmation", result_json=_json_full(result))
         return ToolExecutionResult(
             definition.name,
             "needs_confirmation",
@@ -489,9 +568,10 @@ async def execute_tool_call(
         )
 
     async def run() -> dict[str, Any]:
-        if definition.permission == ToolPermission.READ_ONLY:
-            return await _dispatch_read_tool(definition.handler or definition.name, validated)
-        return await _dispatch_write_tool(definition.name, validated, context)
+        with policy.scope(context):
+            if definition.permission == ToolPermission.READ_ONLY:
+                return await _dispatch_read_tool(definition.handler or definition.name, validated, context)
+            return await _dispatch_write_tool(definition.name, validated, context)
 
     try:
         result = await asyncio.wait_for(run(), timeout=max(0.1, float(definition.timeout_seconds)))
@@ -519,6 +599,9 @@ async def execute_tool_call(
             receipt_id=receipt_id,
             error=error,
         )
+    except sqlite3.Error as exc:
+        from .agent_result_context import AgentCheckpointError
+        raise AgentCheckpointError('工具执行期间数据库写入失败，请核对回执后继续。') from exc
     except Exception as exc:
         error = str(exc)[:500]
         if action_id:
@@ -538,7 +621,7 @@ async def execute_tool_call(
     if action_id:
         db.update_companion_action(action_id, "executed", str(result.get("result") or "执行完成"))
     db.finish_tool_execution_receipt(receipt_id, "executed", _json(result, 1000))
-    db.update_agent_run_step(step_id, "completed", result_json=_json(result))
+    db.update_agent_run_step(step_id, "completed", result_json=_json_full(result))
     return ToolExecutionResult(
         definition.name,
         "completed",

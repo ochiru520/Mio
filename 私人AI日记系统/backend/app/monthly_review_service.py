@@ -13,6 +13,7 @@ from .model_runtime import operation
 from .config import settings
 from .llm import call_chat_completion
 from .prompts import build_monthly_review_messages
+from .review_sources import period_payload, save_snapshot
 from .routes.onebot import send_private_message
 
 
@@ -64,6 +65,61 @@ def _compact(text: object, max_chars: int) -> str:
     return cleaned[: max_chars - 1].rstrip() + "…"
 
 
+def _split_review_context(text: str, *, chunk_chars: int = 6000) -> list[str]:
+    blocks = re.split(r"(?=^### \d{4}-\d{2}-\d{2})", text, flags=re.MULTILINE)
+    chunks: list[str] = []
+    for block in filter(None, blocks):
+        heading = block.splitlines()[0] if block.startswith("### ") else "### 日期未标注"
+        body = block[len(heading):].strip()
+        while body:
+            piece, body = body[:chunk_chars], body[chunk_chars:]
+            chunks.append(f"{heading}（原文分段）\n{piece}")
+    return chunks
+
+
+async def _bounded_review_context(period_label: str, day_sections: str) -> str:
+    from .review_context_service import bounded
+    return await bounded(period_label, day_sections, call_chat_completion)
+
+
+def _source_coverage(month: str) -> str:
+    month_start, month_end = month_bounds(month)
+    start, end = date_cls.fromisoformat(month_start), date_cls.fromisoformat(month_end)
+    diary_days: list[str] = []
+    state_days: list[str] = []
+    review_days: list[str] = []
+    unconfirmed_days: list[str] = []
+    missing_days: list[str] = []
+    current = start
+    while current <= end:
+        day = current.isoformat()
+        diary, state, review = db.get_diary(day), db.get_daily_state(day), db.get_daily_review(day)
+        if diary is not None:
+            diary_days.append(day)
+            if not str(diary["confirmed_at"] or "").strip():
+                unconfirmed_days.append(f"{day} 日记未确认")
+        if state is not None:
+            state_days.append(day)
+            if state["daily_thirty_status"] == "unknown" or not state["key_events"]:
+                unconfirmed_days.append(f"{day} 状态含未确认项")
+        if review is not None:
+            review_days.append(day)
+        if diary is None and state is None and review is None:
+            missing_days.append(day)
+        current += timedelta(days=1)
+    return "\n".join(
+        [
+            "", "", "---", "", "## 来源与覆盖",
+            f"- 周期：{month_start} ~ {month_end}（自然月）",
+            f"- 日记来源日期：{', '.join(diary_days) or '无'}",
+            f"- 状态来源日期：{', '.join(state_days) or '无'}",
+            f"- 每日回顾来源日期：{', '.join(review_days) or '无'}",
+            f"- 完全无记录日期：{', '.join(missing_days) or '无'}",
+            f"- 未确认输入：{'; '.join(unconfirmed_days) or '无'}",
+        ]
+    )
+
+
 def _build_day_sections(month: str) -> tuple[str, int]:
     month_start, month_end = month_bounds(month)
     start = date_cls.fromisoformat(month_start)
@@ -82,13 +138,14 @@ def _build_day_sections(month: str) -> tuple[str, int]:
                 lines.append(
                     f"- 状态板：每日三十={state['daily_thirty_status']}；"
                     f"情绪={state['mood'] or '未确认'}（{state['mood_score'] or '无'}分）；"
-                    f"事件={_compact(state['key_events'], 120) or '未确认'}"
+                    f"事件={state['key_events'] or '未确认'}"
                 )
             if diary is not None:
                 diary_count += 1
-                lines.append(f"- 日记：{_compact(diary['markdown_content'], 600)}")
+                confirmation = "已确认" if str(diary["confirmed_at"] or "").strip() else "未确认"
+                lines.append(f"- 日记（{confirmation}）：{diary['markdown_content']}")
             if review is not None:
-                lines.append(f"- AI 回顾：{_compact(review['markdown_content'], 220)}")
+                lines.append(f"- AI 回顾：{review['markdown_content']}")
             sections.append("\n".join(lines))
         current += timedelta(days=1)
     return "\n\n".join(sections), diary_count
@@ -131,17 +188,24 @@ async def _generate_monthly_review(month: str, overwrite: bool = True) -> Monthl
             created=False,
         )
 
+    source_payload = period_payload(month_start, month_end)
     day_sections, diary_count = _build_day_sections(normalized)
     if diary_count == 0:
         raise ValueError("这个月没有任何日记，暂时无法形成月记。")
 
-    messages = build_monthly_review_messages(normalized, month_start, month_end, day_sections)
+    if source_payload != period_payload(month_start, month_end):
+        raise ValueError('读取周期材料时来源发生变化，旧回顾已保留，请重试。')
+    coverage = _source_coverage(normalized)
+    review_context = await _bounded_review_context(normalized, day_sections)
+    messages = build_monthly_review_messages(normalized, month_start, month_end, review_context)
     markdown_content = await call_chat_completion(messages, temperature=0.3)
     markdown_content = markdown_content.replace("**", "").strip()
+    markdown_content += coverage
     existing = db.get_monthly_review(normalized)
     if not overwrite and existing is not None:
         return MonthlyReviewResult(normalized, month_start, month_end, str(existing["markdown_content"]), False)
     db.upsert_monthly_review(normalized, markdown_content)
+    save_snapshot("monthly", normalized, source_payload)
     return MonthlyReviewResult(
         month=normalized,
         month_start=month_start,

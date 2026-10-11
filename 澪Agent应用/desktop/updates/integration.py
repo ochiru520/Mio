@@ -67,10 +67,13 @@ def create_service(state_root: Path, runtime_root: Path, exit_app) -> UpdateServ
             resume()
             raise
 
-    return UpdateService(load_channel(), state_root=state_root, install_root=install_root,
+    service = UpdateService(load_channel(), state_root=state_root, install_root=install_root,
                          runtime_root=runtime_root, helper_source=bundle / 'MioUpdater.exe',
                          installed=installed, privacy_paused=lambda: bool(privacy_service._load_state().get('paused')),
                          prepare=prepare, resume=resume, exit_app=exit_app)
+    from app import self_upgrade_service
+    self_upgrade_service.attach_installer(service.install_local_candidate if installed else None)
+    return service
 
 
 class UpdateBridgeMixin:
@@ -105,6 +108,14 @@ class UpdateBridgeMixin:
         if confirmed is not True:
             return {'ok': False, 'error': '安装前需要用户明确确认关闭应用并重启。'}
         return self._update_call('install')
+
+    def apply_self_upgrade(self, job_id: str, confirmed: bool = False) -> dict:
+        """The model never receives an install-confirmation argument."""
+        from app import self_upgrade_service
+        try:
+            return {'ok': True, 'job': self_upgrade_service.apply(job_id, confirmed=confirmed is True)}
+        except Exception as exc:
+            return {'ok': False, 'error': str(exc)[:700]}
 
 
 def startup_recovery(state_root: Path) -> bool:
@@ -162,9 +173,20 @@ def run_update_mode(argument: str, ticket_path: Path, configure_runtime) -> int:
         return 0
     channel = load_channel()
     # Embedded config in the newly installed app must trust the original signed release.
-    release = verify_manifest((job / 'manifest.json').read_bytes(), channel)
+    if ticket.get('update_kind') == 'local_candidate':
+        from types import SimpleNamespace
+        from .local_candidate import verify_candidate
+        candidate = verify_candidate(Path(ticket['package']), job / 'manifest.json',
+            ticket['local_manifest_sha256'], base_build_id=ticket['previous_build_id'])
+        for item in candidate['files']:
+            path = ensure_plain_path(install_root / item['path'])
+            if not path.is_file() or path.stat().st_size != item['size'] or sha256(path) != item['sha256']:
+                raise UpdateError('本地安装制品与已授权候选不一致：' + item['path'])
+        release = SimpleNamespace(build_id=candidate['build_id'])
+    else:
+        release = verify_manifest((job / 'manifest.json').read_bytes(), channel)
     if build.get('build_id') != ticket['target_build_id'] or release.build_id != build['build_id']:
-        raise UpdateError('安装文件与已签名版本不一致。')
+        raise UpdateError('安装文件与已验证候选版本不一致。')
     artifacts = build.get('artifacts', [])
     if not artifacts:
         raise UpdateError('缺少可核验的构建制品。')

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+import uuid
+from contextlib import closing
 from typing import Any
 
 from . import db
@@ -32,6 +34,10 @@ def resolve_conversation_id(requested: str = "") -> str:
         return primary_conversation_id()
     if clean == DESKTOP_PET_CONVERSATION_ID:
         return clean
+    if clean.startswith("wechat_private_"):
+        from .wechat_history import conversations
+        if any(item["id"] == clean for item in conversations()):
+            return clean
     if clean.startswith("desktop_") and db.get_agent_conversation(clean) is not None:
         return clean
     raise ValueError("没有找到这个对话窗口。")
@@ -66,10 +72,26 @@ def list_conversations() -> list[dict[str, object]]:
         for row in db.list_agent_conversations()
         if str(row["id"] or "") not in {primary_id, DESKTOP_PET_CONVERSATION_ID}
     )
+    from .wechat_history import conversations as wechat_conversations
+    conversations.extend(wechat_conversations())
+    from .conversation_state_service import states
+    sidebar = states()
+    conversations = [{**item, **sidebar.get(item['id'], {})} for item in conversations]
     return conversations
 
 
+def archive_attachment(name: str, content: bytes, mime_type: str, kind: str) -> dict:
+    logical_date = db.today_string()
+    folder = settings.agent_attachment_dir / logical_date
+    folder.mkdir(parents=True, exist_ok=True)
+    stored_name = uuid.uuid4().hex + Path(name).suffix.lower()
+    (folder / stored_name).write_bytes(content)
+    return {"kind": kind, "name": name, "mime_type": mime_type, "size": len(content),
+            "url": f"/agent-files/{logical_date}/{stored_name}"}
+
+
 def _agent_tool_receipts(run, steps: list[object] | None = None) -> list[dict[str, object]]:
+    from .tool_registry import tool_registry
     try:
         saved = json.loads(str(run["observation_json"] or "[]"))
     except (TypeError, json.JSONDecodeError):
@@ -113,6 +135,7 @@ def _agent_tool_receipts(run, steps: list[object] | None = None) -> list[dict[st
                     result["job"] = current_job
         receipts.append({
             "tool_name": tool_name,
+            "display_name": tool_registry.get(tool_name).description if tool_registry.get(tool_name) else '执行操作',
             "status": str(row["status"] or previous.get("status") or "failed"),
             "result": result,
             "step_id": step_id,
@@ -137,6 +160,8 @@ def _public_message_base(row) -> dict[str, object]:
 
 def public_messages(rows: list[object]) -> list[dict[str, object]]:
     results = [_public_message_base(row) for row in rows]
+    from .wechat_history import add_delivery_states
+    add_delivery_states(results)
     request_ids = [
         str(item.get("request_id") or "")
         for item in results
@@ -144,6 +169,12 @@ def public_messages(rows: list[object]) -> list[dict[str, object]]:
     ]
     runs = db.get_agent_runs_by_requests(request_ids)
     runs_by_request = {str(run["request_id"] or ""): run for run in runs}
+    task_ids = {}
+    with closing(db.get_conn()) as conn:
+        if runs and conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_task_runs'").fetchone():
+            run_ids=[str(r['run_id']) for r in runs]
+            task_ids={r['run_id']:r['task_id'] for r in conn.execute(
+                'SELECT run_id,task_id FROM agent_task_runs WHERE run_id IN ('+','.join('?' for _ in run_ids)+')',run_ids)}
     steps_by_run: dict[str, list[object]] = {}
     for step in db.list_agent_run_steps_many([str(run["run_id"] or "") for run in runs]):
         steps_by_run.setdefault(str(step["run_id"] or ""), []).append(step)
@@ -154,6 +185,7 @@ def public_messages(rows: list[object]) -> list[dict[str, object]]:
         run_id = str(run["run_id"] or "")
         result["agent_run_id"] = run_id
         result["agent_run_status"] = str(run["status"] or "")
+        result['agent_task_id']=task_ids.get(run_id,'')
         result["tool_receipts"] = _agent_tool_receipts(run, steps_by_run.get(run_id, []))
     return results
 

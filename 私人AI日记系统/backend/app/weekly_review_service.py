@@ -12,6 +12,7 @@ from .model_runtime import operation, OperationStopped
 from .config import settings
 from .llm import call_chat_completion
 from .prompts import build_weekly_review_messages
+from .review_sources import period_payload, save_snapshot
 from .routes.onebot import send_private_message
 
 
@@ -53,6 +54,57 @@ def _compact(text: object, max_chars: int) -> str:
     return cleaned[: max_chars - 1].rstrip() + "…"
 
 
+def _split_review_context(text: str, *, chunk_chars: int = 6000) -> list[str]:
+    blocks = re.split(r"(?=^### \d{4}-\d{2}-\d{2})", text, flags=re.MULTILINE)
+    chunks: list[str] = []
+    for block in filter(None, blocks):
+        heading = block.splitlines()[0] if block.startswith("### ") else "### 日期未标注"
+        body = block[len(heading):].strip()
+        while body:
+            piece, body = body[:chunk_chars], body[chunk_chars:]
+            chunks.append(f"{heading}（原文分段）\n{piece}")
+    return chunks
+
+
+async def _bounded_review_context(period_label: str, day_sections: str) -> str:
+    from .review_context_service import bounded
+    return await bounded(period_label, day_sections, call_chat_completion)
+
+
+def _source_coverage(week_start: str) -> str:
+    start = date_cls.fromisoformat(week_start)
+    diary_days: list[str] = []
+    state_days: list[str] = []
+    review_days: list[str] = []
+    unconfirmed_days: list[str] = []
+    missing_days: list[str] = []
+    for offset in range(7):
+        day = (start + timedelta(days=offset)).isoformat()
+        diary, state, review = db.get_diary(day), db.get_daily_state(day), db.get_daily_review(day)
+        if diary is not None:
+            diary_days.append(day)
+            if not str(diary["confirmed_at"] or "").strip():
+                unconfirmed_days.append(f"{day} 日记未确认")
+        if state is not None:
+            state_days.append(day)
+            if state["daily_thirty_status"] == "unknown" or not state["key_events"]:
+                unconfirmed_days.append(f"{day} 状态含未确认项")
+        if review is not None:
+            review_days.append(day)
+        if diary is None and state is None and review is None:
+            missing_days.append(day)
+    lines = [
+        "", "", "---", "", "## 来源与覆盖",
+        f"- 周期：{week_start} ~ {week_end_for(week_start)}（7 天）",
+        f"- 日记来源日期：{', '.join(diary_days) or '无'}",
+        f"- 状态来源日期：{', '.join(state_days) or '无'}",
+        f"- 每日回顾来源日期：{', '.join(review_days) or '无'}",
+        f"- 完全无记录日期：{', '.join(missing_days) or '无'}",
+        f"- 未确认输入：{'; '.join(unconfirmed_days) or '无'}",
+    ]
+    return "\n".join(lines)
+
+
 def _build_day_sections(week_start: str) -> tuple[str, int]:
     start = date_cls.fromisoformat(week_start)
     sections: list[str] = []
@@ -71,13 +123,14 @@ def _build_day_sections(week_start: str) -> tuple[str, int]:
             lines.append(
                 f"- 状态板：每日三十={state['daily_thirty_status']}；"
                 f"情绪={state['mood'] or '未确认'}（{state['mood_score'] or '无'}分）；"
-                f"事件={_compact(state['key_events'], 120) or '未确认'}"
+                f"事件={state['key_events'] or '未确认'}"
             )
         if diary is not None:
             diary_count += 1
-            lines.append(f"- 日记：{_compact(diary['markdown_content'], 600)}")
+            confirmation = "已确认" if str(diary["confirmed_at"] or "").strip() else "未确认"
+            lines.append(f"- 日记（{confirmation}）：{diary['markdown_content']}")
         if review is not None:
-            lines.append(f"- AI 回顾：{_compact(review['markdown_content'], 260)}")
+            lines.append(f"- AI 回顾：{review['markdown_content']}")
         sections.append("\n".join(lines))
 
     return "\n\n".join(sections), diary_count
@@ -95,17 +148,24 @@ async def generate_weekly_review(week_start: str, overwrite: bool = True) -> Wee
             created=False,
         )
 
+    source_payload = period_payload(week_start, week_end)
     day_sections, diary_count = _build_day_sections(week_start)
     if diary_count == 0:
         raise ValueError("这一周没有任何日记，先积累几天再复盘。")
 
-    messages = build_weekly_review_messages(week_start, week_end, day_sections)
+    if source_payload != period_payload(week_start, week_end):
+        raise ValueError('读取周期材料时来源发生变化，旧回顾已保留，请重试。')
+    coverage = _source_coverage(week_start)
+    review_context = await _bounded_review_context(f"{week_start} ~ {week_end}", day_sections)
+    messages = build_weekly_review_messages(week_start, week_end, review_context)
     markdown_content = await call_chat_completion(messages, temperature=0.35)
     markdown_content = markdown_content.replace("**", "").strip()
+    markdown_content += coverage
     existing = db.get_weekly_review(week_start)
     if not overwrite and existing is not None:
         return WeeklyReviewResult(week_start, week_end, str(existing["markdown_content"]), False)
     db.upsert_weekly_review(week_start, markdown_content)
+    save_snapshot("weekly", week_start, source_payload)
     return WeeklyReviewResult(
         week_start=week_start,
         week_end=week_end,

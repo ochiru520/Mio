@@ -8,11 +8,12 @@ export function useTasks(deps) {
   async function loadAgentTasks({ quiet = false } = {}) {
     if (deps.tasksLoading.value) return
     deps.tasksLoading.value = true
+    deps.tasksError.value = ''
     try {
       deps.agentTasks.value = await deps.request('/api/agent/tasks?limit=200')
       deps.tasksLoaded.value = true
     } catch (error) {
-      if (!quiet) deps.errorMessage.value = error.message
+      deps.tasksError.value = error.message
     } finally {
       deps.tasksLoading.value = false
     }
@@ -21,11 +22,12 @@ export function useTasks(deps) {
   async function loadAutonomy({ quiet = false } = {}) {
     if (deps.autonomyLoading.value) return
     deps.autonomyLoading.value = true
+    deps.autonomyError.value = ''
     try {
       deps.autonomyData.value = await autonomyApi.loadAutonomy(200)
       deps.autonomyLoaded.value = true
     } catch (error) {
-      if (!quiet) deps.errorMessage.value = error.message
+      deps.autonomyError.value = error.message
     } finally {
       deps.autonomyLoading.value = false
     }
@@ -159,6 +161,10 @@ export function useTasks(deps) {
   }
   function taskPayloadSummary(task) {
     const payload = task?.payload || {}
+    if (task?.action_type === 'code_apply_patch' && Array.isArray(payload.changes)) {
+      return `修改文件：${payload.changes.map(change => change.path).filter(Boolean).join('、') || '未提供文件路径'}`
+    }
+    if (payload.command) return `执行命令：${payload.command}`
     return payload.content
       || payload.instruction
       || payload.reason

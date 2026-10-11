@@ -1,5 +1,7 @@
 <script setup>
 import { monthlyCatalog } from './monthlyCatalog.js'
+import { executionActionLabels } from './executionRecordPresentation.js'
+import { MODEL_CATALOG_KEY, mergeModelCatalog } from './modelCatalogSync.js'
 import UpdateNotice from './components/UpdateNotice.vue'
 // Domain composition; factories do not eagerly access their dependencies.
 import { useMessagePresentation } from './composables/useMessagePresentation.js'
@@ -72,12 +74,14 @@ const { refreshContextUsage, refreshDayDashboard, openTokenUsagePanel, formatTok
   get startupGreetingEnabled() { return startupGreetingEnabled },
   get stateAnalyzeBusy() { return stateAnalyzeBusy },
   get tokenUsageData() { return tokenUsageData },
+  get tokenUsageError() { return tokenUsageError },
   get tokenUsageLoading() { return tokenUsageLoading },
   get workspaceMode() { return workspaceMode },
 })
 
 import { useConversations } from './composables/useConversations.js'
-const { refreshMessages, requestStartupGreeting, createClientRequestId, openAgentHandoff, sendMessage, requestChatCancellation, cancelActiveChat, refreshConversations, selectConversation, createNewConversation, renameConversation, deleteConversation, deleteConversationMessages } = useConversations({
+const { historyLoading, historyHasMore, loadOlderMessages, refreshMessages, requestStartupGreeting, createClientRequestId, openAgentHandoff, sendMessage, requestChatCancellation, cancelActiveChat, refreshConversations, selectConversation, createNewConversation, renameConversation, deleteConversation, deleteConversationMessages } = useConversations({
+  get agentSurfaceMode() { return agentSurfaceMode },
   get activeChatCancelPayload() { return activeChatCancelPayload },
   set activeChatCancelPayload(value) { activeChatCancelPayload = value },
   get activeView() { return activeView },
@@ -88,6 +92,7 @@ const { refreshMessages, requestStartupGreeting, createClientRequestId, openAgen
   get conversationLoadVersion() { return conversationLoadVersion },
   set conversationLoadVersion(value) { conversationLoadVersion = value },
   get conversationStorageKey() { return conversationStorageKey },
+  get creationWorkflowId() { return creationWorkflowId },
   get conversations() { return conversations },
   get draft() { return draft },
   get errorMessage() { return errorMessage },
@@ -99,6 +104,7 @@ const { refreshMessages, requestStartupGreeting, createClientRequestId, openAgen
   get messageRefreshInFlight() { return messageRefreshInFlight },
   set messageRefreshInFlight(value) { messageRefreshInFlight = value },
   get messages() { return messages },
+  get chatScroll() { return chatScroll },
   get modelRequestError() { return modelRequestError },
   get reasoningLevel() { return reasoningLevel },
   get refreshContextUsage() { return refreshContextUsage },
@@ -138,6 +144,7 @@ const { copyTurn, stopMessageVoice, playMessageVoice, turnVoiceLanguageLabel, ha
   get savedChatSettings() { return savedChatSettings },
   get selectedModel() { return selectedModel },
   get sendMessage() { return sendMessage },
+  get selectedConversationId() { return selectedConversationId },
   get serializeSettings() { return serializeSettings },
   get showModelMenu() { return showModelMenu },
   get speakingPartId() { return speakingPartId },
@@ -168,6 +175,7 @@ const { resetProviderForm, selectProviderKind, selectProviderPreset, selectOffic
   get modelRequestError() { return modelRequestError },
   get modelTestBusy() { return modelTestBusy },
   get modelTestStatus() { return modelTestStatus },
+  get openSettingsSection() { return openSettingsSection },
   get persistSelectedModel() { return persistSelectedModel },
   get providerBusy() { return providerBusy },
   get providerDiscoveryBusy() { return providerDiscoveryBusy },
@@ -210,6 +218,7 @@ const { loadStats, changeStatsMonth, openStatsDiary, loadDiaries, scheduleDiaryS
   get selectedMonthlyMonth() { return selectedMonthlyMonth },
   get selectedWeeklyStart() { return selectedWeeklyStart },
   get statsData() { return statsData },
+  get statsError() { return statsError },
   get statsLoaded() { return statsLoaded },
   get statsLoading() { return statsLoading },
   get weekStartFor() { return weekStartFor },
@@ -221,6 +230,7 @@ const { loadAgentTasks, loadAutonomy, saveAutonomyPolicy, setAutonomyCapabilityO
   get agentTasks() { return agentTasks },
   get autonomyBusy() { return autonomyBusy },
   get autonomyData() { return autonomyData },
+  get autonomyError() { return autonomyError },
   get autonomyLoaded() { return autonomyLoaded },
   get autonomyLoading() { return autonomyLoading },
   get errorMessage() { return errorMessage },
@@ -231,17 +241,19 @@ const { loadAgentTasks, loadAutonomy, saveAutonomyPolicy, setAutonomyCapabilityO
   get selectedConversationId() { return selectedConversationId },
   get taskBusy() { return taskBusy },
   get tasksLoaded() { return tasksLoaded },
+  get tasksError() { return tasksError },
   get tasksLoading() { return tasksLoading },
 })
 
 import { useMemory } from './composables/useMemory.js'
-const { loadMemoryHub, resolveThread, recordFollowUpResult, saveRuntimeSummary, memoryLayerLabel, memoryCategoryLabel, addStructuredMemory, archiveStructuredMemory, restoreStructuredMemory, confirmMemoryCandidate, rejectMemoryCandidate, editStructuredMemory, addMemoryThread, saveMemoryThread, deleteMemoryThread, saveConversationSummary, addConversationSummary, deleteConversationSummary, addProfileNote, saveProfileNote, deleteProfileNote } = useMemory({
+const { loadMemoryHub, resolveThread, recordFollowUpResult, saveRuntimeSummary, memoryLayerLabel, memoryCategoryLabel, addStructuredMemory, archiveStructuredMemory, restoreStructuredMemory, confirmMemoryCandidate, rejectMemoryCandidate, sleepStructuredMemory, wakeStructuredMemory, editStructuredMemory, addMemoryThread, saveMemoryThread, deleteMemoryThread, saveConversationSummary, addConversationSummary, deleteConversationSummary, addProfileNote, saveProfileNote, deleteProfileNote } = useMemory({
   get dailyReviewItems() { return dailyReviewItems },
   get dailyReviews() { return dailyReviews },
   get errorMessage() { return errorMessage },
   get logicalDate() { return logicalDate },
   get memoryBusy() { return memoryBusy },
   get memoryData() { return memoryData },
+  get memoryError() { return memoryError },
   get memoryLoaded() { return memoryLoaded },
   get memoryLoading() { return memoryLoading },
   get monthlyReviewItems() { return monthlyReviewItems },
@@ -294,6 +306,7 @@ const { loadCompanionStatus, openScreenPreviewWindow, saveCompanionSize, control
   get companionSettingKeys() { return companionSettingKeys },
   get companionSettingsSnapshot() { return companionSettingsSnapshot },
   get companionStatus() { return companionStatus },
+  get companionStatusError() { return companionStatusError },
   get companionStatusLoading() { return companionStatusLoading },
   set companionStatusLoading(value) { companionStatusLoading = value },
   get companionStatusReady() { return companionStatusReady },
@@ -438,8 +451,9 @@ const { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelC
   get userAvatarNonce() { return userAvatarNonce },
 })
 
+import { blockStandardWindowDrag } from './desktopWindowDrag.js'
 import { useDesktopNavigation } from './composables/useDesktopNavigation.js'
-const { navigatePrimaryView, returnToApp, openCompanionSection, focusDesktopPetChat, toggleLeftSidebar, toggleRightSidebar, toggleLeftSidebarPinned, toggleRightSidebarPinned, applyAgentPreferences, controlDesktopWindow, switchDesktopWorkspace, resizeDesktopWindow } = useDesktopNavigation({
+const { navigatePrimaryView, returnToApp, openCompanionSection, focusDesktopPetChat, toggleLeftSidebar, toggleRightSidebar, toggleLeftSidebarPinned, toggleRightSidebarPinned, applyAgentPreferences, controlDesktopWindow, beginDesktopWindowDrag, switchDesktopWorkspace, resizeDesktopWindow } = useDesktopNavigation({
   get activeCompanionSection() { return activeCompanionSection },
   get activeSettingsSection() { return activeSettingsSection },
   get activeView() { return activeView },
@@ -449,6 +463,7 @@ const { navigatePrimaryView, returnToApp, openCompanionSection, focusDesktopPetC
   get errorMessage() { return errorMessage },
   get isAgentWorkspace() { return isAgentWorkspace },
   get isSettingsSectionDirty() { return isSettingsSectionDirty },
+  get leftSidebarHovered() { return leftSidebarHovered },
   get leftSidebarPinned() { return leftSidebarPinned },
   get leftSidebarVisible() { return leftSidebarVisible },
   get openDiary() { return openDiary },
@@ -467,6 +482,7 @@ const { navigatePrimaryView, returnToApp, openCompanionSection, focusDesktopPetC
 
 
 import AgentTasksPage from './components/AgentTasksPage.vue'
+import AgentWorkspaceHub from './components/AgentWorkspaceHub.vue'
 import { executionStatus } from './agentTaskState.js'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
@@ -479,6 +495,8 @@ const ChatPage = defineAsyncComponent(() => import('./components/ChatPage.vue'))
 const CompanionPage = defineAsyncComponent(() => import('./components/CompanionPage.vue'))
 const HomePage = defineAsyncComponent(() => import('./components/HomePage.vue'))
 const AgentHomePage = defineAsyncComponent(() => import('./components/AgentHomePage.vue'))
+const AgentSurface = defineAsyncComponent(() => import('./components/AgentSurface.vue'))
+const MioSettingsWindow = defineAsyncComponent(() => import('./components/MioSettingsWindow.vue'))
 const AgentRightRail = defineAsyncComponent(() => import('./components/AgentRightRail.vue'))
 const AgentSettingsPage = defineAsyncComponent(() => import('./components/AgentSettingsPage.vue'))
 const RecordsPage = defineAsyncComponent(() => import('./components/RecordsPage.vue'))
@@ -503,6 +521,13 @@ import { apiRequest } from './services/api.js'
 import { focusModal, restoreModalFocus, trapModalFocus } from './modalFocus.js'
 import * as chatApi from './services/chatApi.js'
 import { filterConversationsForWorkspace, normalizeAgentView } from './workspaceState.js'
+import {
+  DEFAULT_THEME_ID,
+  THEME_GROUPS,
+  THEME_OPTIONS,
+  VALID_THEME_IDS,
+  normalizeThemeId,
+} from './themeOptions.js'
 import * as autonomyApi from './services/autonomyApi.js'
 import * as diaryApi from './services/diaryApi.js'
 import * as memoryApi from './services/memoryApi.js'
@@ -587,20 +612,12 @@ import {
 
 const workspaceSearchParams = new URLSearchParams(window.location.search)
 const workspaceMode = workspaceSearchParams.get('workspace') === 'agent' ? 'agent' : 'main'
+const agentSurfaceMode = ref(localStorage.getItem('mio_agent_surface_mode') || 'work')
 const isAgentWorkspace = workspaceMode === 'agent'
 const conversationStorageKey = isAgentWorkspace ? 'mio_agent_conversation_id' : 'mio_conversation_id'
 
-const THEME_OPTIONS = [
-  { id: 'mist', label: '柔雾', description: '淡粉与雾灰', colors: ['#f2f0f1', '#c7849c', '#4f927b'] },
-  { id: 'clear', label: '清晨', description: '清蓝与浅灰', colors: ['#edf4f5', '#5b8c98', '#d6a26f'] },
-  { id: 'rose', label: '蔷薇', description: '柔粉与葡萄灰', colors: ['#f4edef', '#a66f82', '#658e83'] },
-  { id: 'forest', label: '森雨', description: '苔绿与暖白', colors: ['#edf1ed', '#668978', '#b48468'] },
-  { id: 'sakura', label: '晚樱', description: '樱粉与暮蓝', colors: ['#f3eef1', '#b7798f', '#687f9b'] },
-]
-const VALID_THEME_IDS = new Set(THEME_OPTIONS.map((item) => item.id))
-
 const DEFAULT_APP_PREFERENCES = {
-  theme: 'mist',
+  theme: DEFAULT_THEME_ID,
   font_size: 'medium',
   default_open_page: 'home',
   left_sidebar_visible: true,
@@ -734,15 +751,20 @@ function readAppPreferences() {
       visibility: { ...DEFAULT_APP_PREFERENCES.visibility, ...(source.visibility || {}) },
       home_widgets: { ...DEFAULT_APP_PREFERENCES.home_widgets, ...(source.home_widgets || {}) },
     }
-    if (!VALID_THEME_IDS.has(merged.theme)) merged.theme = 'mist'
+    merged.theme = normalizeThemeId(merged.theme)
+    /* 开发预览用：?theme=ink 可以临时以某个主题启动，不带参数时行为不变。 */
+    const forcedTheme = import.meta.env.DEV
+      ? new URLSearchParams(location.search).get('theme')
+      : null
+    if (forcedTheme) merged.theme = normalizeThemeId(forcedTheme)
     if (!['home', 'chat', 'diaries', 'memory', 'tasks', 'companion', 'creation', 'creation-image', 'creation-video'].includes(merged.default_open_page)) {
       merged.default_open_page = 'home'
     }
     if (!Object.prototype.hasOwnProperty.call(DISPLAY_MODE_PRESETS, merged.display_mode)) merged.display_mode = 'full'
-    if (!Object.prototype.hasOwnProperty.call(saved || {}, 'left_sidebar_visible')) {
+    if (merged.remember_sidebar_state !== false && !Object.prototype.hasOwnProperty.call(saved || {}, 'left_sidebar_visible')) {
       merged.left_sidebar_visible = localStorage.getItem('mio_left_sidebar_visible') !== 'false'
     }
-    if (!Object.prototype.hasOwnProperty.call(saved || {}, 'right_sidebar_visible')) {
+    if (merged.remember_sidebar_state !== false && !Object.prototype.hasOwnProperty.call(saved || {}, 'right_sidebar_visible')) {
       merged.right_sidebar_visible = localStorage.getItem('mio_right_sidebar_visible') !== 'false'
     }
     return merged
@@ -773,19 +795,42 @@ function applyStoredAppPreferences() {
 }
 
 function handleAppPreferencesStorage(event) {
+  if (event.key === MODEL_CATALOG_KEY) void refreshModelCatalog()
   if (event.key === 'mio_app_preferences') applyStoredAppPreferences()
+  if (event.key === 'mio_profile_updated' && !isSettingsSectionDirty('profile')) {
+    void loadMioProfileSettings({ quiet: true })
+  }
+  if (isAgentWorkspace && event.key === 'mio_agent_settings_request') {
+    void openSettingsSection(localStorage.getItem('mio_agent_settings_section') || 'budget')
+  }
+}
+
+function openAgentCreationSettings() {
+  localStorage.setItem('mio_agent_active_view', 'settings')
+  localStorage.setItem('mio_agent_settings_section', 'creation')
+  localStorage.setItem('mio_agent_settings_request', String(Date.now()))
+  return switchDesktopWorkspace('agent')
 }
 
 const initialAppPreferences = readAppPreferences()
 const validInitialViews = new Set(['home', 'chat', 'diaries', 'memory', 'tasks', 'companion'])
 const storedAgentView = localStorage.getItem('mio_agent_active_view') || 'home'
+/* 开发预览用：?view=settings 可以直接以某个视图启动，不带参数时行为不变。 */
+const devInitialView = import.meta.env.DEV ? workspaceSearchParams.get('view') : null
 const activeView = ref(isAgentWorkspace
   ? normalizeAgentView(storedAgentView)
-  : (validInitialViews.has(initialAppPreferences.default_open_page) ? initialAppPreferences.default_open_page : 'home'))
+  : (validInitialViews.has(devInitialView) || devInitialView === 'settings'
+      ? devInitialView
+      : (validInitialViews.has(initialAppPreferences.default_open_page) ? initialAppPreferences.default_open_page : 'home')))
 const settingsReturnView = ref(activeView.value)
+const homeThreadFocus = ref(null)
+function openHomeThread(thread) {
+  homeThreadFocus.value = { id: thread.id, follow_up_after: thread.follow_up_after || '' }
+  activeView.value = 'memory'
+}
 const activeCompanionSection = ref('pet-panel')
 const settingsSectionFromUrl = workspaceSearchParams.get('settings-section')
-const activeSettingsSection = ref(settingsSectionFromUrl || localStorage.getItem('mio_settings_section') || 'general')
+const activeSettingsSection = ref(settingsSectionFromUrl || localStorage.getItem(isAgentWorkspace ? 'mio_agent_settings_section' : 'mio_settings_section') || (isAgentWorkspace ? 'budget' : 'general'))
 const settingsSearch = ref('')
 const settingsFeedback = ref({ section: '', type: '', message: '' })
 const savedAppPreferences = ref(cloneAppPreferences(initialAppPreferences))
@@ -824,12 +869,12 @@ const userAvatarCustom = ref(false)
 const chatBackgroundNonce = ref(Date.now())
 const chatBackgroundCustom = ref(false)
 const standalonePetChat = window.location.hash === '#pet-chat-window'
-const leftSidebarVisible = ref(savedAppPreferences.value.left_sidebar_visible !== false)
+const leftSidebarVisible = ref(!savedAppPreferences.value.focus_mode && savedAppPreferences.value.left_sidebar_visible !== false)
 const rightSidebarVisible = ref(isAgentWorkspace
   ? localStorage.getItem('mio_agent_right_sidebar_visible') !== 'false'
-  : savedAppPreferences.value.right_sidebar_visible !== false)
-const leftSidebarPinned = ref(localStorage.getItem('mio_left_sidebar_pinned') === 'true')
-const rightSidebarPinned = ref(localStorage.getItem(isAgentWorkspace ? 'mio_agent_right_sidebar_pinned' : 'mio_right_sidebar_pinned') === 'true')
+  : !savedAppPreferences.value.focus_mode && savedAppPreferences.value.right_sidebar_visible !== false)
+const leftSidebarPinned = ref(savedAppPreferences.value.remember_sidebar_state !== false && localStorage.getItem('mio_left_sidebar_pinned') === 'true')
+const rightSidebarPinned = ref((isAgentWorkspace || savedAppPreferences.value.remember_sidebar_state !== false) && localStorage.getItem(isAgentWorkspace ? 'mio_agent_right_sidebar_pinned' : 'mio_right_sidebar_pinned') === 'true')
 const agentRightSidebarHoverExpand = ref(localStorage.getItem('mio_agent_right_sidebar_hover_expand') !== 'false')
 const leftSidebarHovered = ref(false)
 const rightSidebarHovered = ref(false)
@@ -908,6 +953,10 @@ const messages = ref([])
 const conversations = ref([])
 const selectedConversationId = ref(workspaceSearchParams.get('conversation_id') || localStorage.getItem(conversationStorageKey) || '')
 watch(selectedConversationId, async (conversationId) => {
+  const next = new URL(window.location.href)
+  if (conversationId) next.searchParams.set('conversation_id', conversationId)
+  else next.searchParams.delete('conversation_id')
+  if (next.href !== window.location.href) window.history.replaceState(window.history.state, '', next)
   const version = ++handoffLoadVersion
   latestTaskHandoff.value = null
   if (!conversationId || isAgentWorkspace) return
@@ -925,9 +974,11 @@ let diarySearchTimer = null
 let diarySearchRequestId = 0
 const statsData = ref({ summary: {}, calendar: [], mood_trend: [], year: 0, month: 0, logical_date: '' })
 const statsLoading = ref(false)
+const statsError = ref('')
 const statsLoaded = ref(false)
 const agentTasks = ref([])
 const tasksLoading = ref(false)
+const tasksError = ref('')
 const tasksLoaded = ref(false)
 const taskBusy = ref('')
 const taskStatusFilter = ref('all')
@@ -949,6 +1000,7 @@ const autonomyData = ref({
   usage: {},
 })
 const autonomyLoading = ref(false)
+const autonomyError = ref('')
 const autonomyLoaded = ref(false)
 const autonomyBusy = ref('')
 const newAutonomyGoalTitle = ref('')
@@ -971,6 +1023,8 @@ if (!isAgentWorkspace && localStorage.getItem('mio_auto_router_version') !== '1'
 }
 const reasoningLevel = ref(localStorage.getItem(reasoningStorageKey) || 'auto')
 const selectedModel = ref(localStorage.getItem(modelStorageKey) || 'auto')
+const creationWorkflowId = ref(localStorage.getItem('mio_agent_creation_workflow') || '')
+watch(creationWorkflowId, value => localStorage.setItem('mio_agent_creation_workflow', value))
 const chatVoiceLanguage = ref('auto')
 const showModelMenu = ref(false)
 const modelMenuSection = ref('root')
@@ -1149,6 +1203,7 @@ const companionStatus = ref({
   },
 })
 const companionStatusReady = ref(false)
+const companionStatusError = ref('')
 const diaryBusy = ref('')
 const memoryTab = ref('notebook')
 const memoryData = ref({
@@ -1175,6 +1230,7 @@ const selectedDailyDate = ref('')
 const selectedWeeklyStart = ref('')
 const selectedMonthlyMonth = ref('')
 const memoryLoading = ref(false)
+const memoryError = ref('')
 const memoryLoaded = ref(false)
 const reviewBusy = ref('')
 const copiedTurnId = ref('')
@@ -1185,6 +1241,7 @@ const modelTestStatus = ref({})
 const showProviderPanel = ref(false)
 const showTokenUsagePanel = ref(false)
 const tokenUsageLoading = ref(false)
+const tokenUsageError = ref('')
 const tokenUsageData = ref({ today: {}, total: {}, days: [], logical_day_boundary_hour: 4 })
 const providerBusy = ref(false)
 const providerDiscoveryBusy = ref(false)
@@ -1287,6 +1344,7 @@ const mainNavItems = [
 const agentNavItems = [
   { id: 'home', label: '首页', icon: Sparkles },
   { id: 'chat', label: '对话', icon: MessageSquareText },
+  { id: 'projects', label: '项目', icon: Archive },
   { id: 'tasks', label: '任务', icon: ListChecks },
   { id: 'settings', label: '设置', icon: Settings },
 ]
@@ -1306,12 +1364,12 @@ const settingsNavigation = [{
   items: [
     { id: 'general', label: '基础与启动', description: '启动、后台与主动消息', icon: Settings, keywords: '启动 后台 问候 主动 通知 默认页面 更新' },
     { id: 'appearance', label: '外观与界面', description: '主题、字体、侧栏与消息信息', icon: Feather, keywords: '主题 字体 侧栏 动画 专注 时间 模型 Token 费用' },
-    { id: 'profile', label: '人格与关系', description: '身份、关系、表达与行为边界', icon: Heart, keywords: '人格 身份 称呼 亲密 性格 语气 情绪 行为 属性 角色卡' },
+    { id: 'profile', label: '人格与关系', description: '身份、关系、表达与行为边界', icon: Heart, keywords: '人格 身份 称呼 亲密 性格 语气 情绪 行为 属性 角色卡 思考 分析 进度 自定义' },
     { id: 'conversation', label: '对话与记忆', description: '上下文、联网、附件与长期记忆', icon: MessageSquareText, keywords: '对话 记忆 上下文 压缩 联网 附件 图片 PDF Word OCR' },
     { id: 'diary', label: '日记与成长', description: '自动日记、周记与成长判断', icon: CalendarDays, keywords: '日记 周记 月记 成长 每日三十 确认 备份' },
     { id: 'models', label: '模型与 API', description: '模型、供应商与自动选择', icon: Bot, keywords: '模型 API 供应商 密钥 价格 思考 自动选择' },
     { id: 'dependencies', label: '环境与模型', description: '检查本机依赖并一键安装', icon: Wrench, keywords: '环境 依赖 模型 安装 下载 GPT-SoVITS NapCat Ollama 视觉 whisper 语音 检查' },
-    { id: 'qq', label: 'QQ', description: '登录、NapCat、OneBot与群聊', icon: Wifi, keywords: 'QQ NapCat OneBot 登录 二维码 私聊 群聊 语音' },
+    { id: 'qq', label: '微信与QQ', description: '手机聊天、后台任务与成果回传', icon: Wifi, keywords: '微信 WeChat iLink QQ NapCat OneBot 登录 二维码 私聊 群聊 语音 手机 任务' },
     { id: 'pet', label: '桌宠', description: '形象、语音、观察与行为', icon: Gamepad2, keywords: '桌宠 Live2D 语音 屏幕 观察 置顶 穿透 气泡 音色' },
     { id: 'data', label: '数据与隐私', description: '本地数据、导出与隐私边界', icon: Archive, keywords: '数据 隐私 导出 清理 数据库 日记 记忆' },
     { id: 'advanced', label: '高级设置', description: '服务、路径、日志与诊断', icon: Activity, keywords: '高级 服务 端口 日志 路径 诊断 恢复默认' },
@@ -1433,12 +1491,29 @@ const filteredSettingsNavigation = computed(() => {
 const activeSettingsItem = computed(() => settingsNavigation
   .flatMap((group) => group.items)
   .find((item) => item.id === activeSettingsSection.value) || settingsNavigation[0].items[0])
-const appThemeClass = computed(() => {
+/** 当前生效的主题 id：在设置页的外观分类下用草稿值做即时预览，其余地方用已保存值。 */
+const activeThemeId = computed(() => {
   const previewTheme = activeView.value === 'settings' && activeSettingsSection.value === 'appearance'
     ? appPreferencesDraft.value.theme
     : savedAppPreferences.value.theme
-  return `theme-${VALID_THEME_IDS.has(previewTheme) ? previewTheme : 'mist'}`
+  return normalizeThemeId(previewTheme)
 })
+/** 历史 class 名，仍供尚未迁移的规则使用。 */
+const appThemeClass = computed(() => `theme-${activeThemeId.value}`)
+/* 主题也写到 <html> 上：传送出去的菜单、对话框和 body 本身都不在应用根节点里，
+   只挂在 shell 上它们拿不到主题令牌。同时同步浏览器的 theme-color。 */
+watch(activeThemeId, (theme) => {
+  const root = document.documentElement
+  root.dataset.theme = theme
+  root.classList.remove(...[...VALID_THEME_IDS].map((id) => `theme-${id}`))
+  root.classList.add(`theme-${theme}`)
+  const swatch = THEME_OPTIONS.find((item) => item.id === theme)?.swatch
+  if (swatch) document.querySelector('meta[name="theme-color"]')?.setAttribute('content', swatch[0])
+}, { immediate: true })
+// 字号令牌定义在根元素，缩放也必须在这里生效，包含 Teleport 菜单。
+watch(() => savedAppPreferences.value.font_size, (size) => {
+  document.documentElement.dataset.fontSize = ['small', 'medium', 'large'].includes(size) ? size : 'medium'
+}, { immediate: true })
 const displayVisibility = computed(() => savedAppPreferences.value.visibility || DEFAULT_APP_PREFERENCES.visibility)
 const homeWidgetPreferences = computed(() => savedAppPreferences.value.home_widgets || DEFAULT_APP_PREFERENCES.home_widgets)
 const displayMode = computed(() => savedAppPreferences.value.display_mode || 'full')
@@ -1463,6 +1538,7 @@ const companionSettingKeys = {
     'pet_call_min_speech_ms', 'pet_call_max_turn_seconds',
     'voice_enabled', 'voice_startup_enabled', 'voice_idle_timeout_seconds', 'voice_engine', 'local_voice_runtime', 'voice_volume', 'voice_streaming_enabled', 'speak_proactive',
     'default_voice_profile_id', 'voice_profiles',
+    'cloud_tts_api_key', 'cloud_tts_app_id', 'cloud_tts_speaker', 'cloud_tts_speech_rate',
     'pet_speech_language', 'qq_voice_mode', 'gpt_sovits_url', 'gpt_sovits_text_language',
     'gpt_sovits_translate_to_japanese', 'screen_ai_enabled', 'screen_audio_enabled',
     'screen_audio_model', 'screen_audio_language', 'screen_audio_chunk_seconds', 'screen_vision_route',
@@ -1499,7 +1575,7 @@ const runtimeSettingKeysBySection = {
     'chat_follow_up_capture_seconds', 'chat_follow_up_max_capture_count',
     'agent_attachment_max_count', 'agent_text_attachment_max_chars', 'agent_document_attachment_max_bytes',
     'agent_pdf_max_pages', 'agent_document_vision_max_pages', 'photo_archive_enabled',
-    'web_search_enabled', 'web_search_max_results', 'web_search_timeout_seconds', 'web_page_max_chars',
+    'web_search_enabled', 'web_search_max_results', 'web_search_timeout_seconds',
   ],
   diary: [
     'daily_diary_auto_enabled', 'daily_diary_check_seconds', 'daily_diary_model_id', 'weekly_review_enabled',
@@ -1518,7 +1594,7 @@ const runtimeSettingKeysBySection = {
   ],
   advanced: [
     'openai_timeout_seconds', 'openai_request_deadline_seconds', 'screen_reaction_timeout_seconds', 'screen_history_retention_days',
-    'screen_history_max_rows', 'manual_max_chars', 'chat_temperature', 'action_planner_temperature',
+    'screen_history_max_rows', 'web_page_max_chars', 'manual_max_chars', 'chat_temperature', 'action_planner_temperature',
     'timezone', 'napcat_dir', 'napcat_webui_url', 'voice_training_dir', 'local_vision_dir',
   ],
 }
@@ -1615,6 +1691,7 @@ const selectedConversation = computed(() => conversations.value.find((item) => i
 const chatSubtitle = computed(() => {
   if (isAgentWorkspace) return '独立 Agent 工作对话 · 模型负责规划，运行层负责验证'
   if (selectedConversation.value?.kind === 'qq') return `${logicalDate.value} · 与QQ共享上下文`
+  if (selectedConversation.value?.kind === 'wechat') return `${logicalDate.value} · 与微信共享聊天记录`
   if (selectedConversation.value?.kind === 'pet') return `${logicalDate.value} · 桌宠独立上下文 · 自动语音回复`
   return `${logicalDate.value} · 独立桌面对话`
 })
@@ -1669,11 +1746,11 @@ function compactProfileText(value, fallback, maxLength) {
   const firstPhrase = String(value || '').trim().split(/[；;，,。\n]/)[0]?.trim() || fallback
   return firstPhrase.length > maxLength ? `${firstPhrase.slice(0, maxLength)}…` : firstPhrase
 }
-const preferredUserAddress = computed(() => compactProfileText(
-  memoryData.value?.profile?.preferences?.user_address,
-  '你',
-  8,
-))
+const preferredUserAddress = computed(() => {
+  const value = String(memoryData.value?.profile?.preferences?.user_address || '').trim()
+  const defaultAddress = value.match(/^默认称呼为[“"']([^”"']+)[”"']/)?.[1]
+  return compactProfileText(defaultAddress || value, '你', 8)
+})
 const relationshipDistanceLabel = computed(() => {
   const source = String(memoryData.value?.profile?.preferences?.relationship_distance || '').trim()
   const knownRelations = ['青梅竹马', '小女友', '女朋友', '恋人', '搭档', '朋友', '家人']
@@ -1942,41 +2019,7 @@ function ensureReasoningForActiveModel() {
 }
 
 
-const toolReceiptLabels = {
-  get_self_state: '读取自我状态',
-  list_capabilities: '读取能力清单',
-  get_active_view: '读取当前页面',
-  get_service_health: '检查服务状态',
-  explain_last_route: '读取最近路由',
-  get_today_state: '读取今日状态',
-  search_web: '联网查证',
-  search_memory: '检索记忆',
-  get_diary: '读取日记',
-  creation_list_presets: '读取创作预设',
-  creation_list_loras: '读取 LoRA 用途',
-  creation_list_assets: '读取参考素材',
-  creation_check_workflow: '检查创作工作流',
-  creation_inspect_workflow: '研究工作流与节点',
-  creation_read_workflow_source: '读取节点说明与源码',
-  creation_read_workflow_reference: '查阅工作流参考文档',
-  creation_remember_workflow: '保存工作流理解',
-  comfyui_generate_image: '创建图片任务',
-  comfyui_generate_video: '创建视频任务',
-  remote_generate_image: '创建远程图片任务',
-  creation_get_job: '读取创作任务',
-  creation_get_output: '读取创作结果',
-  creation_cancel_job: '取消创作任务',
-  add_diary_material: '添加日记素材',
-  set_daily_thirty: '更新每日三十',
-  set_daily_mood: '更新今日情绪',
-  update_today_state: '更新今日状态',
-  remember_thread: '创建待跟进事项',
-  resolve_thread: '完成待跟进事项',
-  remember_memory: '保存记忆',
-  edit_today_diary: '修改今日日记',
-  generate_today_diary: '生成今日日记',
-  update_profile: '更新 Mio 属性',
-}
+const toolReceiptLabels = executionActionLabels
 
 
 async function request(url, options = {}) {
@@ -2006,14 +2049,17 @@ function showSettingsFeedback(section, type, message) {
 
 
 provide('mio-settings-page', reactive({
+  openAgentCreationSettings,
   activeSettingsItem,
   activeSettingsSection,
   filteredSettingsNavigation,
+  settingsNavigation,
   avatarUrl,
   chatBackgroundCustom,
   chatBackgroundUrl,
   appPreferencesDraft,
   themeOptions: THEME_OPTIONS,
+  themeGroups: THEME_GROUPS,
   applyDisplayMode,
   chatSettingsDraft,
   clearGroupChatContext,
@@ -2021,6 +2067,8 @@ provide('mio-settings-page', reactive({
   companionBusy,
   companionStatus,
   companionStatusReady,
+  companionStatusError,
+  loadCompanionStatus,
   contextUsageLabel,
   controlCompanion,
   controlQq,
@@ -2088,6 +2136,7 @@ provide('mio-settings-page', reactive({
   mioProfileAvoidDraft,
   mioProfileNotesDraft,
   mioProfileReady,
+  loadMioProfileSettings,
   mioDisplayName,
   profileAvatarCustom,
   profileBehaviorLabels,
@@ -2150,7 +2199,9 @@ provide('mio-companion-page', reactive({
 }))
 
 provide('mio-chat-page', reactive({
+  agentSurfaceMode,
   isAgentWorkspace,
+  creationWorkflowId,
   agentCreationCost,
   agentExecutionElapsed,
   agentExecutionProgress,
@@ -2208,6 +2259,9 @@ provide('mio-chat-page', reactive({
   logicalDate,
   agentRuntimeLabel,
   messageTurns,
+  historyLoading,
+  historyHasMore,
+  loadOlderMessages,
   mioDisplayName,
   modelGroups,
   openSettingsSection,
@@ -2265,6 +2319,7 @@ provide('mio-chat-page', reactive({
 }))
 
 provide('mio-records-page', reactive({
+  showAppConfirm,
   activeView,
   autoDiaryStatus,
   autoDiaryStatusLabel,
@@ -2289,10 +2344,13 @@ provide('mio-records-page', reactive({
   autonomyDeliveryLabel,
   autonomyLevelOptions,
   autonomyLoaded,
+  autonomyError,
   autonomyLoading,
   autonomyOverrideOptions,
   autonomyStatusLabel,
   archiveStructuredMemory,
+  sleepStructuredMemory,
+  wakeStructuredMemory,
   confirmMemoryCandidate,
   cancelAgentTask,
   cancelAutonomyBehavior,
@@ -2327,6 +2385,7 @@ provide('mio-records-page', reactive({
   mioDisplayName,
   memoryLayerLabel,
   memoryLoaded,
+  memoryError,
   memoryLoading,
   editStructuredMemory,
   memoryTab,
@@ -2363,6 +2422,7 @@ provide('mio-records-page', reactive({
   selectedMonthlyMonth,
   statsCalendarCells,
   statsData,
+  statsError,
   statsDistribution,
   statsLoaded,
   statsLoading,
@@ -2380,6 +2440,7 @@ provide('mio-records-page', reactive({
   taskStatusLabel,
   taskSummary,
   tasksLoaded,
+  tasksError,
   tasksLoading,
   updateAutonomyGoal,
   weeklyReviewItems,
@@ -2415,6 +2476,19 @@ async function syncActiveViewState(
 
 function handleVisibilityChange() {
   void syncActiveViewState()
+  if (!document.hidden) void refreshModelCatalog()
+}
+
+let catalogRefresh = null
+function refreshModelCatalog() {
+  if (catalogRefresh) return catalogRefresh
+  catalogRefresh = request('/api/agent/models/catalog').then(data => {
+    bootstrap.value = mergeModelCatalog(bootstrap.value, data)
+    if (selectedModel.value !== 'auto' && !data.models.some(item => item.id === selectedModel.value)) {
+      selectedModel.value = 'auto'; persistSelectedModel()
+    }
+  }).catch(() => {}).finally(() => { catalogRefresh = null })
+  return catalogRefresh
 }
 
 onMounted(async () => {
@@ -2429,6 +2503,8 @@ onMounted(async () => {
   document.addEventListener('keydown', handleDocumentKeydown)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('storage', handleAppPreferencesStorage)
+  window.addEventListener('focus', refreshModelCatalog)
+  window.addEventListener('mio-model-catalog-changed', refreshModelCatalog)
   window.addEventListener('mio:open-pet-chat', focusDesktopPetChat)
   try {
     const onboarding = await loadOnboardingStatus()
@@ -2447,8 +2523,20 @@ onMounted(async () => {
   await syncActiveViewState()
   markAppReady()
   await loadSharedChatSettings()
+  if (activeView.value === 'settings') {
+    const startupSection = activeSettingsSection.value
+    await loadCompanionStatus({ quiet: true })
+    // Startup reads may finish after the user leaves settings. Never reopen
+    // that page or replace a category the user selected while the read ran.
+    if (activeView.value === 'settings' && activeSettingsSection.value === startupSection) {
+      await openSettingsSection(startupSection)
+    }
+  }
+  if (isAgentWorkspace && activeView.value === 'settings' && activeSettingsSection.value === 'profile' && !mioProfileReady.value) {
+    await loadMioProfileSettings({ quiet: true })
+  }
   if (!isAgentWorkspace) {
-    void loadMioProfileSettings({ quiet: true })
+    if (!mioProfileReady.value) void loadMioProfileSettings({ quiet: true })
     await loadStartupGreetingSetting()
     await loadDesktopPreferences({ quiet: true })
     await loadQqStartupSetting()
@@ -2473,6 +2561,7 @@ onMounted(async () => {
 })
 
 watch(activeView, async (view) => {
+  if (view !== 'memory') homeThreadFocus.value = null
   if (isAgentWorkspace) localStorage.setItem('mio_agent_active_view', normalizeAgentView(view))
   void syncActiveViewState(view)
   closeModelMenu()
@@ -2516,6 +2605,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleDocumentKeydown)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener('storage', handleAppPreferencesStorage)
+  window.removeEventListener('focus', refreshModelCatalog)
+  window.removeEventListener('mio-model-catalog-changed', refreshModelCatalog)
   window.removeEventListener('mio:open-pet-chat', focusDesktopPetChat)
   if (pollTimer) window.clearInterval(pollTimer)
   if (dashboardPollTimer) window.clearInterval(dashboardPollTimer)
@@ -2544,7 +2635,7 @@ async function setPetChatWindowState(open) {
 </script>
 
 <template>
-  <main v-if="standalonePetChat" :class="['standalone-pet-chat', appThemeClass]">
+  <main v-if="standalonePetChat" :class="['standalone-pet-chat', appThemeClass]" :data-theme="activeThemeId">
     <div class="pet-chat-composer standalone-pet-chat-composer">
       <span class="standalone-pet-chat-drag" title="拖动对话框" aria-hidden="true" @mousedown="beginPetChatWindowDrag"></span>
       <textarea
@@ -2581,14 +2672,15 @@ async function setPetChatWindowState(open) {
     @refresh-environment="refreshOnboardingEnvironment"
   />
 
-  <div v-else :class="['app-shell', 'integrated-shell', appThemeClass, `font-${savedAppPreferences.font_size || 'medium'}`, `active-view-${activeView}`, `display-mode-${displayMode}`, { 'agent-workspace-shell': isAgentWorkspace, 'left-sidebar-hidden': !leftSidebarVisible, 'right-sidebar-hidden': !rightSidebarVisible, 'reduce-motion': savedAppPreferences.light_animations === false, 'focus-mode': savedAppPreferences.focus_mode }]">
+  <div v-else :class="['app-shell', 'integrated-shell', appThemeClass, `font-${savedAppPreferences.font_size || 'medium'}`, `active-view-${activeView}`, `display-mode-${displayMode}`, { 'agent-workspace-shell': isAgentWorkspace, 'agent-codex-layout': isAgentWorkspace, 'left-sidebar-hidden': !leftSidebarVisible, 'right-sidebar-hidden': !rightSidebarVisible, 'reduce-motion': savedAppPreferences.light_animations === false, 'focus-mode': savedAppPreferences.focus_mode }]" :data-theme="activeThemeId">
     <UpdateNotice @open="openSettingsSection('general')" />
     <span v-for="direction in ['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-right', 'bottom-left']" :key="direction" :class="['window-resize-handle', direction]" aria-hidden="true" @pointerdown="resizeDesktopWindow(direction, $event)"></span>
-    <header class="window-titlebar integrated-titlebar">
+    <AgentSurface v-if="isAgentWorkspace" :error="errorMessage" @close-error="errorMessage = ''" @workspace="switchDesktopWorkspace('main')" @window-control="controlDesktopWindow" />
+    <header v-if="!isAgentWorkspace" class="window-titlebar integrated-titlebar">
       <button v-if="activeView !== 'settings'" class="shell-toggle shell-toggle-left" type="button" :title="leftSidebarVisible ? '隐藏左侧栏' : '显示左侧栏'" @click="toggleLeftSidebar">
         <component :is="leftSidebarVisible ? PanelLeftClose : PanelLeftOpen" :size="17" />
       </button>
-      <div class="window-drag-zone pywebview-drag-region" @dblclick="controlDesktopWindow('maximize')">
+      <div class="window-drag-zone pywebview-drag-region" @pointerdown.left="beginDesktopWindowDrag" @mousedown.left="blockStandardWindowDrag" @dblclick="controlDesktopWindow('maximize')">
         <strong>{{ isAgentWorkspace ? `Mio Agent · ${agentNavItems.find((item) => item.id === activeView)?.label || '工作台'}` : activeView === 'settings' ? '设置' : navItems.find((item) => item.id === activeView)?.label }}</strong>
       </div>
       <button v-if="activeView !== 'settings'" class="workspace-title-switch" type="button" :title="isAgentWorkspace ? '返回 Mio 主窗口' : '打开 Mio Agent'" @click="switchDesktopWorkspace(isAgentWorkspace ? 'main' : 'agent')">
@@ -2606,72 +2698,68 @@ async function setPetChatWindowState(open) {
     </header>
 
     <aside
-      v-if="leftSidebarVisible"
+      v-if="leftSidebarVisible && !isAgentWorkspace"
       :class="['sidebar', 'integrated-sidebar', { expanded: leftSidebarPinned || (savedAppPreferences.left_sidebar_hover_expand && leftSidebarHovered), pinned: leftSidebarPinned }]"
       @mouseenter="leftSidebarHovered = true"
       @mouseleave="leftSidebarHovered = false"
     >
-      <div class="brand-block">
-        <img class="brand-avatar" :src="avatarUrl" :alt="mioDisplayName" />
-        <div><strong>{{ isAgentWorkspace ? 'Mio Agent' : mioDisplayName }}</strong><span>{{ isAgentWorkspace ? '智能工作台' : '私人空间' }}</span></div>
-        <button class="sidebar-pin" type="button" :title="leftSidebarPinned ? '取消固定展开' : '固定展开'" @click="toggleLeftSidebarPinned">
-          <component :is="leftSidebarPinned ? PinOff : Pin" :size="14" />
-        </button>
-      </div>
-      <nav class="main-nav" aria-label="主要导航">
-        <button v-for="item in navGroups[0].items" :key="item.id" type="button" :class="['nav-item', { active: isPrimaryNavActive(item.id) }]" :title="item.label" @click="navigatePrimaryView(item.id)">
-          <component :is="item.icon" :size="18" /><span>{{ item.label }}</span>
-        </button>
-      </nav>
-      <div v-if="!isAgentWorkspace" class="sidebar-footer pet-launcher">
-        <button type="button" :title="companionStatus.pet?.running ? '停止桌宠' : '启动桌宠'" :disabled="Boolean(companionBusy)" @click="controlCompanion(companionStatus.pet?.running ? 'stop' : 'start')">
-          <component :is="companionStatus.pet?.running ? Power : Play" :size="17" />
-          <span><strong>桌宠</strong><small>{{ companionStatus.pet?.running ? '运行中' : '未启动' }}</small></span>
-          <i :class="{ online: companionStatus.pet?.running }" />
-        </button>
-      </div>
-      <div v-else class="sidebar-footer workspace-launcher">
-        <button type="button" title="返回 Mio 主窗口" @click="switchDesktopWorkspace('main')">
-          <ArrowLeft :size="17" /><span><strong>返回 Mio</strong><small>私人空间</small></span>
-        </button>
-      </div>
+      <template v-if="isAgentWorkspace">
+        <div class="agent-sidebar-panel">
+          <div class="agent-sidebar-brand">
+            <img class="brand-avatar" :src="avatarUrl" :alt="mioDisplayName" />
+            <div><strong>Mio Agent</strong><span>工作台</span></div>
+            <button type="button" :title="leftSidebarPinned ? '取消固定展开' : '固定展开'" @click="toggleLeftSidebarPinned"><component :is="leftSidebarPinned ? PinOff : Pin" :size="14" /></button>
+          </div>
+          <button class="agent-new-task" type="button" @click="createNewConversation(); activeView = 'chat'"><Plus :size="16" /><span>新建任务</span><span class="agent-shortcut">Ctrl K</span></button>
+          <nav class="agent-sidebar-nav" aria-label="Agent 工作区">
+            <button v-for="item in navGroups[0].items" :key="item.id" type="button" :class="{ active: isPrimaryNavActive(item.id) }" :title="item.label" @click="navigatePrimaryView(item.id)"><component :is="item.icon" :size="16" /><span>{{ item.label }}</span></button>
+          </nav>
+          <section class="agent-sidebar-section">
+            <header><span>最近</span><button type="button" title="新建任务" @click="createNewConversation(); activeView = 'chat'"><Plus :size="14" /></button></header>
+            <div class="agent-sidebar-conversations">
+              <button v-for="conversation in conversations.slice(0, 18)" :key="conversation.id" type="button" :class="{ active: selectedConversationId === conversation.id }" @click="selectConversation(conversation.id); activeView = 'chat'">
+                <span>{{ conversation.title || '新任务' }}</span><small>{{ formatSidebarTime(conversation.updated_at) }}</small>
+              </button>
+              <p v-if="!conversations.length">还没有任务</p>
+            </div>
+          </section>
+          <div class="agent-sidebar-footer">
+            <button type="button" title="返回 Mio 主窗口" @click="switchDesktopWorkspace('main')"><ArrowLeft :size="16" /><span><strong>返回 Mio</strong><small>私人空间</small></span></button>
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <div class="brand-block">
+          <img class="brand-avatar" :src="avatarUrl" :alt="mioDisplayName" />
+          <div><strong>{{ mioDisplayName }}</strong><span>私人空间</span></div>
+          <button class="sidebar-pin" type="button" :title="leftSidebarPinned ? '取消固定展开' : '固定展开'" @click="toggleLeftSidebarPinned"><component :is="leftSidebarPinned ? PinOff : Pin" :size="14" /></button>
+        </div>
+        <nav class="main-nav" aria-label="主要导航">
+          <button v-for="item in navGroups[0].items" :key="item.id" type="button" :class="['nav-item', { active: isPrimaryNavActive(item.id) }]" :title="item.label" @click="navigatePrimaryView(item.id)"><component :is="item.icon" :size="18" /><span>{{ item.label }}</span></button>
+        </nav>
+        <div class="sidebar-footer pet-launcher">
+          <button type="button" :title="companionStatus.pet?.running ? '停止桌宠' : '启动桌宠'" :disabled="Boolean(companionBusy)" @click="controlCompanion(companionStatus.pet?.running ? 'stop' : 'start')"><component :is="companionStatus.pet?.running ? Power : Play" :size="17" /><span><strong>桌宠</strong><small>{{ companionStatus.pet?.running ? '运行中' : '未启动' }}</small></span><i :class="{ online: companionStatus.pet?.running }" /></button>
+        </div>
+      </template>
     </aside>
 
-    <main :class="['workspace', 'integrated-workspace', { 'has-error': errorMessage, 'view-settings': activeView === 'settings' }]">
+    <main v-if="!isAgentWorkspace" :class="['workspace', 'integrated-workspace', { 'has-error': errorMessage, 'view-settings': activeView === 'settings' }]">
       <div v-if="errorMessage" class="error-banner"><span>{{ errorMessage }}</span><button type="button" title="关闭" @click="errorMessage = ''"><X :size="16" /></button></div>
       <AgentHomePage v-if="isAgentWorkspace && activeView === 'home'" @navigate="navigatePrimaryView" />
       <AgentSettingsPage v-else-if="isAgentWorkspace && activeView === 'settings'" @preferences-change="applyAgentPreferences" @return="returnToApp" />
-      <HomePage v-else-if="activeView === 'home'" :logical-date="logicalDate" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="Boolean(companionStatus.pet?.running)" @navigate="activeView = $event" @open-diary="openDiary" />
+      <HomePage v-else-if="activeView === 'home'" :logical-date="logicalDate" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="Boolean(companionStatus.pet?.running)" @navigate="activeView = $event" @open-diary="openDiary" @open-thread="openHomeThread" />
       <ChatPage v-else-if="activeView === 'chat'" />
-      <RecordsPage v-else-if="['diaries', 'stats', 'memory'].includes(activeView)" />
+      <RecordsPage v-else-if="['diaries', 'stats', 'memory'].includes(activeView)" :thread-focus="homeThreadFocus" />
+      <AgentWorkspaceHub v-else-if="isAgentWorkspace && activeView === 'projects'" @open-conversation="async (id) => { await selectConversation(id); activeView = 'chat' }" />
       <AgentTasksPage v-else-if="isAgentWorkspace && activeView === 'tasks'" @open-settings="activeView = 'settings'" />
       <TasksPage v-else-if="activeView === 'tasks'" />
-      <section v-else-if="activeView === 'settings'" class="settings-window-shell embedded-settings-shell">
-        <header class="settings-window-topbar">
-          <button type="button" @click="returnToApp"><ArrowLeft :size="16" />返回应用</button>
-          <strong>设置</strong>
-        </header>
-        <div class="settings-window-layout">
-          <aside class="settings-window-navigation">
-            <label class="settings-window-search"><Search :size="15" /><input v-model="settingsSearch" type="search" placeholder="搜索设置" /></label>
-            <nav aria-label="设置分类">
-              <template v-for="group in filteredSettingsNavigation" :key="group.label">
-                <span class="settings-window-group-label">{{ group.label }}</span>
-                <button v-for="item in group.items" :key="item.id" :class="{ active: activeSettingsSection === item.id }" type="button" :title="item.label" :aria-label="item.label" @click="openSettingsSection(item.id)">
-                  <component :is="item.icon" :size="16" /><span>{{ item.label }}</span><i v-if="isSettingsSectionDirty(item.id)" />
-                </button>
-              </template>
-            </nav>
-          </aside>
-          <main class="settings-window-content"><SettingsPage /></main>
-        </div>
-      </section>
+      <MioSettingsWindow v-else-if="activeView === 'settings'" :conversation-id="isAgentWorkspace ? selectedConversationId : ''" @return="returnToApp" />
       <CompanionPage v-else />
     </main>
 
     <aside
-      v-if="rightSidebarVisible"
-      :class="['integrated-right-rail', { 'agent-right-rail': isAgentWorkspace, expanded: rightSidebarPinned || ((isAgentWorkspace ? agentRightSidebarHoverExpand : savedAppPreferences.right_sidebar_hover_expand) && rightSidebarHovered), pinned: rightSidebarPinned }]"
+      v-if="rightSidebarVisible && !isAgentWorkspace"
+      :class="['integrated-right-rail', { 'agent-right-rail': isAgentWorkspace, expanded: isAgentWorkspace || rightSidebarPinned || ((isAgentWorkspace ? agentRightSidebarHoverExpand : savedAppPreferences.right_sidebar_hover_expand) && rightSidebarHovered), pinned: rightSidebarPinned }]"
       @mouseenter="rightSidebarHovered = true"
       @mouseleave="rightSidebarHovered = false"
     >
@@ -2717,12 +2805,13 @@ async function setPetChatWindowState(open) {
     <Teleport to="body">
       <div v-if="showTokenUsagePanel" class="modal-backdrop" @click.self="closeTokenUsagePanel">
         <section ref="tokenUsageDialog" class="token-usage-modal" role="dialog" aria-modal="true" aria-label="Token 统计" tabindex="-1" @keydown="onTokenUsageDialogKeydown">
-        <header><div><h2>Token 统计</h2><p>按凌晨 {{ tokenUsageData.logical_day_boundary_hour || 4 }} 点划分每天的使用量</p></div><button class="icon-button" type="button" title="关闭" data-modal-initial-focus @click="closeTokenUsagePanel"><X :size="18" /></button></header>
+        <header><div><h2>Token 统计</h2><p>按凌晨 {{ tokenUsageData.logical_day_boundary_hour ?? 4 }} 点划分每天的使用量</p></div><button class="icon-button" type="button" title="关闭" data-modal-initial-focus @click="closeTokenUsagePanel"><X :size="18" /></button></header>
         <div v-if="tokenUsageLoading" class="token-usage-loading">正在读取使用记录</div>
+        <div v-else-if="tokenUsageError" class="token-usage-error"><p role="alert">使用记录读取失败：{{ tokenUsageError }}</p><button type="button" @click="openTokenUsagePanel">重新读取</button></div>
         <template v-else>
           <div class="token-summary-grid">
             <article><span>今日合计</span><strong>{{ formatTokenCount(tokenUsageData.today?.total_tokens) }}</strong><small>对话 {{ formatTokenCount(tokenUsageData.today?.chat_tokens) }} · 观察 {{ formatTokenCount(tokenUsageData.today?.screen_tokens) }}</small></article>
-            <article><span>累计合计</span><strong>{{ formatTokenCount(tokenUsageData.total?.total_tokens || totalTokenUsage) }}</strong><small>对话 {{ formatTokenCount(tokenUsageData.total?.chat_tokens) }} · 观察 {{ formatTokenCount(tokenUsageData.total?.screen_tokens) }}</small></article>
+            <article><span>累计合计</span><strong>{{ formatTokenCount(tokenUsageData.total?.total_tokens ?? totalTokenUsage) }}</strong><small>对话 {{ formatTokenCount(tokenUsageData.total?.chat_tokens) }} · 观察 {{ formatTokenCount(tokenUsageData.total?.screen_tokens) }}</small></article>
           </div>
           <div class="token-breakdown">
             <span><small>今日输入</small><b>{{ formatTokenCount(tokenUsageData.today?.prompt_tokens) }}</b></span>
@@ -2730,7 +2819,7 @@ async function setPetChatWindowState(open) {
             <span><small>今日推理</small><b>{{ formatTokenCount(tokenUsageData.today?.reasoning_tokens) }}</b></span>
             <span><small>缓存输入</small><b>{{ formatTokenCount(tokenUsageData.today?.cached_prompt_tokens) }}</b></span>
           </div>
-          <div class="token-day-list">
+          <div class="token-day-list" role="region" aria-label="每日 Token 用量" tabindex="0">
             <header><span>日期</span><span>对话</span><span>观察</span><span>合计</span></header>
             <div v-for="day in tokenUsageData.days" :key="day.date"><time>{{ day.date }}</time><span>{{ formatTokenCount(day.chat_tokens) }}</span><span>{{ formatTokenCount(day.screen_tokens) }}</span><strong>{{ formatTokenCount(day.total_tokens) }}</strong></div>
           </div>

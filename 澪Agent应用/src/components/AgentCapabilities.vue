@@ -1,0 +1,32 @@
+<script setup>
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import AgentSkills from './AgentSkills.vue'
+import { extensionsApi, extensionDraft, renderablePanel } from '../services/extensionsApi.js'
+const entries = ref([]), busy = ref(false), notice = ref(''), error = ref(''), editor = ref(null), source = ref(''), panel = ref(null)
+let disposed = false
+const kindLabel = kind => kind === 'panel' ? '面板' : '工具'
+const panelView = computed(() => renderablePanel(panel.value?.panel))
+async function refresh() { const data = await extensionsApi.list(); if (!disposed) entries.value = data.extensions || [] }
+async function act(fn) { if (busy.value) return; busy.value = true; notice.value = ''; error.value = ''; try { await fn() } catch (cause) { error.value = cause.message } finally { busy.value = false } }
+function create(kind) { editor.value = extensionDraft(kind); source.value = JSON.stringify(editor.value, null, 2); panel.value = null }
+async function edit(item) { await act(async () => { const data = await extensionsApi.read(item.id); editor.value = data; source.value = JSON.stringify({ manifest: data.manifest, source: data.source || '', tests: data.tests || [], expected_revision: data.revision }, null, 2) }) }
+async function save() { await act(async () => { const body = JSON.parse(source.value); body.manifest = { ...body.manifest, name: editor.value.manifest.name, description: editor.value.manifest.description, version: editor.value.manifest.version }; await extensionsApi.save(body); editor.value = null; await refresh(); notice.value = '草稿已保存，请验证后启用。' }) }
+async function action(item, name) { await act(async () => { await extensionsApi.act(item.id, name, { expected_revision: item.revision, ...(name === 'enabled' ? { enabled: !item.enabled, version: item.version } : name === 'validate' ? { version: item.version } : {}) }); await refresh(); panel.value = null }) }
+async function openPanel(item) { await act(async () => { panel.value = await extensionsApi.panel(item.id) }) }
+onMounted(() => act(refresh)); onBeforeUnmount(() => { disposed = true })
+</script>
+<template>
+  <section class="agent-capabilities" :aria-busy="busy">
+    <header><div><h1>能力</h1><p>保存的技能、工具与面板。也可以直接在对话里告诉 Mio 你想增加什么。</p></div><button :disabled="busy" @click="act(refresh)">刷新</button></header>
+    <p v-if="error" role="alert">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
+    <AgentSkills />
+    <header><h2>工具与面板</h2><div class="actions"><button :disabled="busy" @click="create('python')">新建工具</button><button :disabled="busy" @click="create('panel')">新建面板</button></div></header>
+    <form v-if="editor" @submit.prevent="save"><p>告诉 Mio 你的目标，它可以在对话中准备完整功能。这里保存新版本，验证通过后启用。</p><label>功能名称<input v-model="editor.manifest.name" required maxlength="100" :disabled="busy" /></label><label>功能介绍<input v-model="editor.manifest.description" maxlength="500" :disabled="busy" /></label><label>版本<input v-model="editor.manifest.version" required :disabled="busy" /></label><details><summary>高级：声明、代码与验证样例</summary><label>扩展包声明<textarea v-model="source" rows="15" spellcheck="false" aria-label="扩展包声明与代码" :disabled="busy" /></label></details><div class="actions"><button :disabled="busy">保存草稿</button><button type="button" :disabled="busy" @click="editor = null">取消</button></div></form>
+    <div class="cards"><article v-for="item in entries" :key="item.id"><h3>{{ item.name }}</h3><p>{{ item.description }}</p><small>{{ kindLabel(item.kind) }} · {{ item.enabled ? '已启用' : '已停用' }} · {{ item.version }} · {{ item.validation?.valid ? '验证通过' : item.validation?.status === 'invalid' ? '验证失败' : '待验证' }}</small><p v-for="(message,index) in item.validation?.errors || []" :key="index" class="validation-error">{{ message }}</p><div class="actions"><button :disabled="busy" @click="action(item,'validate')">验证</button><button :disabled="busy || (!item.enabled && !item.validation?.valid)" @click="action(item,'enabled')">{{ item.enabled ? '停用' : '启用' }}</button><button :disabled="busy || item.versions?.length < 2" @click="action(item,'rollback')">恢复上一版</button><button v-if="item.kind === 'panel'" :disabled="busy || !item.enabled" @click="openPanel(item)">打开面板</button></div><details><summary>版本与高级详情</summary><p>下一轮任务读取新工具；工具权限仍由执行层检查。</p><p v-if="item.kind === 'python'">独立数据处理进程；未提供系统沙箱。</p><p>所需权限：{{ item.permissions?.join('、') || '无' }}</p><ul><li v-for="version in item.versions || []" :key="version.version">{{ version.version }} · {{ version.validation?.valid ? '验证通过' : '待验证' }}</li></ul><button :disabled="busy" @click="edit(item)">编辑新版本</button></details></article></div>
+    <p v-if="!entries.length && !busy">还没有工具或面板。</p>
+    <section v-if="panel" class="extension-panel"><header><h2>{{ panelView.title }}</h2><button @click="panel = null">关闭面板</button></header><template v-for="(block,index) in panelView.blocks" :key="index"><p v-if="block.type === 'text'">{{ block.text }}</p><p v-else-if="block.type === 'metric'"><span>{{ block.label }}</span> <strong>{{ block.value }}</strong></p><div v-else class="table-scroll"><table><thead><tr><th v-for="(column,columnIndex) in block.columns || []" :key="columnIndex">{{ column }}</th></tr></thead><tbody><tr v-for="(row,rowIndex) in block.rows || []" :key="rowIndex"><td v-for="(value,columnIndex) in row" :key="columnIndex">{{ value }}</td></tr></tbody></table></div></template></section>
+  </section>
+</template>
+<style scoped>
+.agent-capabilities{display:grid;gap:20px;min-width:0;padding:24px;overflow:auto;height:100%;box-sizing:border-box}header,.actions{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.actions{justify-content:flex-start}h1,h2,h3,p{margin:0 0 8px}p,small{line-height:1.7;overflow-wrap:anywhere}small{color:var(--text-muted)}button,input,textarea{font:inherit;color:inherit;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 11px}button{cursor:pointer}button:disabled{opacity:.5;cursor:default}textarea{width:100%;box-sizing:border-box;resize:vertical;font-family:monospace}form,label{display:grid;gap:12px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px}article,.extension-panel,form{border:1px solid var(--border);padding:18px;border-radius:12px;min-width:0}summary{cursor:pointer;margin-top:12px;color:var(--text-muted)}.validation-error{color:var(--danger)}.table-scroll{overflow:auto}table{border-collapse:collapse;width:100%}td,th{padding:8px;border:1px solid var(--border);text-align:left}
+</style>

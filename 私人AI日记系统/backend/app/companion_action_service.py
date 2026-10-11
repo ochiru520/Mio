@@ -40,6 +40,10 @@ ACTION_POLICIES = {
     )
     for name in ALLOWED_ACTION_TYPES
 }
+from .execution_tools import DEFINITIONS as EXECUTION_DEFINITIONS
+from .self_upgrade_tools import DEFINITIONS as SELF_UPGRADE_DEFINITIONS
+ACTION_POLICIES.update({item.name: 'confirmation' for item in [*EXECUTION_DEFINITIONS, *SELF_UPGRADE_DEFINITIONS]
+                        if item.permission == ToolPermission.HIGH_RISK_WRITE})
 FORBIDDEN_PROFILE_ACTION_RE = re.compile(
     r"(api\s*key|apikey|secret|token|密码|密钥|账号|系统命令|执行命令|删除文件|"
     r"\.env|代理|proxy|git|源代码|python\s*代码|后端代码)",
@@ -1158,12 +1162,30 @@ async def _execute_approved_action(action_id: int) -> dict[str, str]:
         )
     try:
         with maintenance_service.mutation_scope():
-            result = await execute_companion_action_primitive(
-                action,
-                str(row["conversation_id"] or "default"),
-                user_message,
-                source_message_id,
-            )
+            from .execution_tools import NAMES as EXECUTION_NAMES
+            from .self_upgrade_tools import NAMES as UPGRADE_NAMES
+            if action_type in EXECUTION_NAMES | UPGRADE_NAMES:
+                from .agent_tool_service import ToolExecutionContext, _dispatch_write_tool
+                from . import agent_task_service as agent_tasks
+                parent = agent_tasks.for_run(str(row['agent_run_id'] or ''))
+                context = ToolExecutionContext(run_id=str(row['agent_run_id'] or ''), request_id=str(row['request_id'] or ''),
+                    trace_id=str(row['trace_id'] or ''), conversation_id=str(row['conversation_id']),
+                    source_message_id=source_message_id, user_message=user_message, step_index=0,
+                    source=parent['source'] if parent else 'desktop', task_id=parent['id'] if parent else '')
+                arguments = definition.validate_arguments({key: value for key, value in action.items() if key != 'type'})
+                from . import execution_policy_service as policy
+                decision, reason = policy.decision(definition,arguments,context)
+                if decision=='deny':
+                    raise ValueError(reason)
+                with policy.scope(context):
+                    result = json.dumps(await _dispatch_write_tool(action_type, arguments, context), ensure_ascii=False)
+            else:
+                result = await execute_companion_action_primitive(
+                    action, str(row["conversation_id"] or "default"), user_message, source_message_id,
+                )
+    except asyncio.CancelledError:
+        db.finish_tool_execution_receipt(receipt_id, "cancelled", "执行已取消。")
+        raise
     except Exception as exc:
         result = str(exc)[:500]
         db.update_companion_action(action_id, "failed", result)

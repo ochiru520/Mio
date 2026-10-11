@@ -132,6 +132,22 @@ class CustomWorkflowTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             custom.normalize_root(self.root)
 
+    def test_accelerated_install_uses_its_runtime_and_launch_options(self):
+        root = self.root / 'accelerated'
+        legacy = root / 'python/python.exe'
+        accelerated = root / 'python-qwen312/python.exe'
+        for executable in (legacy, accelerated):
+            executable.parent.mkdir(parents=True)
+            executable.touch()
+        self.assertEqual(custom.python_for(root), legacy.resolve())
+        (root / '启动千问生图加速版.bat').touch()
+        self.assertEqual(custom.python_for(root), accelerated.resolve())
+        options = custom.launch_options(root, accelerated)
+        self.assertIn('--use-sage-attention', options)
+        self.assertIn('--cuda-malloc', options)
+        self.assertIn(str(root / 'qwen_accel/runtime-temp'), options)
+        self.assertEqual(custom.launch_options(root, legacy), [])
+
     def test_custom_does_not_force_anima_language(self):
         item = self.register()
         self.assertFalse(_image_prompt_needs_english_rewrite({"workflow_id": item["id"], "prompt": "这是自定义工作流的中文图片提示词"}))

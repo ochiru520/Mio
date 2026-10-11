@@ -1,5 +1,7 @@
 import { apiRequest } from './api.js'
 
+export const loadCreationWorkflows = () => apiRequest('/api/creation/workflows')
+
 export const loadCreationBootstrap = () => apiRequest('/api/creation/bootstrap', { deadlineClass: 'model' })
 export const startComfyUi = () => apiRequest('/api/creation/comfyui/start', { method: 'POST', deadlineClass: 'model' })
 export const loadCreationConfiguration = () => apiRequest('/api/creation/configuration')

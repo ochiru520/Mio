@@ -4,10 +4,12 @@ import base64
 import binascii
 import csv
 import io
+import os
 import re
 import subprocess
 import tempfile
 import zipfile
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from PIL import Image
 
 from .chat_service import TextAttachment
 from .config import settings
+from .ffmpeg_runtime import resolve_ffmpeg
 from .image_service import ImageAttachment
 
 
@@ -91,6 +94,91 @@ def _render_pdf_page(document, page_index: int, name: str) -> ImageAttachment:
     output = io.BytesIO()
     image.save(output, format="JPEG", quality=82, optimize=True)
     return _image_attachment(output.getvalue(), "image/jpeg", f"{name} 第 {page_index + 1} 页")
+
+
+def _resolve_tesseract() -> str:
+    configured = os.getenv('MIO_TESSERACT_BINARY', '').strip()
+    if configured:
+        binary = Path(configured).expanduser()
+        if not binary.is_file():
+            raise RuntimeError('OCR unavailable: MIO_TESSERACT_BINARY 指向的 Tesseract 不存在。')
+        return str(binary.resolve())
+    executable = shutil.which('tesseract')
+    if executable:
+        return executable
+    # Apps launched before a PATH update still discover a durable local install.
+    candidates = []
+    local = os.getenv('LOCALAPPDATA', '').strip()
+    if local:
+        candidates.extend([
+            Path(local) / 'Mio' / 'Dependencies' / 'tesseract' / 'tesseract.exe',
+            Path(local) / 'Programs' / 'Tesseract-OCR' / 'tesseract.exe',
+        ])
+    for key in ('ProgramFiles', 'ProgramFiles(x86)'):
+        directory = os.getenv(key, '').strip()
+        if directory:
+            candidates.append(Path(directory) / 'Tesseract-OCR' / 'tesseract.exe')
+    for binary in candidates:
+        if binary.is_file():
+            return str(binary.resolve())
+    raise RuntimeError('OCR unavailable: 未检测到 Tesseract。')
+
+
+def ocr_pdf_pages(content: bytes, name: str, *, max_pages: int = 20) -> list[tuple[int, str]]:
+    """OCR scan-only pages when a local Tesseract install is available.
+
+    The caller can distinguish unavailable OCR from an empty document; no
+    guessed text is returned when the engine or language data is missing.
+    """
+    executable = _resolve_tesseract()
+    tessdata = Path(executable).parent / 'tessdata'
+    language_options = ['--tessdata-dir', str(tessdata)] if tessdata.is_dir() else []
+    # Call the installed engine directly: frozen releases do not need a second
+    # Python wrapper. Verify both languages to avoid silent English-only OCR.
+    process_options = {
+        "capture_output": True,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+    try:
+        languages = subprocess.run([executable, *language_options, "--list-langs"], timeout=10, **process_options)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("OCR unavailable: Tesseract 无法启动或检查超时。") from exc
+    if languages.returncode:
+        raise RuntimeError("OCR unavailable: Tesseract 语言检查失败。")
+    available = set(languages.stdout.decode("utf-8", "replace").splitlines())
+    missing = {"chi_sim", "eng"} - {language.strip() for language in available}
+    if missing:
+        raise RuntimeError("OCR unavailable: 缺少 Tesseract 语言数据：" + ", ".join(sorted(missing)))
+    document = pdfium.PdfDocument(content)
+    pages: list[tuple[int, str]] = []
+    try:
+        for index in range(min(len(document), max(1, int(max_pages)))):
+            page = document[index]
+            try:
+                bitmap = page.render(scale=2.0)
+                try:
+                    image_data = io.BytesIO()
+                    bitmap.to_pil().save(image_data, format="PNG")
+                    try:
+                        result = subprocess.run(
+                            [executable, "stdin", "stdout", *language_options, "-l", "chi_sim+eng"],
+                            input=image_data.getvalue(), timeout=60, **process_options,
+                        )
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        raise RuntimeError(f"OCR failed: 第 {index + 1} 页识别失败或超时。") from exc
+                    if result.returncode:
+                        reason = result.stderr.decode("utf-8", "replace").strip()[:500]
+                        raise RuntimeError(f"OCR failed: 第 {index + 1} 页识别失败。{reason}")
+                    text = result.stdout.decode("utf-8", "replace")
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
+            if text.strip():
+                pages.append((index + 1, re.sub(r"\x00+", "", text).strip()))
+    finally:
+        document.close()
+    return pages
 
 
 def _validate_office_archive(content: bytes, name: str) -> None:
@@ -247,7 +335,7 @@ def _decode_tabular_text(content: bytes, name: str) -> str:
 def _table_preview(rows: list[list[object]], *, max_rows: int = 60, max_columns: int = 30) -> str:
     lines: list[str] = []
     for row in rows[:max_rows]:
-        cells = [re.sub(r"\s+", " ", str(value or "")).strip()[:160] for value in row[:max_columns]]
+        cells = [re.sub(r"\s+", " ", "" if value is None else str(value)).strip()[:160] for value in row[:max_columns]]
         lines.append(" | ".join(cells))
     if len(rows) > max_rows:
         lines.append(f"……另有 {len(rows) - max_rows} 行未展开")
@@ -305,14 +393,7 @@ def _parse_xlsx(content: bytes, name: str) -> ParsedDocument:
 
 
 def _ffmpeg_path() -> Path:
-    candidates = [
-        settings.voice_training_dir / "cache" / "bin" / "ffmpeg.exe",
-        settings.voice_training_dir / "ffmpeg.exe",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise ValueError("缺少本地 FFmpeg，暂时不能解析视频关键帧。")
+    return resolve_ffmpeg()
 
 
 def _video_duration_seconds(ffmpeg: Path, source: Path) -> float:

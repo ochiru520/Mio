@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>主题组件回归</title></head>
+<body><div id="app"></div><script type="module">
+import { createApp, h } from 'vue'
+import AppSelect from '../src/components/AppSelect.vue'
+import Tasks from '../src/components/AgentTasksPage.vue'
+import Strategy from '../src/components/ModelStrategyPanel.vue'
+import Privacy from '../src/components/PrivacyOperationsPanel.vue'
+import Updates from '../src/components/UpdatePanel.vue'
+import Capabilities from '../src/components/CapabilityChecks.vue'
+import { normalizeThemeId } from '../src/themeOptions.js'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+import '../src/styles/refinements.css'
+const params = new URLSearchParams(location.search)
+document.documentElement.dataset.theme = normalizeThemeId(params.get('theme'))
+document.documentElement.dataset.fontSize = params.get('font') || 'medium'
+// Read-only bridge fixture: this page cannot install, download or check updates.
+window.pywebview = { api: { update_status: async () => ({ ok: true, status: {
+  state: 'idle', current_version: 'test', channel: 'development', message: '测试状态',
+  configured: true, auto_check: false, auto_download: false,
+} }) } }
+createApp({ render: () => h('main', { style: 'height:100vh;overflow:auto;padding:24px;background:var(--surface);color:var(--text)' }, [
+  h(AppSelect, { label: '主题测试选项', modelValue: 'a', options: [{value:'a',label:'第一个选项'},{value:'b',label:'第二个选项'}] }),
+  h(Tasks), h(Strategy, { modes: ['agent'] }), h(Privacy), h(Updates), h(Capabilities),
+]) }).provide('mio-settings-page', {modelOptions:[]}).mount('#app')
+</script></body></html>

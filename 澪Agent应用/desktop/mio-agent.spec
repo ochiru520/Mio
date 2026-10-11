@@ -28,17 +28,30 @@ datas = [
 if default_voice_reference.is_file():
     datas.append((str(default_voice_reference), "default_voice"))
 datas += collect_data_files("tzdata")
+datas += collect_data_files("playwright")
 datas += collect_data_files("webview")
 if live2d_desktop.is_dir():
     datas.append((str(live2d_desktop), "live2d_desktop"))
 
 hiddenimports = collect_submodules("webview")
 hiddenimports += collect_submodules("uvicorn")
+hiddenimports += collect_submodules("playwright")
 hiddenimports += collect_submodules("dxcam")
 hiddenimports += collect_submodules("mss")
+hiddenimports += collect_submodules("pywinauto")
+hiddenimports += collect_submodules("comtypes")
 hiddenimports += collect_submodules("websockets.sync")
 hiddenimports += [
     "app.main",
+    "app.extension_worker",
+    "app.extension_service",
+    "app.extension_tools",
+    "app.self_upgrade_service",
+    "app.self_upgrade_tools",
+    "app.execution_policy_service",
+    "app.terminal_sandbox",
+    "app.desktop_executor",
+    "app.capability_probe_worker",
     "app.desktop_pet",
     "app.desktop_pet_live2d",
     "app.companion_service",
@@ -68,7 +81,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["PyQt5", "PyQt6", "PySide2", "PySide6", "cefpython3", "gtk"],
+    excludes=["PyQt5", "PyQt6", "PySide2", "PySide6", "cefpython3", "gtk",
+              "app.mobile_gateway", "app.music_service", "app.sticker_service", "app.moments_service"],
     noarchive=True,
     optimize=0,
 )

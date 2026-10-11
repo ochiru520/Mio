@@ -101,6 +101,11 @@ async def creation_bootstrap():
     return await creation_service.bootstrap()
 
 
+@router.get("/workflows")
+async def creation_workflows():
+    return {"workflows": await asyncio.to_thread(creation_service.available_workflows)}
+
+
 @router.get("/health")
 async def creation_health(include_nodes: bool = False):
     return await creation_service.comfyui_health(include_nodes=include_nodes)

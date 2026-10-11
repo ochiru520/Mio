@@ -30,9 +30,16 @@ const CLOUD_SPEAKERS = [
 ]
 
 const selectedProfileId = ref('')
-const cloudApiKeyDraft = ref('')
+const cloudApiKeyDraft = computed({
+  get: () => settings.value.cloud_tts_api_key === '__clear__' ? '' : (settings.value.cloud_tts_api_key || ''),
+  set: value => { settings.value.cloud_tts_api_key = value.trim() },
+})
 const realtimeVisible = ref(false)
 const settings = computed(() => props.status?.pet?.settings || {})
+const translationModelUnavailable = computed(() => Boolean(
+  settings.value.speech_translation_model_id
+  && !props.modelOptions.some(model => model.id === settings.value.speech_translation_model_id),
+))
 const runtime = computed(() => props.status?.voice_runtime || {})
 const cloudState = computed(() => runtime.value.cloud_tts || {})
 const engine = computed(() => (settings.value.voice_engine === 'cloud' ? 'cloud' : 'gpt_sovits'))
@@ -246,7 +253,7 @@ function makeSelectedDefault() {
       <label class="settings-item"><span><strong>QQ 语音</strong><small>群聊和私聊使用同一套判断规则</small></span><select v-model="settings.qq_voice_mode"><option value="explicit">仅明确要求</option><option value="adaptive">由 Agent 判断</option><option value="always">始终语音</option></select></label>
       <label class="settings-item"><span><strong>音量</strong><small>{{ settings.voice_volume }}%</small></span><input v-model.number="settings.voice_volume" type="range" min="0" max="100" :style="rangeInputStyle(settings.voice_volume, 0, 100)" /></label>
       <label class="settings-item"><span><strong>桌宠开口语言</strong><small>控制朗读使用中文还是日语，气泡继续显示原回复</small></span><select v-model="settings.pet_speech_language"><option value="zh">中文</option><option value="ja">日语</option></select></label>
-      <label class="settings-item"><span><strong>语音翻译模型</strong><small>只负责中日语音翻译，不跟随主对话或桌宠模型</small></span><select v-model="settings.speech_translation_model_id"><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></select></label>
+      <label class="settings-item"><span><strong>语音翻译模型</strong><small>只负责中日语音翻译，不跟随主对话或桌宠模型</small></span><select v-model="settings.speech_translation_model_id" :disabled="!modelOptions.length"><option v-if="translationModelUnavailable" :value="settings.speech_translation_model_id" disabled>{{ modelOptions.length ? '当前模型未连接，请重新选择' : '没有已连接的模型' }}</option><option v-else-if="!settings.speech_translation_model_id" value="" disabled>{{ modelOptions.length ? '请选择已连接的模型' : '没有已连接的模型' }}</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></select></label>
     </div>
 
     <template v-if="engine === 'gpt_sovits'">

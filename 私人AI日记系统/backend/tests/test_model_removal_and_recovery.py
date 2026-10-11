@@ -73,6 +73,16 @@ def test_uninstall_changed_plan_and_install_in_progress_are_rejected(managed):
     assert target.exists()
 
 
+def test_uninstall_rechecks_reviewed_plan_after_stopping_worker(managed):
+    target = put(managed / 'cache/faster-whisper/model.bin')
+    plan = removal.preview('whisper')
+    with patch('app.system_audio_service.stop', side_effect=lambda: target.write_bytes(b'newer user file')):
+        with pytest.raises(ValueError, match='停止组件期间文件已变化'):
+            removal.uninstall('whisper', plan['token'])
+    assert target.read_bytes() == b'newer user file'
+    assert deps._read_status('whisper').get('stage') != 'uninstalled'
+
+
 def test_owned_bundled_whisper_is_removable_but_external_runtime_is_explained(managed):
     target = put(managed/'models/faster-whisper-base/model.bin')
     plan = removal.preview('whisper')

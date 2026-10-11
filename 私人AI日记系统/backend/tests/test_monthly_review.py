@@ -67,6 +67,28 @@ class MonthlyReviewGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("也不应进入八月", prompt)
         self.assertEqual(db.get_monthly_review("2026-08")["markdown_content"], result.markdown_content)
 
+    async def test_long_late_month_entries_are_segmented_and_sources_are_visible(self) -> None:
+        late_event = "八月末才补记的重要事项：完成了版本发布核对。"
+        long_diary = ("这是一段较长的前序记录。" * 1800) + late_event
+        db.upsert_diary("2026-08-31", "八月日记", long_diary, confirmed_at=None)
+        with patch(
+            "app.monthly_review_service.call_chat_completion",
+            new=AsyncMock(return_value="- 2026-08-31：完成版本发布核对"),
+        ) as call:
+            result = await generate_monthly_review("2026-08")
+
+        self.assertGreater(call.await_count, 2)
+        extraction_inputs = [entry.args[0][1]["content"] for entry in call.await_args_list[:-1]]
+        self.assertTrue(any(late_event in content for content in extraction_inputs))
+        final_input = call.await_args.args[0][1]["content"]
+        self.assertIn("来源事实片段", final_input)
+        self.assertIn("2026-08-31", result.markdown_content)
+        self.assertIn("完全无记录日期", result.markdown_content)
+        self.assertIn("2026-08-31 日记未确认", result.markdown_content)
+        listed = await api_monthly_list()
+        self.assertEqual(listed[0]["source_status"], "current")
+        self.assertFalse(listed[0]["stale"])
+
     async def test_empty_month_does_not_call_model(self) -> None:
         with patch(
             "app.monthly_review_service.call_chat_completion",

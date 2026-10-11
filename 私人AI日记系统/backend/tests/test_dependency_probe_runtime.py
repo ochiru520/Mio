@@ -13,6 +13,28 @@ from app import dependency_probe as probe
 
 
 class ProbeRuntimeTests(unittest.TestCase):
+    def test_whisper_verification_checks_capture_import(self):
+        result = subprocess.CompletedProcess([], 1, '', "ModuleNotFoundError: No module named 'soundcard'")
+        with patch.object(probe.subprocess, 'run', return_value=result) as run:
+            outcome = probe.verify('whisper', Path('python.exe'), Path('model'))
+        self.assertIn('import soundcard', run.call_args.args[0][run.call_args.args[0].index('-c') + 1])
+        self.assertEqual(outcome['error_code'], 'missing_runtime_dependency')
+
+    def test_removing_capture_package_invalidates_verification_cache(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            python = root / 'Scripts/python.exe'
+            python.parent.mkdir()
+            python.touch()
+            package = root / 'Lib/site-packages/soundcard/__init__.py'
+            package.parent.mkdir(parents=True)
+            package.write_text('capture = True')
+            with patch.object(probe.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')):
+                probe.verify('whisper', python, root / 'model')
+            self.assertTrue(probe.cached('whisper', python, root / 'model')['ok'])
+            package.unlink()
+            self.assertEqual(probe.cached('whisper', python, root / 'model'), {})
+
     def test_isolated_child_uses_utf8_and_explicit_genie_resources(self):
         # Exercise an actual isolated Python process, including Unicode output;
         # substitute only heavy third-party model libraries for this regression.

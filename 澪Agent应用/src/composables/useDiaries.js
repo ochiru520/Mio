@@ -5,14 +5,21 @@
 import * as diaryApi from '../services/diaryApi.js'
 
 export function useDiaries(deps) {
+  async function refreshReviewVersions() {
+    const [daily, weekly, monthly] = await Promise.all([
+      deps.request('/api/reviews'), deps.request('/api/weekly'), deps.request('/api/monthly'),
+    ])
+    deps.dailyReviews.value = daily; deps.weeklyReviews.value = weekly; deps.monthlyReviews.value = monthly
+  }
   async function loadStats(year = 0, month = 0) {
     if (deps.statsLoading.value) return
     deps.statsLoading.value = true
+    deps.statsError.value = ''
     try {
       deps.statsData.value = await deps.request(`/api/agent/stats?year=${year}&month=${month}`)
       deps.statsLoaded.value = true
     } catch (error) {
-      deps.errorMessage.value = error.message
+      deps.statsError.value = error.message
     } finally {
       deps.statsLoading.value = false
     }
@@ -80,6 +87,7 @@ export function useDiaries(deps) {
         body: JSON.stringify({ confirmed: true }),
       })
       await openDiary(deps.selectedDiary.value.date)
+      await refreshReviewVersions()
       await loadDiaries()
       await deps.refreshDayDashboard()
       if (deps.statsLoaded.value) await loadStats(deps.statsData.value.year, deps.statsData.value.month)
@@ -98,6 +106,7 @@ export function useDiaries(deps) {
       })
       await loadDiaries()
       await openDiary(date)
+      await refreshReviewVersions()
       await deps.refreshDayDashboard()
       if (deps.statsLoaded.value) await loadStats(deps.statsData.value.year, deps.statsData.value.month)
       return true
@@ -121,7 +130,7 @@ export function useDiaries(deps) {
     deps.errorMessage.value = ''
     try {
       await deps.request(`/api/reviews/${date}/generate`, { method: 'POST', body: '{}' })
-      deps.dailyReviews.value = await deps.request('/api/reviews')
+      await refreshReviewVersions()
     } catch (error) {
       deps.errorMessage.value = error.message
     } finally {
@@ -135,7 +144,7 @@ export function useDiaries(deps) {
     deps.errorMessage.value = ''
     try {
       await deps.request(`/api/weekly/${start}/generate`, { method: 'POST', body: '{}' })
-      deps.weeklyReviews.value = await deps.request('/api/weekly')
+      await refreshReviewVersions()
     } catch (error) {
       deps.errorMessage.value = error.message
     } finally {
@@ -149,7 +158,7 @@ export function useDiaries(deps) {
     deps.errorMessage.value = ''
     try {
       await deps.request(`/api/monthly/${month}/generate`, { method: 'POST', body: '{}' })
-      deps.monthlyReviews.value = await deps.request('/api/monthly')
+      await refreshReviewVersions()
     } catch (error) {
       deps.errorMessage.value = error.message
     } finally {

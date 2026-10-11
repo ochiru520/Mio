@@ -1,5 +1,5 @@
 export const taskStatusLabels = {
-  running: '执行中', responding: '正在整理回复', ready: '等待继续', waiting_jobs: '等待后台结果',
+  running: '执行中', responding: '正在整理回复', ready: '等待继续', waiting_jobs: '等待后台结果', waiting_terminal: '等待终端结果',
   waiting_confirmation: '等待确认', waiting_user: '等待补充', budget_exhausted: '本轮预算已用完',
   paused: '已暂停', completed: '已完成', failed: '失败', cancelled: '已取消',
 }

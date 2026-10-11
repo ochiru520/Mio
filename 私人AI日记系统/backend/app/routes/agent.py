@@ -145,8 +145,10 @@ class AgentChatRequest(BaseModel):
     attachments: list[AgentAttachmentRequest] = Field(default_factory=list)
     client_request_id: str = Field(default="", max_length=80, pattern=r"^[A-Za-z0-9._:-]*$")
     creation_tools_enabled: bool = False
+    creation_workflow_id: str = Field(default="", max_length=128)
     agent_workspace: bool = False
     mode: str = ""
+    surface_mode: str = Field(default='work', pattern=r'^(chat|work|learn|image)$')
 
 
 # Keep this exported for the desktop client and older tests.  It now means
@@ -308,20 +310,7 @@ def _safe_attachment_name(name: str) -> str:
     return clean or "未命名附件"
 
 
-def _archive_attachment(name: str, content: bytes, mime_type: str, kind: str) -> dict[str, object]:
-    logical_date = db.today_string()
-    folder = settings.agent_attachment_dir / logical_date
-    folder.mkdir(parents=True, exist_ok=True)
-    suffix = Path(name).suffix.lower()
-    stored_name = f"{uuid.uuid4().hex}{suffix}"
-    (folder / stored_name).write_bytes(content)
-    return {
-        "kind": kind,
-        "name": name,
-        "mime_type": mime_type,
-        "size": len(content),
-        "url": f"/agent-files/{logical_date}/{stored_name}",
-    }
+_archive_attachment = conversation_service.archive_attachment
 
 
 _delete_archived_attachments = conversation_service.delete_archived_attachments
@@ -466,6 +455,11 @@ async def _qq_status() -> dict[str, object]:
 
 
 def _context_usage(conversation_id: str) -> dict[str, object]:
+    if conversation_id.startswith('desktop_agent_'):
+        from ..agent_context_service import usage_for_conversation
+        agent_usage = usage_for_conversation(conversation_id)
+        if agent_usage:
+            return agent_usage
     history_rows = db.get_recent_messages(
         limit=settings.chat_raw_history_limit,
         conversation_id=conversation_id,
@@ -715,6 +709,7 @@ async def cancel_agent_task(task_id: int):
 async def list_messages(
     limit: int = Query(default=120, ge=1, le=500),
     conversation_id: str = "",
+    before_id: int = Query(default=0, ge=0),
 ):
     proactive_service.note_desktop_app_active()
     try:
@@ -724,6 +719,7 @@ async def list_messages(
     return _message_list(db.get_recent_messages(
         limit=limit,
         conversation_id=selected_conversation,
+        before_id=before_id,
     ))
 
 
@@ -764,6 +760,15 @@ async def agent_chat(payload: AgentChatRequest):
     agent_workspace = profile.mode == "agent"
     if agent_workspace and not selected_conversation.startswith("desktop_agent_"):
         raise HTTPException(status_code=400, detail="Mio Agent 工作台需要使用独立的 Agent 对话。")
+    creation_workflow_id = payload.creation_workflow_id.strip()
+    if creation_workflow_id:
+        if not agent_workspace:
+            raise HTTPException(status_code=400, detail="工具切换仅适用于 Agent 工作台。")
+        from ..creation_workflows import require_workflow
+        try:
+            creation_workflow_id = require_workflow(creation_workflow_id).id
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     attachment_fingerprints = [
         {
@@ -786,7 +791,9 @@ async def agent_chat(payload: AgentChatRequest):
                 "model_id": payload.model_id,
                 "reasoning_level": payload.reasoning_level,
                 "creation_tools_enabled": payload.creation_tools_enabled,
+                "creation_workflow_id": creation_workflow_id,
                 "agent_workspace": agent_workspace,
+                "surface_mode": payload.surface_mode,
                 "mode": profile.mode,
                 "attachments": attachment_fingerprints,
             }),
@@ -882,10 +889,16 @@ async def agent_chat(payload: AgentChatRequest):
                 ),
                 capture_follow_ups=not agent_workspace,
                 request_id=claim.client_request_id,
-                agent_tools_enabled=profile.allow_agent_loop and agent_workspace and not use_fast_chat,
+                agent_tools_enabled=profile.allow_agent_loop and agent_workspace and not use_fast_chat and payload.surface_mode != 'chat',
+                extra_system_context=(
+                    '当前是学习页面：以澪的人设与称呼陪伴学习；根据资料解释概念、保存笔记、使用 learning 工具建立学习会话、练习与复习。依据真实作答和来源反馈，不虚构掌握度。'
+                    if agent_workspace and payload.surface_mode == 'learn' else
+                    '当前是生图页面：默认围绕用户要求生成或编辑图像，使用已配置工作流，用户未要求生成时不提交任务。'
+                    if agent_workspace and payload.surface_mode == 'image' else ''),
                 fast_path=use_fast_chat,
                 allowed_tool_names=profile.allowed_tool_names,
                 handoff_enabled=not agent_workspace,
+                creation_workflow_id=creation_workflow_id,
             )
     except ValueError as exc:
         detail = normalize_error_detail(
@@ -1047,12 +1060,31 @@ async def cancel_agent_chat(payload: AgentChatCancelRequest):
         selected_conversation,
         source="desktop",
         reason=f"user_cancelled:{payload.client_request_id or 'unknown'}",
+        expected_request_id=payload.client_request_id,
     )
     return {
         "cancelled": cancelled,
         "conversation_id": selected_conversation,
         "client_request_id": payload.client_request_id,
     }
+
+
+@router.get("/chat/requests/{client_request_id}")
+async def chat_request_status(client_request_id: str, conversation_id: str = ""):
+    """Reconcile an interrupted HTTP wait without repeating or cancelling work."""
+    try:
+        selected = _conversation_id(conversation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    from contextlib import closing
+    with closing(db.get_conn()) as conn:
+        row = conn.execute("SELECT * FROM chat_requests WHERE client_request_id=? AND conversation_id=? AND source IN ('desktop', 'desktop_pet')",
+                           (client_request_id, selected)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="该会话中没有这条请求。")
+    return {"client_request_id": client_request_id, "conversation_id": selected, "status": row['status'],
+            "response": db.chat_request_payload(row, 'response_json'),
+            "error": db.chat_request_payload(row, 'error_json')}
 
 
 @router.patch("/qq/group-settings")

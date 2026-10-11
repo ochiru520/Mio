@@ -287,6 +287,36 @@ class FollowupsRepository:
                 )
             return int(cursor.lastrowid)
 
+    def attach_source(self, thread_id: int, source_type: str, source_id: str, source_revision: int = 0) -> bool:
+        if source_type not in {"diary", "memory", "message", "artifact"} or not str(source_id).strip():
+            raise ValueError("待跟进来源无效。")
+        now = self._dep_now_iso()
+        with self._dep_get_conn() as conn:
+            cursor = conn.execute(
+                """INSERT INTO pending_thread_sources(thread_id,source_type,source_id,source_revision,state,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?) ON CONFLICT(thread_id,source_type,source_id) DO UPDATE SET
+                   source_revision=excluded.source_revision,state='current',updated_at=excluded.updated_at""",
+                (int(thread_id), source_type, str(source_id).strip()[:300], max(0, int(source_revision or 0)), "current", now, now),
+            )
+            return cursor.rowcount > 0
+
+    def mark_source_stale(self, source_type: str, source_id: str, current_revision: int) -> int:
+        now = self._dep_now_iso()
+        with self._dep_get_conn() as conn:
+            cursor = conn.execute(
+                """UPDATE pending_thread_sources SET state='stale',updated_at=?
+                   WHERE source_type=? AND source_id=? AND source_revision < ? AND state='current'""",
+                (now, source_type, str(source_id), int(current_revision)),
+            )
+            return cursor.rowcount
+
+    def list_sources(self, thread_id: int) -> list[sqlite3.Row]:
+        with self._dep_get_conn() as conn:
+            return conn.execute(
+                "SELECT * FROM pending_thread_sources WHERE thread_id=? ORDER BY updated_at DESC,id DESC",
+                (int(thread_id),),
+            ).fetchall()
+
 
     def list_follow_up_results(self,
         *,

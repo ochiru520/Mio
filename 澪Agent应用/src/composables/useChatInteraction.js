@@ -5,11 +5,14 @@
 import { apiRequest } from '../services/api.js'
 import { buildTurnVoicePayload } from '../chatVoice.js'
 import { nextTick } from 'vue'
+import { savedReadingPosition, restoreReadingPosition, rememberReadingPosition } from '../conversationScroll.js'
 import { normalizeLoadedChatSettings } from '../chatSettingsState.js'
 import * as voiceApi from '../services/voiceApi.js'
 import { voiceLanguageLabel } from '../chatVoice.js'
+import { acquireAudioOwner, releaseAudioOwner } from '../audioCoordinator.js'
 
 export function useChatInteraction(deps) {
+  let voicePlaybackVersion = 0
   async function copyTurn(turn) {
     const content = turn.parts.map((part) => deps.cleanDisplayContent(part.content)).filter(Boolean).join('\n')
     if (!content) return
@@ -31,6 +34,7 @@ export function useChatInteraction(deps) {
     }, 1600)
   }
   function stopMessageVoice() {
+    ++voicePlaybackVersion
     deps.voiceAbortController?.abort()
     deps.voiceAbortController = null
     if (deps.activeMessageAudio) {
@@ -44,6 +48,7 @@ export function useChatInteraction(deps) {
     }
     deps.speakingPartId.value = ''
     deps.voiceLoadingPartId.value = ''
+    releaseAudioOwner('message-voice')
   }
   async function playMessageVoice(turn) {
     const playbackId = deps.turnId(turn)
@@ -58,8 +63,10 @@ export function useChatInteraction(deps) {
     )
     if (!payload.text) return
     stopMessageVoice()
+    const version = voicePlaybackVersion
     deps.errorMessage.value = ''
     deps.voiceLoadingPartId.value = playbackId
+    acquireAudioOwner('message-voice')
     deps.voiceAbortController = new AbortController()
     try {
       const audioBlob = await apiRequest('/api/companion/voice/audio', {
@@ -70,14 +77,17 @@ export function useChatInteraction(deps) {
         deadlineClass: 'media',
         responseType: 'blob',
       })
+      if (version !== voicePlaybackVersion) return
       deps.activeMessageAudioUrl = URL.createObjectURL(audioBlob)
       deps.activeMessageAudio = new Audio(deps.activeMessageAudioUrl)
-      deps.activeMessageAudio.addEventListener('ended', stopMessageVoice, { once: true })
-      deps.activeMessageAudio.addEventListener('error', stopMessageVoice, { once: true })
+      const finish = () => { if (version === voicePlaybackVersion) stopMessageVoice() }
+      deps.activeMessageAudio.addEventListener('ended', finish, { once: true })
+      deps.activeMessageAudio.addEventListener('error', finish, { once: true })
       deps.voiceLoadingPartId.value = ''
       deps.speakingPartId.value = playbackId
       await deps.activeMessageAudio.play()
     } catch (error) {
+      if (version !== voicePlaybackVersion) return
       if (error?.code !== 'request_cancelled') deps.errorMessage.value = `语音播放失败：${error.message}`
       stopMessageVoice()
     }
@@ -98,16 +108,40 @@ export function useChatInteraction(deps) {
   }
   async function scrollToBottom() {
     await nextTick()
-    if (deps.chatScroll.value) deps.chatScroll.value.scrollTop = deps.chatScroll.value.scrollHeight
+    if (deps.chatScroll.value) {
+      deps.chatScroll.value.scrollTop = deps.chatScroll.value.scrollHeight
+      rememberReadingPosition(deps.selectedConversationId.value,deps.chatScroll.value)
+    }
   }
+  let cancelScrollSettlement = () => {}
   async function settleChatScrollToBottom() {
+    cancelScrollSettlement()
     await nextTick()
-    await new Promise((resolve) => {
-      window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))
-    })
-    await scrollToBottom()
-    window.setTimeout(scrollToBottom, 100)
-    window.setTimeout(scrollToBottom, 300)
+    const scroll = deps.chatScroll.value
+    if (!scroll) return
+    const pane = scroll.closest('.chat-column') || scroll
+    const remembered=savedReadingPosition(deps.selectedConversationId.value)
+    let cancelled = false
+    const timers = []
+    const events = ['wheel', 'pointerdown', 'keydown', 'mio-chat-navigate']
+    function cleanup() {
+      timers.forEach(window.clearTimeout)
+      events.forEach(type => pane.removeEventListener(type, cancel, true))
+    }
+    function cancel() { cancelled = true; cleanup() }
+    cancelScrollSettlement = cancel
+    events.forEach(type => pane.addEventListener(type, cancel, { capture: true, passive: true }))
+    function position() {
+      if (!cancelled && deps.chatScroll.value === scroll) {
+        if(remembered)restoreReadingPosition(scroll,remembered)
+        else scroll.scrollTop=scroll.scrollHeight
+      }
+    }
+    await new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)))
+    position()
+    if (cancelled) return
+    timers.push(window.setTimeout(position, 100))
+    timers.push(window.setTimeout(() => { position(); cleanup() }, 300))
   }
   function persistReasoning() {
     localStorage.setItem(deps.reasoningStorageKey, deps.reasoningLevel.value)

@@ -83,11 +83,11 @@ function rangeInputStyle(value, minimum, maximum) {
 </script>
 
 <template>
-  <section class="pet-appearance-panel simplified-pet-panel">
-    <header class="pet-appearance-heading"><div><Gamepad2 :size="18" /><strong>桌宠</strong></div><span :class="['connection-label', { online: pet.running }]">{{ pet.running ? '运行中' : '未启动' }}</span></header>
+  <section class="pet-appearance-panel simplified-pet-panel compact-pet-panel">
+    <header class="pet-appearance-heading"><div><Gamepad2 :size="18" /><span><strong>桌宠</strong><small>选择形象，调整桌面上的陪伴方式</small></span></div><span :class="['connection-label', { online: pet.running }]">{{ pet.running ? '运行中' : '未启动' }}</span></header>
     <div class="appearance-unified-list">
       <div v-for="item in appearanceItems" :key="item.id" class="appearance-item-wrap">
-        <button type="button" :class="{ active: isSelected(item) }" @click="selectAppearance(item)"><img :src="item.preview" :alt="item.name" /><span><strong>{{ item.name }}</strong><small>{{ item.type }}</small></span><Check v-if="isSelected(item)" class="appearance-selected-mark" :size="15" /></button>
+        <button class="appearance-choice" type="button" :class="{ active: isSelected(item) }" :aria-pressed="isSelected(item)" :title="item.name" @click="selectAppearance(item)"><img :src="item.preview" :alt="item.name" /><span class="appearance-description"><strong>{{ item.name }}</strong><small>{{ item.type }}</small></span><span v-if="isSelected(item)" class="appearance-selection" aria-label="已选择"><Check :size="14" /></span></button>
         <span v-if="managementMode && item.imported" class="appearance-card-actions"><label :title="`更换 ${item.name} 的封面`"><input type="file" accept="image/*" @change="emit('replace-live2d-preview', item, $event)" /><ImagePlus :size="14" /></label><button class="appearance-delete" type="button" :title="`删除 ${item.name}`" :disabled="busy" @click.stop="emit('delete-live2d', item)"><Trash2 :size="14" /></button></span>
       </div>
       <template v-if="managementMode">

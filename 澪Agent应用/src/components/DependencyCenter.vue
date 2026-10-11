@@ -1,9 +1,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Check, CheckCircle2, CircleAlert, CircleHelp, Download, ExternalLink, RefreshCw, RotateCw, Settings2, Wrench } from '@lucide/vue'
-import { activateLocalVision, verifyDependency, installDependency, loadDependencies, loadDependencyStatus, previewDependencyUninstall, uninstallDependency } from '../services/dependenciesApi.js'
+import { activateLocalVision, verifyDependency, installDependency, loadDependencies, loadDependencyStatus, previewDependencyUninstall, uninstallDependency, loadDependencyPackage, saveDependencyPackageSource } from '../services/dependenciesApi.js'
 
 import { apiRequest } from '../services/api.js'
+import CapabilityChecks from './CapabilityChecks.vue'
 
 const props = defineProps({
   compact: { type: Boolean, default: false },
@@ -19,6 +20,36 @@ const activating = ref(false)
 const notice = ref('')
 const uninstallPlan = ref(null)
 const uninstallPanel = ref(null)
+const packagePanel = ref(null)
+const packageInfo = ref(null)
+const packageUrls = ref('')
+
+async function showPackage(item) {
+  if (busy.value) return
+  busy.value = true; error.value = ''
+  try {
+    packageInfo.value = { ...await loadDependencyPackage(item.id), label: item.label }
+    packageUrls.value = packageInfo.value.urls.join('\n')
+    await nextTick()
+    packagePanel.value?.scrollIntoView({ block: 'nearest' })
+    packagePanel.value?.focus({ preventScroll: true })
+  } catch (cause) { error.value = cause.message }
+  finally { busy.value = false }
+}
+
+async function savePackageSource() {
+  if (busy.value || !packageInfo.value) return
+  busy.value = true; error.value = ''
+  const item = packageInfo.value
+  try {
+    packageInfo.value = { ...await saveDependencyPackageSource(item.id, packageUrls.value.split(/\r?\n/).map(url => url.trim()).filter(Boolean)), label: item.label }
+    notice.value = packageInfo.value.urls.length ? '已保存下载地址；安装时会核对固定版本和完整性。' : '已恢复随程序提供的下载源。'
+  } catch (cause) { error.value = cause.message }
+  finally { busy.value = false }
+  const failure = error.value
+  await refresh()
+  if (failure) error.value = failure
+}
 
 async function prepareUninstall(item) {
   if (busy.value || item.installing) return
@@ -74,6 +105,7 @@ async function refresh() {
   if (busy.value) return
   busy.value = true
   error.value = ''
+  dependencies.value = []
   try {
     const result = await loadDependencies()
     dependencies.value = result.dependencies || []
@@ -85,6 +117,9 @@ async function refresh() {
     if (activeInstalls().length) startPolling()
     emit('refresh-environment')
   } catch (err) {
+    progress.value = {}
+    uninstallPlan.value = null
+    stopPolling()
     error.value = err.message || '依赖检查失败'
   } finally {
     busy.value = false
@@ -193,7 +228,12 @@ async function verify(item) {
     const result = await verifyDependency(item.id)
     notice.value = result.detail
   } catch (err) { error.value = err.message || '验证失败' }
-  finally { busy.value = false; await refresh() }
+  finally {
+    const failure = error.value
+    busy.value = false
+    await refresh()
+    if (failure) error.value = failure
+  }
 }
 
 function openUrl(url) {
@@ -209,6 +249,7 @@ function actionFor(item) {
   if (['genie_runtime', 'whisper'].includes(item.id) && ['unverified', 'degraded', 'ready'].includes(item.status)) return { kind: 'verify', label: item.status === 'ready' ? '重新验证' : '验证本地模型' }
   if (item.id === 'gpt_sovits' && item.status === 'unverified') return { kind: 'navigate', label: '去试听', target: 'settings-voice' }
   if (item.id === 'napcat' && item.status === 'configured') return { kind: 'navigate', label: '连接 QQ', target: 'settings-qq' }
+  if (item.local_package_available && item.status === 'missing') return { kind: 'install', label: '安装本机数据包' }
   if (item.offline_only && item.status === 'missing') return { kind: 'offline', label: '选择离线包安装' }
   if (item.kind === 'builtin') return { kind: 'none' }
   if (item.kind === 'configure') {
@@ -267,6 +308,15 @@ onBeforeUnmount(stopPolling)
 
     <div v-if="error" class="dependency-error">{{ error }}</div>
     <p v-if="notice" role="status" class="dependency-notice">{{ notice }}</p>
+    <section v-if="packageInfo" ref="packagePanel" tabindex="-1" class="dependency-package-panel" aria-label="组件获取与安装">
+      <div class="dependency-package-heading"><strong>{{ packageInfo.label }} · 获取与安装</strong><button type="button" @click="packageInfo = null">收起</button></div>
+      <p>{{ packageInfo.message }}</p>
+      <dl><dt>对应文件</dt><dd>{{ packageInfo.file_name }}</dd><dt>大小</dt><dd>{{ (packageInfo.size_bytes / 1024 / 1024).toFixed(1) }} MB</dd><dt>SHA-256</dt><dd>{{ packageInfo.sha256 }}</dd></dl>
+      <p class="dependency-package-note">{{ packageInfo.license_notice }}</p>
+      <button type="button" @click="openUrl(packageInfo.release_url)"><ExternalLink :size="14" />查看公开发布页</button>
+      <details><summary>已有下载链接</summary><label for="dependency-package-urls">HTTPS 下载地址（每行一个）</label><textarea id="dependency-package-urls" v-model="packageUrls" :disabled="busy" rows="3" placeholder="填写发布者提供的对应版本 ZIP 链接" /><small>地址可以更换，文件版本、大小和校验值保持固定。留空恢复程序默认源。</small><button type="button" :disabled="busy" @click="savePackageSource">保存下载地址</button></details>
+      <p>已有 ZIP 可点“选择离线包安装”；放在程序目录的“模型”文件夹内也会自动识别，安装前核对完整性。</p>
+    </section>
     <section v-if="uninstallPlan" ref="uninstallPanel" tabindex="-1" class="dependency-uninstall-confirm" aria-label="确认卸载模型">
       <strong>卸载 {{ uninstallPlan.label }}</strong>
       <p>{{ uninstallPlan.impact }}</p>
@@ -276,6 +326,8 @@ onBeforeUnmount(stopPolling)
       <button type="button" :disabled="busy || !uninstallPlan.paths.length" @click="confirmUninstall">确认卸载</button>
       <button type="button" :disabled="busy" @click="uninstallPlan = null">取消</button>
     </section>
+
+    <CapabilityChecks @navigate="emit('navigate', $event)" />
 
     <ul class="dependency-list">
       <li v-for="item in dependencies" :key="item.id" :class="['dependency-item', `status-${item.status}`, { installing: item.installing }]">
@@ -292,13 +344,15 @@ onBeforeUnmount(stopPolling)
             <small v-if="item.uninstall_blocker">{{ item.uninstall_blocker }}</small>
             <small v-if="item.status !== 'ready' && item.status !== 'configured'">{{ item.missing_effect }}</small>
             <small v-if="!['installed', 'unverified', 'degraded', 'ready', 'configured'].includes(item.status)" class="dependency-how">怎么装：{{ item.how }}</small>
-            <small v-if="item.offline_only" class="dependency-how">暂未提供在线包。对应文件：{{ item.package_name }}</small>
+            <small v-if="item.local_package_available" class="dependency-how">已找到本机数据包，安装前会核对完整性。</small>
+            <small v-else-if="item.offline_only" class="dependency-how">此版本尚未提供公开下载地址。可查看获取说明或选择已有 ZIP。</small>
             <small v-if="item.log_path" class="dependency-path">安装日志：{{ item.log_path }}</small>
             <small v-if="item.size_label" class="dependency-size">体积：{{ item.size_label }}</small>
             <small v-if="item.install_path" class="dependency-path">一键安装位置：{{ item.install_path }}</small>
             <div v-if="item.last_error" class="dependency-last-error">上次安装：{{ item.last_error }}</div>
           </div>
           <div class="dependency-item-actions">
+            <button v-if="['genie_runtime','gpt_sovits'].includes(item.id)" type="button" :disabled="busy || item.installing" @click="showPackage(item)">获取与安装</button>
             <button v-if="item.can_uninstall" type="button" :disabled="busy || item.installing" @click="prepareUninstall(item)">卸载</button>
             <template v-if="actionFor(item).kind === 'activate'">
               <button class="primary" type="button" :disabled="busy || activating" @click="activateVision"><RefreshCw :class="{ spin: activating }" :size="14" />{{ activating ? '正在启动并验证' : actionFor(item).label }}</button>
@@ -340,9 +394,19 @@ onBeforeUnmount(stopPolling)
 </template>
 
 <style scoped>
-.dependency-uninstall-confirm { margin: 12px 0; padding: 14px; border: 1px solid var(--line, #c9c3bd); border-radius: 10px; overflow-wrap: anywhere; }
-.dependency-uninstall-confirm p, .dependency-uninstall-confirm li { font-size: 12px; line-height: 1.6; }
-.dependency-uninstall-confirm button { margin-right: 8px; padding: 7px 12px; border: 1px solid var(--line, #c9c3bd); border-radius: 8px; background: var(--surface, #fff); color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
-.dependency-uninstall-confirm button:first-of-type { color: #983e4d; border-color: #d9aeb6; }
+.dependency-uninstall-confirm { margin: 12px 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; }
+.dependency-uninstall-confirm p, .dependency-uninstall-confirm li { font-size: calc(12px * var(--fs, 1)); line-height: 1.6; }
+.dependency-uninstall-confirm button { margin-right: 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: calc(12px * var(--fs, 1)); cursor: pointer; }
+.dependency-uninstall-confirm button:first-of-type { color: var(--danger); border-color: var(--danger); }
 .dependency-uninstall-confirm button:disabled { cursor: wait; opacity: .5; }
+.dependency-package-panel { margin: 16px 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; font-size: calc(12px * var(--fs, 1)); line-height: 1.7; overflow-wrap: anywhere; }
+.dependency-package-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dependency-package-panel dl { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 5px 12px; }
+.dependency-package-panel dd { margin: 0; }
+.dependency-package-panel dt, .dependency-package-note, .dependency-package-panel small { color: var(--text-muted); }
+.dependency-package-panel button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; font: inherit; cursor: pointer; }
+.dependency-package-panel details { margin: 16px 0; }
+.dependency-package-panel summary { cursor: pointer; }
+.dependency-package-panel label, .dependency-package-panel small { display: block; margin: 10px 0 6px; }
+.dependency-package-panel textarea { width: 100%; box-sizing: border-box; padding: 10px; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; font: inherit; }
 </style>

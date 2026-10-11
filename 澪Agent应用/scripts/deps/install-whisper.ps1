@@ -38,7 +38,7 @@ try {
     $python = Ensure-DepsVenv
 
     Write-DepsStatus -Stage "pip" -Percent 20 -Message "正在安装语音转写组件（清华镜像）"
-    Invoke-DepsPip -Python $python -Packages @("faster-whisper", "huggingface_hub") -Message "正在安装 faster-whisper..."
+    Invoke-DepsPip -Python $python -Packages @("faster-whisper", "huggingface_hub", "soundcard") -Message "正在安装 faster-whisper 与系统声音采集组件..."
 
     if (-not (Test-WhisperModel)) {
         Write-DepsStatus -Stage "model" -Percent 55 -Message "正在下载语音识别模型（约 145 MB，国内魔搭源）"

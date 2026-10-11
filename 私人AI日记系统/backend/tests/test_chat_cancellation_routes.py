@@ -26,6 +26,7 @@ class ChatCancellationRouteTests(unittest.IsolatedAsyncioTestCase):
             "desktop_test",
             source="desktop",
             reason="user_cancelled:request-1",
+            expected_request_id="request-1",
         )
 
     async def test_companion_cancel_does_not_cancel_phone_turns(self) -> None:
@@ -40,6 +41,7 @@ class ChatCancellationRouteTests(unittest.IsolatedAsyncioTestCase):
             companion_routes.DESKTOP_PET_CONVERSATION_ID,
             source="desktop_pet",
             reason="user_cancelled:pet-1",
+            expected_request_id="pet-1",
         )
 
 

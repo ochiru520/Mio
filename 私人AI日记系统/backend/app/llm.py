@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import time
 from dataclasses import dataclass
+from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
@@ -118,6 +120,10 @@ class CompletionResult:
     route: str = ""
     http_status: int = 0
     tool_calls: tuple[ToolCall, ...] = ()
+    protocol_mode: str = ''
+    protocol_message: dict[str, Any] | None = None
+    protocol_items: tuple[dict[str, Any], ...] = ()
+    reasoning_text: str = ''
 
 
 StreamDeltaCallback = Callable[[str, str], Awaitable[None] | None]
@@ -152,6 +158,12 @@ def _safe_nonnegative_float(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if number >= 0 else None
+
+
+def _responses_reasoning_summary(data: dict) -> str:
+    return '\n'.join(str(part.get('text') or '')
+                     for item in data.get('output', []) if isinstance(item, dict) and item.get('type') == 'reasoning'
+                     for part in item.get('summary', []) if isinstance(part, dict) and part.get('type') == 'summary_text')
 
 
 def _provider_reported_cost_yuan(
@@ -393,11 +405,13 @@ def _responses_request_payload(
     reasoning_level: str,
     tools: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {"model": profile.model, "input": messages}
+    from .agent_protocol_history import responses_input
+    payload: dict[str, Any] = {"model": profile.model, "input": responses_input(messages)}
     normalized = normalize_model_reasoning(profile.model, reasoning_level)
     if str(model_reasoning_config(profile.model)["parameter"]) == "reasoning_effort":
-        payload["reasoning"] = {"effort": normalized}
+        payload["reasoning"] = {"effort": normalized, "summary": "auto"}
     if tools:
+        payload['include'] = ['reasoning.encrypted_content']
         converted = []
         for tool in tools:
             function = tool.get("function") if isinstance(tool, dict) else None
@@ -406,6 +420,41 @@ def _responses_request_payload(
         if converted:
             payload["tools"] = converted
     return payload
+
+
+async def _rejected_summary_payload(response, payload):
+    if response.status_code not in {400, 422} or not (payload.get('reasoning') or {}).get('summary'):
+        return None
+    await response.aread()
+    try:
+        error=response.json().get('error', {})
+    except ValueError:
+        return None
+    if not isinstance(error, dict): return None
+    detail=str(error.get('message') or '').lower()
+    if str(error.get('param') or '') not in {'reasoning.summary', 'summary'} and not (
+        'summary' in detail and any(term in detail for term in ('unsupported', 'not supported', 'unknown', 'unrecognized'))):
+        return None
+    return {**payload, 'reasoning': {k:v for k,v in payload['reasoning'].items() if k!='summary'}}
+
+
+async def _completion_post(client, url, *, headers, json):
+    response=await client.post(url,headers=headers,json=json)
+    fallback=await _rejected_summary_payload(response,json)
+    if fallback is not None:
+        response=await client.post(url,headers=headers,json=fallback)
+    return response
+
+
+@asynccontextmanager
+async def _completion_stream(client, method, url, *, headers, json):
+    async with client.stream(method,url,headers=headers,json=json) as response:
+        fallback=await _rejected_summary_payload(response,json)
+        if fallback is None:
+            yield response
+        else:
+            async with client.stream(method,url,headers=headers,json=fallback) as retried:
+                yield retried
 
 
 def _responses_message(data: dict[str, Any]) -> tuple[str, list[ToolCall]]:
@@ -513,9 +562,10 @@ async def call_chat_completion_result(
     if profile.api_mode == "messages":
         raise LLMConfigError("这个模型使用 Anthropic /messages，当前版本尚未接入。")
     responses_payload = _responses_request_payload(profile, messages, reasoning_level, tools)
+    from .agent_protocol_history import chat_messages
     chat_payload: dict[str, Any] = {
         "model": profile.model,
-        "messages": messages,
+        "messages": chat_messages(messages),
         "temperature": temperature,
     }
     if tools:
@@ -551,7 +601,7 @@ async def call_chat_completion_result(
                 if route.proxy_url:
                     client_kwargs["proxy"] = route.proxy_url
                 async with httpx.AsyncClient(**client_kwargs) as client:
-                    response = await client.post(
+                    response = await _completion_post(client,
                         _completion_url(route.base_url, request_api_mode),
                         headers=_completion_headers(
                             profile,
@@ -707,6 +757,11 @@ async def call_chat_completion_result(
             route=_route_name(route),
             http_status=response.status_code,
             tool_calls=tuple(parsed_tool_calls),
+            reasoning_text=(_responses_reasoning_summary(data) if route.api_mode == 'responses'
+                            else _chat_message_text(message.get('reasoning_content') or message.get('reasoning_summary'))),
+            protocol_mode=route.api_mode,
+            protocol_message=dict(message) if route.api_mode != 'responses' else None,
+            protocol_items=tuple(item for item in data.get('output', []) if isinstance(item, dict)) if route.api_mode == 'responses' else (),
         )
 
     detail = "；".join(errors[-4:]) if errors else "没有返回有效响应"
@@ -737,56 +792,57 @@ async def call_chat_completion_stream_result(
     reasoning_level: str = "standard",
     *,
     on_delta: StreamDeltaCallback | None = None,
+    on_reasoning: StreamDeltaCallback | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
     retry_attempts: int = 2,
     request_id: str = "",
 ) -> CompletionResult:
     """Read an OpenAI-compatible SSE response while preserving usage metadata."""
     require_configured(model_id)
     profile = get_model_profile(resolve_model_id(model_id))
-    if profile.api_mode != "chat_completions":
-        result = await call_chat_completion_result(
-            messages,
-            temperature=temperature,
-            model_id=profile.id,
-            reasoning_level=reasoning_level,
-            retry_attempts=retry_attempts,
-            request_id=request_id,
-        )
-        if on_delta and result.content:
-            maybe_awaitable = on_delta(result.content, "content")
-            if maybe_awaitable is not None:
-                await maybe_awaitable
-        return result
+    if profile.api_mode == 'messages':
+        raise LLMConfigError('当前尚未接入 Anthropic /messages 流式协议。')
+    from .agent_protocol_history import chat_messages
     payload = {
         "model": profile.model,
-        "messages": messages,
+        "messages": chat_messages(messages),
         "temperature": temperature,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
     _apply_reasoning_parameters(payload, profile.model, reasoning_level)
-    provider_idempotency_key = _provider_idempotency_key(request_id, payload)
+    if tools:
+        payload['tools']=tools; payload['tool_choice']=tool_choice or 'auto'
     routes = _completion_routes(profile)
     if not routes:
         raise LLMConfigError("缺少可用的模型请求路线。请检查 OPENAI_BASE_URL / OPENAI_PROXY_URL。")
 
     errors: list[str] = []
+    stream_unsupported=False
     attempt_records: list[dict[str, object]] = []
     max_attempts = max(1, min(3, int(retry_attempts)))
     deadline = _request_deadline()
     for route in routes:
+        request_payload=({**_responses_request_payload(profile,messages,reasoning_level,tools),'stream':True}
+                         if route.api_mode=='responses' else payload)
+        provider_idempotency_key=_provider_idempotency_key(request_id,request_payload)
         for attempt in range(max_attempts):
             remaining = _remaining_request_seconds(deadline)
             if remaining <= 0:
                 errors.append(f"{route.label} {route.base_url} -> 请求总时限已到")
                 break
             content_parts: list[str] = []
+            reasoning_parts: list[str] = []
+            tool_parts: dict[int, dict] = {}
             usage: dict[str, Any] = {}
             response_model = profile.model
             response_headers = httpx.Headers()
             response: httpx.Response | None = None
             request_started = time.perf_counter()
             first_token_latency_ms: float | None = None
+            completed=False
+            completed_response={}
             try:
                 client_kwargs: dict[str, Any] = {
                     "timeout": min(float(settings.openai_timeout_seconds), remaining),
@@ -795,9 +851,9 @@ async def call_chat_completion_stream_result(
                 if route.proxy_url:
                     client_kwargs["proxy"] = route.proxy_url
                 async with httpx.AsyncClient(**client_kwargs) as client:
-                    async with client.stream(
+                    async with _completion_stream(client,
                         "POST",
-                        _completion_url(route.base_url),
+                        _completion_url(route.base_url,route.api_mode),
                         headers=_completion_headers(
                             profile,
                             route.auth_scheme,
@@ -805,11 +861,17 @@ async def call_chat_completion_stream_result(
                             idempotency_key=provider_idempotency_key,
                             base_url=route.base_url,
                         ),
-                        json=payload,
+                        json=request_payload,
                     ) as response:
                         response_headers = httpx.Headers(response.headers)
                         if response.status_code >= 400:
                             await response.aread()
+                            if response.status_code in {400,422}:
+                                try:
+                                    error=response.json().get('error',{})
+                                    if isinstance(error,dict) and str(error.get('param','')) in {'stream','stream_options'}:
+                                        stream_unsupported=True
+                                except ValueError: pass
                             errors.append(_route_error_text(route, response))
                             attempt_records.append(_attempt_record(route, response))
                             break
@@ -819,13 +881,57 @@ async def call_chat_completion_stream_result(
                                 continue
                             if clean.startswith("data:"):
                                 clean = clean[5:].strip()
-                            if not clean or clean == "[DONE]":
+                            if clean == '[DONE]':
+                                completed=True
+                                continue
+                            if not clean:
                                 continue
                             try:
                                 event = json.loads(clean)
                             except (TypeError, ValueError):
                                 continue
                             if not isinstance(event, dict):
+                                continue
+                            if event.get('error') or event.get('type') in {'error','response.failed','response.incomplete'}:
+                                raise ModelRequestError('模型流式服务报告失败或未完成，已保留输出片段。',profile=profile,
+                                    request_id=request_id,route=_route_name(route),attempts=attempt_records)
+                            if route.api_mode=='responses':
+                                # Some compatible providers ignore stream=true
+                                # and return one explicit JSON response instead.
+                                if (not event.get('type') and isinstance(event.get('output'),list)
+                                        and event.get('status','completed')=='completed'):
+                                    event={'type':'response.completed','response':event}
+                                if event.get('type') in {'response.reasoning_summary_text.delta'}:
+                                    piece=str(event.get('delta') or '')
+                                    if piece:
+                                        reasoning_parts.append(piece)
+                                        if on_reasoning:
+                                            callback_result=on_reasoning(piece,''.join(reasoning_parts))
+                                            if inspect.isawaitable(callback_result): await callback_result
+                                    continue
+                                if event.get('type')=='response.completed':
+                                    completed=True; completed_response=event.get('response') or {}
+                                    if not isinstance(completed_response,dict):
+                                        raise ModelRequestError('模型完成回执格式无效。',profile=profile,request_id=request_id)
+                                    usage=completed_response.get('usage') or usage
+                                    response_model=str(completed_response.get('model') or response_model)
+                                    if not reasoning_parts:
+                                        summary = _responses_reasoning_summary(completed_response)
+                                        if summary:
+                                            reasoning_parts.append(summary)
+                                            if on_reasoning:
+                                                callback_result = on_reasoning(summary, summary)
+                                                if inspect.isawaitable(callback_result): await callback_result
+                                    piece=_responses_message(completed_response)[0] if not content_parts else ''
+                                elif event.get('type')=='response.output_text.delta':
+                                    piece=str(event.get('delta') or '')
+                                else: continue
+                                if piece:
+                                    content_parts.append(piece)
+                                    if first_token_latency_ms is None: first_token_latency_ms=round((time.perf_counter()-request_started)*1000,2)
+                                    if on_delta is not None:
+                                        callback_result=on_delta(piece,''.join(content_parts))
+                                        if inspect.isawaitable(callback_result): await callback_result
                                 continue
                             if isinstance(event.get("usage"), dict):
                                 usage = dict(event["usage"])
@@ -834,7 +940,25 @@ async def call_chat_completion_stream_result(
                             if not isinstance(choices, list) or not choices:
                                 continue
                             choice = choices[0] if isinstance(choices[0], dict) else {}
+                            if choice.get('finish_reason') in {'length','content_filter'}:
+                                raise ModelRequestError('模型正文未完整生成，已有片段保留，请核对后继续。',profile=profile,
+                                    request_id=request_id,route=_route_name(route),attempts=attempt_records)
+                            if choice.get('finish_reason'): completed=True
                             delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+                            reason_piece = _chat_message_text(delta.get('reasoning_content') or delta.get('reasoning_summary'))
+                            if reason_piece:
+                                reasoning_parts.append(reason_piece)
+                                if on_reasoning:
+                                    callback_result=on_reasoning(reason_piece,''.join(reasoning_parts))
+                                    if inspect.isawaitable(callback_result): await callback_result
+                            for item in delta.get('tool_calls') or []:
+                                index=item.get('index',0)
+                                if not isinstance(index,int) or index<0 or index>64: continue
+                                part=tool_parts.setdefault(index,{'id':'','type':'function','function':{'name':'','arguments':''}})
+                                if item.get('id'): part['id']=item['id']
+                                fn=item.get('function') or {}
+                                part['function']['name']+=str(fn.get('name') or '')
+                                part['function']['arguments']+=str(fn.get('arguments') or '')
                             piece = _chat_message_text(delta.get("content"))
                             if not piece:
                                 continue
@@ -846,10 +970,10 @@ async def call_chat_completion_stream_result(
                                 )
                             if on_delta is not None:
                                 callback_result = on_delta(piece, "".join(content_parts))
-                                if asyncio.iscoroutine(callback_result):
+                                if inspect.isawaitable(callback_result):
                                     await callback_result
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                if content_parts:
+                if content_parts or reasoning_parts or tool_parts:
                     raise ModelRequestError(
                         f"模型流式响应中断：{_route_error_text(route, exc)}",
                         profile=profile,
@@ -864,8 +988,14 @@ async def call_chat_completion_stream_result(
                 attempt_records.append(_attempt_record(route, exc))
                 break
 
-            content = "".join(content_parts).strip()
-            if not content:
+            content = (_responses_message(completed_response)[0] or ''.join(content_parts)).strip()
+            parsed_calls = (_responses_message(completed_response)[1] if route.api_mode=='responses' else [
+                ToolCall(call_id=p['id'] or f'call_{i}',name=p['function']['name'],arguments_json=p['function']['arguments'] or '{}')
+                for i,p in sorted(tool_parts.items())])
+            if (content or parsed_calls or reasoning_parts) and not completed:
+                raise ModelRequestError('模型流式连接提前关闭，缺少完成回执；已有正文片段保留。',profile=profile,
+                    request_id=request_id,route=_route_name(route),attempts=attempt_records)
+            if not content and not parsed_calls:
                 if response is not None and response.status_code >= 400:
                     break
                 errors.append(f"{route.label} {route.base_url} -> 流式响应没有正文")
@@ -873,9 +1003,9 @@ async def call_chat_completion_stream_result(
                     continue
                 break
 
-            prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))
-            completion_tokens = max(0, int(usage.get("completion_tokens") or 0))
-            completion_details = usage.get("completion_tokens_details")
+            prompt_tokens = max(0, int(usage.get("prompt_tokens") or usage.get('input_tokens') or 0))
+            completion_tokens = max(0, int(usage.get("completion_tokens") or usage.get('output_tokens') or 0))
+            completion_details = usage.get("completion_tokens_details") or usage.get('output_tokens_details')
             reasoning_tokens = 0
             if isinstance(completion_details, dict):
                 reasoning_tokens = max(0, int(completion_details.get("reasoning_tokens") or 0))
@@ -916,8 +1046,24 @@ async def call_chat_completion_stream_result(
                 provider_request_id=provider_request_id,
                 route=_route_name(route),
                 http_status=response.status_code if response is not None else 200,
+                protocol_mode=route.api_mode,
+                tool_calls=tuple(parsed_calls),
+                reasoning_text=''.join(reasoning_parts),
+                protocol_message=({'role':'assistant','content':content or None,'tool_calls':list(tool_parts.values()),
+                                   **({'reasoning_content':''.join(reasoning_parts)} if reasoning_parts else {})} if route.api_mode!='responses' else None),
+                protocol_items=tuple(completed_response.get('output') or []),
             )
 
+    if stream_unsupported:
+        result=await call_chat_completion_result(messages,temperature=temperature,model_id=model_id,
+            reasoning_level=reasoning_level,retry_attempts=1,request_id=request_id,tools=tools,tool_choice=tool_choice)
+        if on_reasoning and result.reasoning_text:
+            callback_result=on_reasoning(result.reasoning_text,result.reasoning_text)
+            if inspect.isawaitable(callback_result): await callback_result
+        if on_delta and result.content:
+            callback_result=on_delta(result.content,result.content)
+            if inspect.isawaitable(callback_result): await callback_result
+        return result
     detail = "；".join(errors[-4:]) if errors else "没有返回有效流式响应"
     last_attempt = attempt_records[-1] if attempt_records else {}
     raise ModelRequestError(

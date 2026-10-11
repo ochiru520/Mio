@@ -120,6 +120,7 @@ export function useMessagePresentation(deps) {
     }[source] || '价格待配置'
   }
   function sourceLabel(source) {
+    if (source === 'wechat') return '微信'
     if (source === 'qq') return 'QQ'
     if (source === 'desktop') return '应用'
     if (source === 'desktop_pet' || source === 'desktop_pet_wake') return '桌宠'
@@ -147,9 +148,6 @@ export function useMessagePresentation(deps) {
   function compactModelLabel(model) {
     const displayName = typeof model === 'string' ? model : model?.display_name || model?.model || ''
     return String(displayName || '自动')
-      .replace(/^DeepSeek\s*/i, '')
-      .replace(/^GPT-/i, '')
-      .replace(/\s*·\s*/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
   }
@@ -202,7 +200,7 @@ export function useMessagePresentation(deps) {
     return Number(turn?.prompt_tokens || 0) + Number(turn?.completion_tokens || 0)
   }
   function toolReceiptLabel(receipt) {
-    return deps.toolReceiptLabels[receipt?.tool_name] || receipt?.tool_name || '工具'
+    return deps.toolReceiptLabels[receipt?.tool_name] || receipt?.display_name || '执行操作'
   }
   function toolReceiptStatus(receipt) {
     const status = String(receipt?.status || '')

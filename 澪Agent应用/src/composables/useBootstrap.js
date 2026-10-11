@@ -8,6 +8,7 @@ import { filterConversationsForWorkspace } from '../workspaceState.js'
 import * as qqApi from '../services/qqApi.js'
 
 export function useBootstrap(deps) {
+  let tokenUsageVersion = 0
   async function refreshContextUsage() {
     const conversationId = deps.selectedConversationId.value
     if (!conversationId) return
@@ -32,14 +33,17 @@ export function useBootstrap(deps) {
     }
   }
   async function openTokenUsagePanel() {
+    const version = ++tokenUsageVersion
     deps.showTokenUsagePanel.value = true
     deps.tokenUsageLoading.value = true
+    deps.tokenUsageError.value = ''
     try {
-      deps.tokenUsageData.value = await deps.request('/api/agent/token-usage?days=30')
+      const data = await deps.request('/api/agent/token-usage?days=30')
+      if (version === tokenUsageVersion) deps.tokenUsageData.value = data
     } catch (error) {
-      deps.errorMessage.value = error.message
+      if (version === tokenUsageVersion) deps.tokenUsageError.value = error.message
     } finally {
-      deps.tokenUsageLoading.value = false
+      if (version === tokenUsageVersion) deps.tokenUsageLoading.value = false
     }
   }
   function formatTokenCount(value) {
@@ -88,6 +92,7 @@ export function useBootstrap(deps) {
       if (data.qq?.group_chat) {
         const preserveGroupDraft = deps.activeView.value === 'settings'
           && deps.activeSettingsSection.value === 'qq'
+          && Boolean(deps.savedGroupChatSettings.value)
           && deps.isSettingsSectionDirty('qq')
         if (!preserveGroupDraft) {
           deps.groupChatSettings.value = { ...deps.groupChatSettings.value, ...data.qq.group_chat }

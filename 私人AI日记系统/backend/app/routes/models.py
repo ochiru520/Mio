@@ -43,6 +43,14 @@ from ..provider_presets import provider_preset, public_provider_presets
 router = APIRouter()
 
 
+@router.get('/models/catalog')
+async def model_catalog():
+    from ..model_registry import hidden_default_provider_records
+    return {'models': [public_model_profile(p) for p in list_model_profiles()],
+            'provider_presets': public_provider_presets(),
+            'hidden_model_providers': hidden_default_provider_records()}
+
+
 def _provider_client_routes() -> list[tuple[str, str]]:
     mode = str(settings.openai_proxy_mode or "auto").strip().lower()
     proxy_url = str(settings.openai_proxy_url or "").strip()

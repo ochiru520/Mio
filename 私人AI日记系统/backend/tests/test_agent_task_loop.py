@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app import db, agent_task_service as tasks
-from app.agent_loop_service import run_agent_loop, _planner_history
+from app.agent_loop_service import run_agent_loop, _planner_history, AgentLoopResult
 from app.agent_tool_service import ToolExecutionResult
 from app.chat_service import _guard_agent_creation_completion_claim
 from app.llm import ToolCall
@@ -100,6 +100,49 @@ class AgentTaskLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(model.await_count, 1)
         self.assertEqual(result.observations, ())
 
+    async def test_resuming_blocked_task_without_new_action_keeps_it_unfinished(self):
+        initial, _ = await self.run_loop([
+            _completion(call('agent_task_update', decision='ask_user', blocker='需要选择已打开的记事本窗口'))
+        ])
+        self.assertEqual(initial.status, 'waiting_user')
+        tasks.resume(initial.task_id)
+        resumed, _ = await self.run_loop([_completion()], request_id='blocked-resume', task_id=initial.task_id)
+        self.assertEqual(resumed.status, 'waiting_user')
+        self.assertEqual(tasks.get(initial.task_id)['snapshot']['blocker'], '需要选择已打开的记事本窗口')
+
+    async def test_resumed_task_can_explicitly_report_verified_completion(self):
+        initial, _ = await self.run_loop([
+            _completion(call('agent_task_update', decision='ask_user', blocker='需要确认现有结果'))
+        ])
+        tasks.resume(initial.task_id)
+        resumed, _ = await self.run_loop([
+            _completion(call('agent_task_update', decision='completed', blocker='')),
+            _completion(),
+        ], request_id='resolved-resume', task_id=initial.task_id)
+        self.assertEqual(resumed.status, 'completed')
+
+    async def test_final_reply_context_keeps_receipts_from_before_resume(self):
+        initial, _ = await self.run_loop([
+            _completion(call('get_today_state')),
+            _completion(call('agent_task_update', decision='ask_user', blocker='等待结果确认')),
+        ])
+        tasks.resume(initial.task_id)
+        resumed, _ = await self.run_loop([
+            _completion(call('agent_task_update', decision='completed', blocker='')),
+            _completion(),
+        ], request_id='receipt-resume', task_id=initial.task_id)
+        context = resumed.model_context()
+        self.assertIn('get_today_state', context)
+        step_id = initial.observations[0].step_id
+        payload = json.loads(context.split('\n', 1)[1])
+        self.assertEqual(sum(o['step_id'] == step_id for o in payload['observations']), 1)
+
+    def test_desktop_approval_progress_is_not_replaced_with_image_notice(self):
+        agent = AgentLoopResult('desktop-run', 'waiting_confirmation', 'native',
+            (ToolExecutionResult('desktop_act', 'needs_confirmation', {'task_id': 12}, 1, action_id=12),), (), False, 1)
+        reply = ['键盘操作已提交，正在等待确认。']
+        self.assertEqual(_guard_agent_creation_completion_claim(reply, self.conversation, agent), reply)
+
     async def test_invalid_tool_is_observed_before_recovery(self):
         result, model = await self.run_loop([
             _completion(call("unknown_tool")), _completion(call("get_today_state")), _completion(),
@@ -163,3 +206,4 @@ class AgentTaskLoopTests(unittest.IsolatedAsyncioTestCase):
                 replies = _guard_agent_creation_completion_claim(["图片已经生成完成。"], self.conversation, agent)
                 self.assertNotIn("正在后台生成", "".join(replies))
                 self.assertNotIn("已提交", "".join(replies))
+

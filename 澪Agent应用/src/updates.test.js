@@ -55,6 +55,36 @@ test('the UI cannot send arbitrary commands through the updater client', async (
   assert.equal(called, false)
 })
 
+test('a late polling failure cannot overwrite a successful download', async () => {
+  let reject
+  const pollingResult = new Promise((resolve, fail) => { reject = fail })
+  const client = createUpdateClient(() => ({
+    update_status: () => pollingResult,
+    download_update: async () => ({ ok: true, status: { state: 'downloading' } }),
+  }))
+  const polling = client.refresh()
+  await client.invoke('download_update')
+  reject(new Error('旧请求连接失败'))
+  await polling
+  assert.equal(client.error.value, '')
+  assert.equal(client.state.value.state, 'downloading')
+})
+
+test('a recovered status read clears an earlier connection error', async () => {
+  let online = false
+  const client = createUpdateClient(() => ({
+    update_status: async () => {
+      if (!online) throw new Error('暂时离线')
+      return { ok: true, status: { state: 'idle' } }
+    },
+  }))
+  await client.refresh()
+  assert.equal(client.error.value, '暂时离线')
+  online = true
+  await client.refresh()
+  assert.equal(client.error.value, '')
+})
+
 test('installation is never triggered by checking or downloading', async () => {
   const commands = []
   const client = createUpdateClient(() => ({

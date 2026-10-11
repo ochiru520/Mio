@@ -88,11 +88,12 @@ watch(() => props.section, section => { if (section === 'files') void loadFiles(
 <template>
   <div class="agent-task-settings">
     <section v-show="section === 'budget'" class="agent-settings-section">
+      <header class="agent-setting-title"><h1>任务执行</h1><p>执行过程、任务预算与停止条件</p><div class="agent-settings-header-actions"><button type="button" :disabled="!budgetReady || budgetBusy" @click="Object.assign(limits, savedLimits)">取消更改</button><button type="submit" form="agent-budget-form" class="primary" :disabled="!budgetReady || budgetBusy">{{ budgetBusy ? '正在保存' : '保存更改' }}</button></div></header>
       <p v-if="budgetError" role="alert" class="agent-settings-message error">{{ budgetError }}</p>
       <p v-if="budgetNotice" role="status" class="agent-settings-message">{{ budgetNotice }}</p>
       <p class="agent-setting-note">默认持续执行到完成、需要补充信息或你主动停止。连续没有进展时会暂停。</p>
       <div v-if="!budgetReady" class="agent-settings-actions"><span>{{ budgetLoading ? '正在读取预算' : '预算读取失败' }}</span><button type="button" title="重新读取预算" :disabled="budgetLoading" @click="loadBudget"><RefreshCw :size="16" /></button></div>
-      <form @submit.prevent="saveLimits">
+      <form id="agent-budget-form" @submit.prevent="saveLimits">
         <fieldset :disabled="!budgetReady || budgetBusy" class="agent-settings-group">
           <label class="agent-setting-row"><span>启用每轮执行限制</span><input v-model="limits.enabled" type="checkbox" /></label>
           <div v-if="limits.enabled">
@@ -101,11 +102,11 @@ watch(() => props.section, section => { if (section === 'files') void loadFiles(
           <label class="agent-setting-row"><span>执行时限（秒）</span><input v-model.number="limits.seconds" required type="number" min="15" max="1800" step="1" /></label>
           <label class="agent-setting-row"><span>模型费用上限（元）</span><input v-model.number="limits.cost_yuan" required type="number" min="0.01" max="100" step="0.01" /></label>
           </div>
-          <footer class="agent-form-footer"><button type="button" @click="Object.assign(limits, savedLimits)"><X :size="15" />取消</button><button type="submit" class="primary"><Save :size="16" />{{ budgetBusy ? '正在保存' : '保存预算' }}</button></footer>
         </fieldset>
       </form>
     </section>
     <section v-show="section === 'files'" class="agent-settings-section">
+      <header class="agent-setting-title"><h1>文件权限</h1><p>管理澪可以读取的项目资料目录</p></header>
       <p v-if="filesError" role="alert" class="agent-settings-message error">{{ filesError }}</p>
       <p v-if="filesNotice" role="status" class="agent-settings-message">{{ filesNotice }}</p>
       <div v-if="!filesReady" class="agent-settings-actions"><span>{{ filesLoading ? '正在读取目录' : '目录读取失败' }}</span><button type="button" title="重新读取目录" :disabled="filesLoading" @click="loadFiles"><RefreshCw :size="16" /></button></div>

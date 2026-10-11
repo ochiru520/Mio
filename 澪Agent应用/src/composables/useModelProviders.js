@@ -3,6 +3,7 @@
  * Dependencies are accessors so async callbacks see the latest state.
  */
 import * as settingsApi from '../services/settingsApi.js'
+import { notifyModelCatalogChanged } from '../modelCatalogSync.js'
 
 export function useModelProviders(deps) {
   function resetProviderForm() {
@@ -58,9 +59,8 @@ export function useModelProviders(deps) {
     deps.providerDiscoveryWarning.value = ''
   }
   async function openProviderPanel() {
-    deps.activeView.value = 'settings'
-    deps.activeSettingsSection.value = 'models'
-    localStorage.setItem('mio_settings_section', 'models')
+    await deps.openSettingsSection('models')
+    if (deps.activeView.value !== 'settings' || deps.activeSettingsSection.value !== 'models') return
     resetProviderForm()
     deps.showProviderPanel.value = true
   }
@@ -109,6 +109,7 @@ export function useModelProviders(deps) {
       })
       const lastModel = created.models?.at(-1)
       if (!lastModel) throw new Error('供应商没有保存任何模型。')
+      notifyModelCatalogChanged()
       await deps.loadBootstrap({ quiet: true })
       deps.selectedModel.value = lastModel.id
       deps.persistSelectedModel()
@@ -172,12 +173,20 @@ export function useModelProviders(deps) {
   }
   async function deleteProvider(model) {
     if (!model.is_custom || deps.providerBusy.value) return
+    const confirmed = await deps.showAppConfirm({
+      title: `删除模型“${model.display_name || model.model}”？`,
+      message: '将移除这个模型配置，并清理默认模型和自动选择策略中的引用。同一供应商的其他模型保留。',
+      confirmText: '删除模型',
+      danger: true,
+    })
+    if (!confirmed) return
     deps.providerBusy.value = true
     deps.errorMessage.value = ''
     try {
       await deps.request(`/api/agent/models/${encodeURIComponent(model.id)}`, { method: 'DELETE' })
       if (deps.selectedModel.value === model.id) deps.selectedModel.value = 'auto'
       deps.persistSelectedModel()
+      notifyModelCatalogChanged()
       await deps.loadBootstrap({ quiet: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -205,6 +214,7 @@ export function useModelProviders(deps) {
       if (deletedIds.has(deps.selectedModel.value)) deps.selectedModel.value = 'auto'
       deps.persistSelectedModel()
       if (deletedIds.has(deps.chatSettingsDraft.value.model_id)) deps.chatSettingsDraft.value.model_id = 'auto'
+      notifyModelCatalogChanged()
       await deps.loadBootstrap({ quiet: true })
       deps.showSettingsFeedback('models', 'success', `已删除供应商“${group.provider}”`)
     } catch (error) {
@@ -222,6 +232,7 @@ export function useModelProviders(deps) {
         method: 'POST',
         body: '{}',
       })
+      notifyModelCatalogChanged()
       await deps.loadBootstrap({ quiet: true })
       deps.showSettingsFeedback('models', 'success', `已恢复内置供应商“${provider.display_name}”`)
     } catch (error) {

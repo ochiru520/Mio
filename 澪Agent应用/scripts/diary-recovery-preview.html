@@ -12,9 +12,9 @@ const context=reactive({
  modelOptions:[{id:'model-a',provider_name:'供应商甲',display_name:'模型 A'},{id:'model-b',provider_name:'供应商乙',display_name:'模型 B'}],
  isSettingsSectionDirty:()=>true,saveActiveSettings:()=>{window.savedModel=context.runtimeSettingsDraft.daily_diary_model_id},resetActiveSettings:()=>{},
  openDiarySettings:()=>{context.activeView='settings'},retryAutoDiary:()=>{window.retryCount=(window.retryCount||0)+1;context.autoDiaryStatus.busy=true;context.autoDiaryStatus.error='';context.autoDiaryStatus.result='generating';context.autoDiaryStatusLabel='正在补写 09-05 的日记'},
- scheduleDiarySearch:()=>{},openDiary:()=>{},
+ loadMemoryHub:async()=>{}, loadDiaries:async()=>{}, memoryHub:{}, scheduleDiarySearch:()=>{},openDiary:()=>{},
 })
 window.diaryContext=context
-createApp({render:()=>h('div',{class:'app-shell integrated-shell',style:'height:100vh;display:block;padding:32px 24px'},[h('main',{style:'height:100%;overflow:auto'},[h(context.activeView==='settings'?Settings:Records)])])})
+createApp({render:()=>h('div',{class:'app-shell integrated-shell',style:'height:100vh;width:100%;box-sizing:border-box;display:block;padding:24px'},[h('main',{style:'height:100%;min-height:0;min-width:0;width:100%;overflow:auto;display:flex;flex-direction:column'},[h(context.activeView==='settings'?Settings:Records)])])})
 .provide('mio-records-page',context).provide('mio-settings-page',context).mount('#app')
 </script></body></html>

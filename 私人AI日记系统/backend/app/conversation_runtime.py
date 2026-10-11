@@ -95,6 +95,7 @@ class _RunEntry(Generic[T]):
     task: asyncio.Task[None] | None = None
     started: asyncio.Event = field(default_factory=asyncio.Event)
     cancel_reason: str = ""
+    request_id: str = ""
 
 
 @dataclass
@@ -135,12 +136,13 @@ class ConversationRunCoordinator(Generic[T]):
         *,
         capture_seconds: float = 4.0,
         max_capture_count: int = 2,
+        request_id: str = "",
     ) -> T:
         state = await self._state(conversation_id)
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
         trace = await self._traces.start(conversation_id, source)
-        entry = _RunEntry(runner=runner, future=future, trace=trace)
+        entry = _RunEntry(runner=runner, future=future, trace=trace, request_id=request_id)
 
         async with state.lock:
             active = state.active
@@ -149,7 +151,8 @@ class ConversationRunCoordinator(Generic[T]):
                 asyncio.create_task(self._run_entry(conversation_id, state, entry))
             elif (
                 not active.future.done()
-                and time.monotonic() - active.started_at <= max(0.0, capture_seconds)
+                and capture_seconds > 0
+                and time.monotonic() - active.started_at <= capture_seconds
                 and active.capture_count < max(0, max_capture_count)
             ):
                 # The active runner must reach its first suspension before it
@@ -158,6 +161,7 @@ class ConversationRunCoordinator(Generic[T]):
                 # half of a user's unfinished message.
                 await active.started.wait()
                 active.replacement = runner
+                active.request_id = request_id
                 active.capture_count += 1
                 active.trace.replaced_count += 1
                 active.trace.mark("follow_up_captured")
@@ -184,6 +188,7 @@ class ConversationRunCoordinator(Generic[T]):
         *,
         source: str = "",
         reason: str = "request_cancelled",
+        expected_request_id: str = "",
     ) -> int:
         async with self._states_lock:
             state = self._states.get(conversation_id)
@@ -193,7 +198,8 @@ class ConversationRunCoordinator(Generic[T]):
         cancelled = 0
         async with state.lock:
             active = state.active
-            if active is not None and (not source or active.trace.source == source):
+            if (active is not None and (not source or active.trace.source == source)
+                    and (not expected_request_id or active.request_id == expected_request_id)):
                 active.cancel_reason = str(reason or "request_cancelled")[:200]
                 active.replacement = None
                 if active.task is not None and not active.task.done():
@@ -203,7 +209,8 @@ class ConversationRunCoordinator(Generic[T]):
             retained: deque[_RunEntry[T]] = deque()
             while state.queued:
                 entry = state.queued.popleft()
-                if source and entry.trace.source != source:
+                if ((source and entry.trace.source != source)
+                        or (expected_request_id and entry.request_id != expected_request_id)):
                     retained.append(entry)
                     continue
                 entry.cancel_reason = str(reason or "request_cancelled")[:200]

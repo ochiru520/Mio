@@ -52,8 +52,19 @@ test('formats creation progress, elapsed time, prompts and local cost', () => {
   ])
   assert.equal(
     creationSamplerLabel(job),
-    '双采样：4 steps · CFG 1.0 · euler / simple · denoise 1.0 → 0.36',
+    '',
   )
+})
+
+test('reports actual image and video samplers without assuming Anima defaults', () => {
+  const image = { spec: { workflow_snapshot: { samplers: [
+    { node_type: 'KSampler', steps: 8, cfg: 1, sampler_name: 'euler', scheduler: 'simple', denoise: 1 },
+  ] } } }
+  assert.equal(creationSamplerLabel(image), '8 steps · CFG 1 · euler / simple · denoise 1')
+  const video = { spec: { frame_count: 124, fps: 24, upscale_factor: 1.5,
+    workflow_snapshot: { samplers: [{ node_type: 'SamplerCustomAdvanced' }, { node_type: 'SamplerCustomAdvanced' }] },
+  } }
+  assert.equal(creationSamplerLabel(video), '双采样 · 沿用工作流调度 · 124 帧 · 24 fps · 1.5 倍潜空间放大')
 })
 
 test('labels terminal and unknown creation states without inventing cost', () => {

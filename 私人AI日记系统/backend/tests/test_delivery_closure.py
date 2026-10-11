@@ -111,3 +111,14 @@ def test_diagnostics_does_not_export_private_fields():
     assert report['checked_at']
     assert 'private' not in str(report) and 'secret' not in str(report)
     assert not report['dependencies'][0]['verified']
+
+
+def test_behavior_baseline_is_allowlisted_and_repeatable():
+    from app.diagnostic_export import behavior_baseline
+    with patch('app.capability_checks.snapshot', return_value={'capabilities': [{'id': 'workspace', 'status': 'available', 'path': 'private'}]}):
+        report = behavior_baseline()
+    assert report['schema_version'] == 1
+    assert report['app_version']
+    assert report['table_counts']['messages'] >= 0
+    assert 'private' not in str(report)
+    assert report['contracts']['audio']

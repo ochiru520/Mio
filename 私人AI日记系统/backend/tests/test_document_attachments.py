@@ -82,6 +82,26 @@ class DocumentAttachmentTests(unittest.TestCase):
         self.assertIn("工作表：任务", parsed.text_attachment.content)
         self.assertIn("视频解析 | 进行中 | 1", parsed.text_attachment.content)
 
+    def test_xlsx_preserves_zero_and_false_in_attachment_summary(self) -> None:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "数值验收"
+        sheet.append(["数量", "启用", "空值", "负数", "比例"])
+        sheet.append([0, False, None, -3, 0.0])
+        sheet.append([0, 0, False])
+        output = io.BytesIO()
+        workbook.save(output)
+        workbook.close()
+
+        parsed = parse_document_data_url(
+            _data_url("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", output.getvalue()),
+            "零值与布尔值.xlsx",
+        )
+
+        self.assertIn("读取行数：3", parsed.text_attachment.content)
+        self.assertIn("0 | False |  | -3 | 0", parsed.text_attachment.content)
+        self.assertIn("0 | 0 | False", parsed.text_attachment.content)
+
     def test_video_extracts_ephemeral_keyframes(self) -> None:
         try:
             ffmpeg = _ffmpeg_path()

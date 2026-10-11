@@ -3,10 +3,12 @@
  * Dependencies are accessors so async callbacks see the latest state.
  */
 import { normalizeAgentView } from '../workspaceState.js'
+import { beginWindowMove } from '../desktopWindowDrag.js'
 
 export function useDesktopNavigation(deps) {
   async function navigatePrimaryView(view) {
     if (deps.isAgentWorkspace) view = normalizeAgentView(view)
+    if (!deps.isAgentWorkspace && !deps.leftSidebarPinned.value) deps.leftSidebarHovered.value = false
     if (view === 'settings') {
       if (deps.isAgentWorkspace) {
         deps.activeView.value = 'settings'
@@ -37,7 +39,7 @@ export function useDesktopNavigation(deps) {
   async function focusDesktopPetChat() {
     deps.activeView.value = 'chat'
     deps.leftSidebarVisible.value = true
-    localStorage.setItem('mio_left_sidebar_visible', 'true')
+    if (deps.savedAppPreferences.value.remember_sidebar_state !== false) localStorage.setItem('mio_left_sidebar_visible', 'true')
     await deps.refreshConversations()
     await deps.selectConversation('desktop_pet')
     if (window.location.hash === '#desktop-pet-chat') {
@@ -46,6 +48,7 @@ export function useDesktopNavigation(deps) {
   }
   function toggleLeftSidebar() {
     deps.leftSidebarVisible.value = !deps.leftSidebarVisible.value
+    if (deps.savedAppPreferences.value.remember_sidebar_state === false) return
     localStorage.setItem('mio_left_sidebar_visible', String(deps.leftSidebarVisible.value))
     deps.savedAppPreferences.value = { ...deps.savedAppPreferences.value, left_sidebar_visible: deps.leftSidebarVisible.value }
     deps.appPreferencesDraft.value = { ...deps.appPreferencesDraft.value, left_sidebar_visible: deps.leftSidebarVisible.value }
@@ -57,6 +60,7 @@ export function useDesktopNavigation(deps) {
       localStorage.setItem('mio_agent_right_sidebar_visible', String(deps.rightSidebarVisible.value))
       return
     }
+    if (deps.savedAppPreferences.value.remember_sidebar_state === false) return
     localStorage.setItem('mio_right_sidebar_visible', String(deps.rightSidebarVisible.value))
     deps.savedAppPreferences.value = { ...deps.savedAppPreferences.value, right_sidebar_visible: deps.rightSidebarVisible.value }
     deps.appPreferencesDraft.value = { ...deps.appPreferencesDraft.value, right_sidebar_visible: deps.rightSidebarVisible.value }
@@ -64,10 +68,12 @@ export function useDesktopNavigation(deps) {
   }
   function toggleLeftSidebarPinned() {
     deps.leftSidebarPinned.value = !deps.leftSidebarPinned.value
+    if (deps.savedAppPreferences.value.remember_sidebar_state === false) return
     localStorage.setItem('mio_left_sidebar_pinned', String(deps.leftSidebarPinned.value))
   }
   function toggleRightSidebarPinned() {
     deps.rightSidebarPinned.value = !deps.rightSidebarPinned.value
+    if (!deps.isAgentWorkspace && deps.savedAppPreferences.value.remember_sidebar_state === false) return
     localStorage.setItem(deps.isAgentWorkspace ? 'mio_agent_right_sidebar_pinned' : 'mio_right_sidebar_pinned', String(deps.rightSidebarPinned.value))
   }
   function applyAgentPreferences(preferences = {}) {
@@ -84,6 +90,18 @@ export function useDesktopNavigation(deps) {
       deps.errorMessage.value = `窗口操作失败：${error.message}`
     }
   }
+  function beginDesktopWindowDrag(event) {
+    if (event?.button !== undefined && event.button !== 0) return
+    if (window.pywebview?.api?.window_move_by) {
+      beginWindowMove(event, message => { deps.errorMessage.value = message })
+      return
+    }
+    if (window.pywebview?._jsApiCallback) return
+    const drag = window.pywebview?.api?.window_drag
+    if (!drag) return
+    event?.preventDefault?.()
+    void drag()
+  }
   async function switchDesktopWorkspace(target) {
     const switcher = window.pywebview?.api?.switch_workspace
     if (switcher) {
@@ -97,6 +115,8 @@ export function useDesktopNavigation(deps) {
       }
     }
     const next = new URL(window.location.href)
+    next.searchParams.delete('view')
+    next.searchParams.delete('settings-section')
     if (target === 'agent') next.searchParams.set('workspace', 'agent')
     else next.searchParams.delete('workspace')
     window.location.href = next.toString()
@@ -104,7 +124,48 @@ export function useDesktopNavigation(deps) {
   function resizeDesktopWindow(direction, event) {
     if (event?.button !== undefined && event.button !== 0) return
     event?.preventDefault?.()
-    window.pywebview?.api?.window_resize?.(direction)
+    const resize = window.pywebview?.api?.window_resize_by
+    if (!resize || !event?.target?.setPointerCapture) {
+      window.pywebview?.api?.window_resize?.(direction)
+      return
+    }
+    const target = event.target, pointer = event.pointerId
+    const startX = event.screenX, startY = event.screenY, id = crypto.randomUUID()
+    let x = 0, y = 0, finished = false, sending = false, dirty = false
+    target.setPointerCapture(pointer)
+    async function send() {
+      dirty = true
+      if (sending) return
+      sending = true
+      try {
+        while (dirty) {
+          dirty = false
+          const result = await resize(direction, x, y, id, finished)
+          if (result?.ok === false) throw new Error(result.error || '调整窗口大小失败')
+        }
+      } catch (error) { deps.errorMessage.value = `窗口操作失败：${error.message}` }
+      finally { sending = false }
+    }
+    function move(next) {
+      if (next.pointerId !== pointer) return
+      x = next.screenX - startX; y = next.screenY - startY
+      void send()
+    }
+    function end(next) {
+      if (next.pointerId !== pointer || finished) return
+      if (next.type === 'pointerup') { x = next.screenX - startX; y = next.screenY - startY }
+      finished = true
+      target.removeEventListener('pointermove', move)
+      target.removeEventListener('pointerup', end)
+      target.removeEventListener('pointercancel', end)
+      target.removeEventListener('lostpointercapture', end)
+      if (target.hasPointerCapture(pointer)) target.releasePointerCapture(pointer)
+      void send()
+    }
+    target.addEventListener('pointermove', move)
+    target.addEventListener('pointerup', end)
+    target.addEventListener('pointercancel', end)
+    target.addEventListener('lostpointercapture', end)
   }
-  return { navigatePrimaryView, returnToApp, openCompanionSection, focusDesktopPetChat, toggleLeftSidebar, toggleRightSidebar, toggleLeftSidebarPinned, toggleRightSidebarPinned, applyAgentPreferences, controlDesktopWindow, switchDesktopWorkspace, resizeDesktopWindow }
+  return { navigatePrimaryView, returnToApp, openCompanionSection, focusDesktopPetChat, toggleLeftSidebar, toggleRightSidebar, toggleLeftSidebarPinned, toggleRightSidebarPinned, applyAgentPreferences, controlDesktopWindow, beginDesktopWindowDrag, switchDesktopWorkspace, resizeDesktopWindow }
 }

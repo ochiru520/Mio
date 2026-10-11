@@ -6,6 +6,7 @@ from . import local_vision_service
 
 
 def snapshot() -> dict:
+    from .capability_checks import snapshot as capability_snapshot
     allowed = {'ready', 'configured', 'unconfigured', 'missing', 'installed', 'unverified', 'degraded'}
     dependencies = []
     for item in dependency_installer.list_dependencies():
@@ -29,8 +30,43 @@ def snapshot() -> dict:
         jobs = {r[0]: r[1] for r in conn.execute('SELECT status,COUNT(*) FROM creation_jobs GROUP BY status')}
     vision = local_vision_service.passive_status()
     return {'schema_version': 1, 'checked_at': db.now_iso(), 'dependencies': dependencies,
+            'capabilities': capability_snapshot()['capabilities'],
             'local_vision': {'inference_ready': bool(vision.get('inference_ready')),
                              'inference_state': vision.get('inference_state', 'unverified'),
                              'probe_stale': bool(vision.get('probe_stale', True))},
             'creation_job_counts': {key: jobs.get(key, 0) for key in ('created', 'running', 'unknown', 'failed', 'completed', 'cancelled')},
             'scope': '状态快照；不主动推理，不包含聊天、日记、路径、密钥、供应商地址或原始错误。'}
+
+
+def behavior_baseline() -> dict:
+    """Return a repeatable allowlisted behavior contract for local diagnostics."""
+    from .backup_service import CURRENT_APP_VERSION
+    from .capability_checks import snapshot as capability_snapshot
+
+    tables = (
+        'messages', 'agent_tasks', 'agent_task_runs', 'agent_run_steps',
+        'knowledge_documents', 'knowledge_chunks', 'knowledge_ocr_state',
+        'learning_sessions', 'learning_items',
+    )
+    counts = {}
+    with db.get_conn() as conn:
+        for table in tables:
+            exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+            counts[table] = int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]) if exists else 0
+    capabilities = capability_snapshot().get('capabilities') or []
+    return {
+        'schema_version': 1,
+        'app_version': CURRENT_APP_VERSION,
+        'checked_at': db.now_iso(),
+        'capabilities': [
+            {'id': str(item.get('id') or ''), 'status': str(item.get('status') or item.get('health') or 'unknown')}
+            for item in capabilities if isinstance(item, dict) and item.get('id')
+        ],
+        'table_counts': counts,
+        'contracts': {
+            'workspace': ['/api/workspace', '/api/workspace/projects', '/api/workspace/tasks'],
+            'sources': ['/api/workspace/projects/{project_id}/search', '/api/agent/work/{task_id}/citations'],
+            'audio': ['/api/companion/call/start', '/api/companion/voice/audio'],
+        },
+        'scope': '可重复行为基线；仅包含版本、能力状态、允许的表计数和接口契约，不包含用户内容、路径、密钥或供应商地址。',
+    }

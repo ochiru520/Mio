@@ -94,7 +94,16 @@ def _guard_agent_creation_completion_claim(
         return replies
     joined = " ".join(str(item or "") for item in replies).casefold()
     claims_completion = any(claim in joined for claim in _CREATION_COMPLETION_CLAIMS)
-    claims_submission = any(claim in joined for claim in _CREATION_SUBMISSION_CLAIMS)
+    submission_claims = _CREATION_SUBMISSION_CLAIMS
+    names = {item.tool_name for item in agent_execution.observations}
+    creation_scope = bool(getattr(agent_execution, 'task_snapshot', {}).get('creation_workflow_id')) or any(
+        name.startswith('creation_') or name in CREATION_GENERATION_TOOLS for name in names)
+    if names and not creation_scope:
+        # Code, desktop and other tools also submit actions for approval. Their
+        # real progress must not be replaced by an image-generation warning.
+        generic = {'已提交', '已经提交', '直接提交', '提交任务', '任务创建', '任务已开始', 'job submitted'}
+        submission_claims = tuple(claim for claim in submission_claims if claim not in generic)
+    claims_submission = any(claim in joined for claim in submission_claims)
     if not claims_completion and not claims_submission:
         return replies
     jobs: list[dict[str, object]] = []
@@ -376,6 +385,8 @@ USER_PRODUCTIVE_ACTIVITY_RE = re.compile(
 
 
 def clean_chat_reply(reply: str) -> str:
+    from .agent_reply_protocol import strip_tool_protocol
+    reply = strip_tool_protocol(reply)
     cleaned, _ = _strip_unlabeled_reasoning(reply)
     _, cleaned = extract_speech_emotion(THINK_BLOCK_RE.sub("", cleaned))
     cleaned = cleaned.replace("**", "").replace("__", "")
@@ -1223,7 +1234,7 @@ def _annotate_history_content(
     if isinstance(content, str):
         if current_message_id is None or int(row["id"]) != current_message_id:
             from .memory_revision_service import sanitize_history
-            content = sanitize_history(content)
+            content = sanitize_history(content, source_message_id=int(row['id']))
         return f"{note}\n{content}"
     if isinstance(content, list):
         return [{"type": "text", "text": note}, *content]
@@ -1257,7 +1268,9 @@ async def chat_with_ai(
     agent_tools_enabled: bool = True,
     fast_path: bool = False,
     allowed_tool_names: set[str] | None = None,
+    creation_workflow_id: str = "",
     handoff_enabled: bool = False,
+    task_origin: dict | None = None,
 ) -> ChatResult:
     return await chat_run_coordinator.submit(
         conversation_id,
@@ -1280,7 +1293,9 @@ async def chat_with_ai(
             agent_tools_enabled=agent_tools_enabled,
             fast_path=fast_path,
             allowed_tool_names=allowed_tool_names,
+            creation_workflow_id=creation_workflow_id,
             handoff_enabled=handoff_enabled,
+            task_origin=task_origin,
         ),
         capture_seconds=(
             settings.chat_follow_up_capture_seconds if capture_follow_ups else 0.0
@@ -1288,6 +1303,7 @@ async def chat_with_ai(
         max_capture_count=(
             settings.chat_follow_up_max_capture_count if capture_follow_ups else 0
         ),
+        request_id=request_id,
     )
 
 
@@ -1309,7 +1325,9 @@ async def _chat_with_ai_serialized(
     agent_tools_enabled: bool = True,
     fast_path: bool = False,
     allowed_tool_names: set[str] | None = None,
+    creation_workflow_id: str = "",
     handoff_enabled: bool = False,
+    task_origin: dict | None = None,
 ) -> ChatResult:
     async with _conversation_lock(conversation_id):
         return await _chat_with_ai_unlocked(
@@ -1330,7 +1348,9 @@ async def _chat_with_ai_serialized(
             agent_tools_enabled=agent_tools_enabled,
             fast_path=fast_path,
             allowed_tool_names=allowed_tool_names,
+            creation_workflow_id=creation_workflow_id,
             handoff_enabled=handoff_enabled,
+            task_origin=task_origin,
         )
 
 
@@ -1353,8 +1373,13 @@ async def _chat_with_ai_unlocked(
     agent_tools_enabled: bool = True,
     fast_path: bool = False,
     allowed_tool_names: set[str] | None = None,
+    creation_workflow_id: str = "",
     handoff_enabled: bool = False,
+    task_origin: dict | None = None,
 ) -> ChatResult:
+    from . import mobile_task_service as mobile
+    if task_origin is not None and (not mobile.valid_origin(task_origin) or source != mobile.channel(task_origin) or conversation_id != mobile.conversation_id(task_origin)):
+        raise ValueError("手机任务来源不一致。")
     message = user_message.strip()
     images = image_attachments or []
     text_files = text_attachments or []
@@ -1583,6 +1608,7 @@ async def _chat_with_ai_unlocked(
                 reasoning_level=normalized_reasoning_level,
                 allow_native_tools=bool(getattr(selected_profile, "supports_tool_calls", True)),
                 allowed_tool_names=allowed_tool_names,
+                creation_workflow_id=creation_workflow_id,
                 web_precheck=web_lookup,
                 # Agent conversations let the model decide whether the user
                 # is asking for creation and which discovery steps are needed.
@@ -1629,11 +1655,16 @@ async def _chat_with_ai_unlocked(
             fallback_reasoning_level=fallback_reasoning_level,
             request_id=request_id,
             agent_execution=agent_execution,
-            tools=([tool_registry.require("handoff_to_agent").native_schema()] if handoff_enabled else None),
+            tools=([tool_registry.require("handoff_to_agent").native_schema()] + ([mobile.FOLLOWUP_SCHEMA] if task_origin else []) if handoff_enabled else None),
         )
         if handoff_enabled and completion.tool_calls:
             handoff_call = next((item for item in completion.tool_calls if item.name == "handoff_to_agent"), None)
-            if handoff_call is not None:
+            followup_call = next((item for item in completion.tool_calls if item.name == "follow_up_mobile_task"), None)
+            if task_origin and followup_call is not None:
+                handoff_info = await mobile.amend(task_origin, str(json.loads(followup_call.arguments_json).get("task_id") or ""), message)
+                mobile.queue(task_origin, handoff_info["message"], key=request_id + ":amended", task_id=handoff_info["task_id"])
+                completion = replace(completion, content=handoff_info["message"], tool_calls=())
+            elif handoff_call is not None:
                 from .agent_handoff_service import create_handoff
                 from .agent_tool_service import ToolExecutionContext
                 handoff_info = create_handoff(
@@ -1644,6 +1675,7 @@ async def _chat_with_ai_unlocked(
                         user_message=message, step_index=0, source=source,
                     ),
                     conversation_context=[item for item in llm_messages if item.get("role") in {"user", "assistant"}],
+                    delivery_target=task_origin,
                 )
                 completion = replace(
                     completion,
@@ -1697,6 +1729,10 @@ async def _chat_with_ai_unlocked(
     replies_to_save = _replies_for_storage(replies, voice_reply_requested)
     if persist:
         for index, part in enumerate(replies_to_save):
+            citation_attachments = []
+            if agent_execution is not None:
+                from .agent_citation_service import attachment as build_citation_attachment
+                citation_attachments = [build_citation_attachment(part, agent_execution.observations)]
             db.save_message(
                 "assistant",
                 part,
@@ -1718,6 +1754,7 @@ async def _chat_with_ai_unlocked(
                 ),
                 first_token_latency_ms=completion.first_token_latency_ms if index == 0 else None,
                 total_latency_ms=completion.total_latency_ms if index == 0 else None,
+                attachments_json=json.dumps(citation_attachments, ensure_ascii=False),
             )
         queue_cost_reconciliation(request_id, conversation_id, completion.cost_references)
         mark_runtime_stage("response_saved")
@@ -1811,6 +1848,10 @@ def persist_generated_chat_result(
     )
     replies_to_save = _replies_for_storage(result.replies, voice_reply_requested)
     for index, part in enumerate(replies_to_save):
+        citation_attachments = []
+        if result.agent_run_id:
+            from .agent_citation_service import attachment as build_citation_attachment
+            citation_attachments = [build_citation_attachment(part, result.tool_receipts)]
         db.save_message(
             "assistant",
             part,
@@ -1833,6 +1874,7 @@ def persist_generated_chat_result(
             emotion=result.speech_emotion if index == 0 else "",
             first_token_latency_ms=result.first_token_latency_ms if index == 0 else None,
             total_latency_ms=result.total_latency_ms if index == 0 else None,
+            attachments_json=json.dumps(citation_attachments, ensure_ascii=False),
         )
     queue_cost_reconciliation(request_id, conversation_id, result.cost_references)
     if result.agent_run_id:
@@ -1878,6 +1920,7 @@ async def chat_in_qq_group(
         max_capture_count=(
             settings.chat_follow_up_max_capture_count if capture_follow_ups else 0
         ),
+        request_id=request_id,
     )
 
 

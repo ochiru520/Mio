@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ class DependencyListTests(unittest.TestCase):
                 "napcat",
                 "ollama_vision",
                 "whisper",
+                "ffmpeg",
                 "screen_capture",
             },
         )
@@ -147,7 +149,54 @@ class DependencyListTests(unittest.TestCase):
 
 
 class DependencyInstallLaunchTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows process identity')
+    def test_real_powershell_progress_blocks_duplicate_after_memory_reset(self) -> None:
+        common = Path(__file__).resolve().parents[3] / '澪Agent应用/scripts/deps/common.ps1'
+        if not common.is_file():
+            self.skipTest('Desktop dependency scripts are unavailable')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = os.environ.copy()
+            environment.update(MIO_STATUS_FILE=str(root/'whisper.json'), MIO_DEP_ID='whisper', MIO_INSTALL_ID='actual-process')
+            command = ". '" + str(common).replace("'", "''") + "'; Write-DepsStatus -Stage download -Percent 50 -Message progress; [Console]::ReadLine()"
+            process = dependency_installer.subprocess.Popen(
+                ['powershell', '-NoProfile', '-Command', command], env=environment,
+                stdin=dependency_installer.subprocess.PIPE, stdout=dependency_installer.subprocess.PIPE,
+                stderr=dependency_installer.subprocess.PIPE,
+                creationflags=getattr(dependency_installer.subprocess, 'CREATE_NO_WINDOW', 0))
+            try:
+                for _ in range(60):
+                    if (root/'whisper.json').exists():
+                        break
+                    time.sleep(0.05)
+                with mock.patch.object(dependency_installer, '_status_dir', return_value=root):
+                    dependency_installer._running_installs.clear()
+                    self.assertTrue(dependency_installer._install_running('whisper'))
+                    progress = dependency_installer._read_status('whisper')
+                    self.assertEqual(progress['console_pid'], process.pid)
+                    self.assertEqual(int(progress['console_started_ticks']), dependency_installer._process_started_ticks(process.pid))
+                    (root/'install-whisper.ps1').touch()
+                    with mock.patch.object(dependency_installer, '_scripts_dir', return_value=root), \
+                         mock.patch.object(dependency_installer.subprocess, 'Popen') as spawn:
+                        with self.assertRaisesRegex(ValueError, '正在安装'):
+                            dependency_installer.install_dependency('whisper')
+                        spawn.assert_not_called()
+            finally:
+                process.terminate()
+                process.wait(timeout=10)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    stream.close()
+
     def setUp(self) -> None:
+        # Launch tests inspect the initial status. A mocked Popen.wait() returns
+        # immediately, so a real watcher would race the assertions and write
+        # into the next test's state. Watcher behavior is tested separately.
+        self.patch_thread = mock.patch('app.dependency_installer.threading.Thread')
+        self.thread_mock = self.patch_thread.start()
+        self.addCleanup(self.patch_thread.stop)
+        self.patch_running = mock.patch.dict(dependency_installer._running_installs, {}, clear=True)
+        self.patch_running.start()
+        self.addCleanup(self.patch_running.stop)
         self.patch_vision = mock.patch("app.local_vision_service.installation_status", return_value={"runtime_installed": False, "model_installed": False})
         self.patch_vision.start()
         self.addCleanup(self.patch_vision.stop)
@@ -181,6 +230,7 @@ class DependencyInstallLaunchTests(unittest.TestCase):
         self.assertIn("MIO_WORKSPACE_ROOT", env)
         self.assertIn("MIO_PROGRAM_DIR", env)
         self.assertIn("MIO_LOCAL_VISION_DIR", env)
+        self.thread_mock.return_value.start.assert_called_once()
 
     def test_install_writes_initial_status_file(self) -> None:
         with mock.patch("app.dependency_installer.subprocess.Popen") as popen_mock:
@@ -188,10 +238,29 @@ class DependencyInstallLaunchTests(unittest.TestCase):
             dependency_installer.install_dependency("ollama_vision")
         status_path = settings.data_dir / "dependency-install" / "ollama_vision.json"
         self.assertTrue(status_path.is_file())
-        payload = json.loads(status_path.read_text(encoding="utf-8"))
+        payload = dependency_installer._read_status("ollama_vision")
         self.assertEqual(payload["id"], "ollama_vision")
         self.assertFalse(payload["done"])
         self.assertEqual(payload["console_pid"], 12345)
+
+    def test_launch_receipt_survives_progress_writer_and_backend_restart(self) -> None:
+        with mock.patch("app.dependency_installer.subprocess.Popen") as popen_mock:
+            popen_mock.return_value.pid = 23456
+            dependency_installer.install_dependency("ollama_vision")
+        progress = dependency_installer._read_status("ollama_vision")
+        status_path = settings.data_dir / "dependency-install/ollama_vision.json"
+        status_path.write_text(json.dumps({'install_id': progress['install_id'], 'percent': 40}), encoding='utf-8')
+        dependency_installer._running_installs.clear()
+        with mock.patch.object(dependency_installer, '_pid_alive', return_value=True):
+            self.assertTrue(dependency_installer._install_running('ollama_vision'))
+        self.assertEqual(dependency_installer._read_status('ollama_vision')['console_pid'], 23456)
+
+    def test_reused_pid_is_not_an_active_installer(self) -> None:
+        status_path = settings.data_dir / "dependency-install/ollama_vision.json"
+        status_path.write_text(json.dumps({'console_pid': 24680, 'console_started_ticks': 100}), encoding='utf-8')
+        with mock.patch.object(dependency_installer, '_pid_alive', return_value=True), \
+             mock.patch.object(dependency_installer, '_process_started_ticks', return_value=200):
+            self.assertFalse(dependency_installer._install_running('ollama_vision'))
 
     def test_install_rejects_pid_recorded_by_another_backend_instance(self) -> None:
         status_path = settings.data_dir / "dependency-install" / "ollama_vision.json"

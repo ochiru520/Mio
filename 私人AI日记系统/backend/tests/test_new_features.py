@@ -496,6 +496,16 @@ class LocalNotificationCostTests(unittest.TestCase):
 
 
 class AgentMemoryApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_db_path = db.settings.db_path
+        object.__setattr__(db.settings, "db_path", Path(self.temp_dir.name) / "memory-api.db")
+        db.init_db()
+
+    def tearDown(self) -> None:
+        object.__setattr__(db.settings, "db_path", self.original_db_path)
+        self.temp_dir.cleanup()
+
     def test_follow_up_time_uses_configured_timezone(self) -> None:
         original_timezone = settings.timezone
         object.__setattr__(settings, "timezone", "Asia/Tokyo")
@@ -535,7 +545,15 @@ class AgentMemoryApiTests(unittest.TestCase):
         row = {"date": "2026-08-01", "markdown_content": "# 今日回顾"}
         with patch("app.routes.review.db.list_reviews", return_value=[row]):
             result = asyncio.run(api_reviews_list())
-        self.assertEqual(result, [row])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["date"], row["date"])
+        self.assertEqual(result[0]["markdown_content"], row["markdown_content"])
+        self.assertEqual(result[0]["source_status"], "unknown")
+        self.assertEqual(result[0]["source_hash"], "")
+        self.assertEqual(result[0]["source_generated_at"], "")
+        self.assertTrue(result[0]["stale"])
+        self.assertTrue(result[0]["stale_reason"])
+        self.assertEqual(result[0]["source_dates"], [row["date"]])
 
     def test_weekly_review_api_adds_week_end(self) -> None:
         row = {"week_start": "2026-07-27", "markdown_content": "# 一周回顾"}

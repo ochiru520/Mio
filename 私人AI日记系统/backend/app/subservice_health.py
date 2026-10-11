@@ -283,7 +283,12 @@ def recover_failed(health: dict[str, Any] | None = None) -> dict[str, Any]:
             continue
         try:
             if service_id == "asr_system_audio":
-                system_audio_service.start(companion_service.load_config())
+                from . import call_session_service
+                if call_session_service.manager.status().get("active"):
+                    from .routes.companion import _ensure_call_asr_ready
+                    _ensure_call_asr_ready()
+                else:
+                    system_audio_service.start(companion_service.load_config())
             elif service_id == "tts":
                 companion_service.restart_voice_service()
             elif service_id == "local_vision":

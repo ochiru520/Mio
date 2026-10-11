@@ -90,6 +90,22 @@ export function creationWorkflowSnapshot(job) {
 }
 
 export function creationSamplerLabel(job) {
-  if (job?.workflow_id !== 'anima-2.9b-image') return ''
-  return '双采样：4 steps · CFG 1.0 · euler / simple · denoise 1.0 → 0.36'
+  const samplers = creationWorkflowSnapshot(job)?.samplers || []
+  const regular = samplers.filter(item => ['KSampler', 'KSamplerAdvanced'].includes(item.node_type))
+  if (regular.length) return regular.map((item, index) => [
+    regular.length > 1 ? `第 ${index + 1} 段` : '',
+    item.steps != null ? `${item.steps} steps` : '',
+    item.cfg != null ? `CFG ${item.cfg}` : '',
+    [item.sampler_name, item.scheduler].filter(Boolean).join(' / '),
+    item.denoise != null ? `denoise ${item.denoise}` : '',
+  ].filter(Boolean).join(' · ')).join('；')
+  const advancedCount = samplers.filter(item => item.node_type === 'SamplerCustomAdvanced').length
+  if (advancedCount) {
+    return [advancedCount === 2 ? '双采样 · 沿用工作流调度' : '自定义采样 · 沿用工作流调度',
+      job?.spec?.steps ? `${job.spec.steps} steps` : '', job?.spec?.frame_count ? `${job.spec.frame_count} 帧` : '',
+      job?.spec?.fps ? `${job.spec.fps} fps` : '',
+      job?.spec?.upscale_factor ? `${job.spec.upscale_factor} 倍潜空间放大` : '',
+    ].filter(Boolean).join(' · ')
+  }
+  return ''
 }

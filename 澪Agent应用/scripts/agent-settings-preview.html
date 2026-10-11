@@ -3,24 +3,25 @@
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Agent UI verification</title></head>
 <body><div id="app"></div><script type="module">
 import { createApp, h, reactive } from 'vue'
-import Settings from '../src/components/AgentSettingsPage.vue'
+import Settings from '../src/components/MioSettingsWindow.vue'
 import Tasks from '../src/components/AgentTasksPage.vue'
 import Home from '../src/components/AgentHomePage.vue'
-import Creation from '../src/components/CreationPage.vue'
 import Dependencies from '../src/components/DependencyCenter.vue'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
 import '../src/styles.css'
 import '../src/styles/integrated.css'
+import '../src/styles/refinements.css'
+import '../src/styles/agent-settings.css'
+import '../src/styles/agent-surface.css'
+import '../src/styles/ui-polish.css'
 const view = new URLSearchParams(location.search).get('view') || 'settings'
-const components = { settings: Settings, tasks: Tasks, home: Home, creation: Creation, dependencies: Dependencies }
-const context = reactive({ selectedModel: 'test-model', modelGroups: [{ provider_id: 'test', provider: 'Test', models: [{ id: 'test-model', display_name: 'Agent 验证模型' }] }], reasoningLevel: 'high', activeReasoningOptions: [{ id: 'high', label: '高' }, { id: 'medium', label: '中' }] })
+const components = { settings: Settings, tasks: Tasks, home: Home, dependencies: Dependencies }
+const context = reactive({ avatarUrl:'/mio-avatar.png', mioDisplayName:'Mio', selectedModel: 'test-model', modelGroups: [{ provider_id: 'test', provider: 'Test', models: [{ id: 'test-model', display_name: 'Agent 验证模型' }] }], reasoningLevel: 'high', activeReasoningOptions: [{ id: 'high', label: '高' }, { id: 'medium', label: '中' }] })
 context.chooseModel = value => { context.selectedModel = value }
 context.chooseReasoning = value => { context.reasoningLevel = value }
+const settings = reactive({ activeSettingsSection:new URLSearchParams(location.search).get('section') || 'budget', settingsSearch:'', settingsNavigation:[], runtimeIdentity:{app_version:'test'}, isSettingsSectionDirty:()=>false, openSettingsSection(id){this.activeSettingsSection=id} })
 createApp({
-  render: () => h('div', { class: `app-shell integrated-shell agent-workspace-shell active-view-${view}` }, [
-    h('header', { class: 'integrated-titlebar' }, [h('strong', { style: 'grid-column:2;padding:12px' }, 'Mio Agent')]),
-    h('aside', { class: 'integrated-sidebar', style: 'padding-top:16px' }, [h('img', { src: '/mio-avatar.png', alt: 'Mio', style: 'width:38px;height:38px;border-radius:50%;margin:auto' })]),
-    h('main', { class: 'workspace integrated-workspace' }, [h(components[view], { onNavigate: value => { window.lastNavigation = value }, onOpenSettings: () => { window.lastNavigation = 'settings' } })]),
-    h('aside', { class: 'integrated-right-rail' }),
-  ]),
-}).provide('mio-chat-page', context).mount('#app')
+  render: () => h('div', { class:'mio-agent-surface is-settings', style:'height:100vh' }, [h('header',{class:'mio-agent-titlebar'},'Mio Agent'),h(components[view], { agent:true, projectId:'project-test', projects:[{id:'project-test',name:'设置验证项目'},{id:'project-other',name:'另一项目'}], onNavigate:value=>{window.lastNavigation=value}, onOpenSettings:()=>{window.lastNavigation='settings'} })]),
+}).provide('mio-settings-page', settings).provide('mio-chat-page', context).mount('#app')
 </script></body></html>

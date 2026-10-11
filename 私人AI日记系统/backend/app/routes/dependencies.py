@@ -19,6 +19,29 @@ class UninstallRequest(BaseModel):
     token: str = Field(min_length=64, max_length=64)
 
 
+class PackageSourceRequest(BaseModel):
+    urls: list[str] = Field(default_factory=list, max_length=8)
+
+
+@router.get('/{dep_id}/package')
+async def dependencies_package(dep_id: str):
+    from ..dependency_package_service import package_info
+    try:
+        return await asyncio.to_thread(package_info, dep_id)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.put('/{dep_id}/package-source')
+async def dependencies_package_source(dep_id: str, payload: PackageSourceRequest):
+    from ..dependency_package_service import package_info, save_urls
+    try:
+        await asyncio.to_thread(save_urls, dep_id, payload.urls)
+        return await asyncio.to_thread(package_info, dep_id)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.get('/{dep_id}/uninstall-preview')
 async def dependencies_uninstall_preview(dep_id: str):
     from ..dependency_removal import preview
@@ -44,6 +67,12 @@ async def dependencies_uninstall(dep_id: str, payload: UninstallRequest):
 async def dependencies_diagnostics():
     from ..diagnostic_export import snapshot
     return await asyncio.to_thread(snapshot)
+
+
+@router.get('/diagnostics/baseline')
+async def dependencies_diagnostics_baseline():
+    from ..diagnostic_export import behavior_baseline
+    return await asyncio.to_thread(behavior_baseline)
 
 
 @router.get("")

@@ -4,6 +4,7 @@ import ctypes
 import ctypes.wintypes
 import json
 import logging
+import math
 from logging.handlers import RotatingFileHandler
 import os
 import shutil
@@ -34,6 +35,9 @@ except ModuleNotFoundError:
 APP_NAME = "Mio"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("MIO_PORT", "8000"))
+_PORT_EXPLICIT = bool(os.environ.get("MIO_PORT", "").strip()) and os.environ.get("MIO_PORT_AUTO") != "1"
+_INSTANCE_PORT = int(os.environ.get("MIO_INSTANCE_PORT", str(PORT)))
+_BACKEND_SOCKET: socket.socket | None = None
 # 让桌宠等子进程跟随本实例端口（不覆盖用户显式设置）
 os.environ.setdefault("MIO_PET_API_BASE", f"http://{HOST}:{PORT}")
 
@@ -43,9 +47,9 @@ def _instance_channel_name(channel: str, port: int) -> str:
     return f"Local\\{channel}-7C53C273{suffix}"
 
 
-MUTEX_NAME = _instance_channel_name("MioAgentDesktop", PORT)
-SHOW_EVENT_NAME = _instance_channel_name("MioAgentDesktopShow", PORT)
-PET_CHAT_EVENT_NAME = _instance_channel_name("MioAgentDesktopPetChat", PORT)
+MUTEX_NAME = _instance_channel_name("MioAgentDesktop", _INSTANCE_PORT)
+SHOW_EVENT_NAME = _instance_channel_name("MioAgentDesktopShow", _INSTANCE_PORT)
+PET_CHAT_EVENT_NAME = _instance_channel_name("MioAgentDesktopPetChat", _INSTANCE_PORT)
 INSTALL_DATA_DIR_FILENAME = "数据目录.txt"
 BUILD_MANIFEST_FILENAME = "构建清单.json"
 
@@ -264,14 +268,14 @@ def _make_pet_chat_window_interactive(window) -> bool:
     return True
 
 
-def _make_main_window_resizable(window) -> bool:
+def _make_main_window_resizable(window, *, titlebar_drag: bool = True) -> bool:
     if os.name != "nt" or window is None or getattr(window, "native", None) is None:
         return False
     handle = int(window.native.Handle.ToInt64())
     get_window_long = ctypes.windll.user32.GetWindowLongPtrW
     set_window_long = ctypes.windll.user32.SetWindowLongPtrW
     style = int(get_window_long(handle, -16))
-    set_window_long(handle, -16, style | 0x00040000 | 0x00020000)  # THICKFRAME | MINIMIZEBOX
+    set_window_long(handle, -16, style | 0x00040000 | 0x00020000 | 0x00010000)  # THICKFRAME | MINIMIZEBOX | MAXIMIZEBOX
     ctypes.windll.user32.SetWindowPos(
         handle,
         0,
@@ -281,11 +285,32 @@ def _make_main_window_resizable(window) -> bool:
         0,
         0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020,
     )
-    _install_resize_hit_test(handle)
+    # pywebview's WinForms host does not reliably support SetWindowSubclass
+    # (it returns FALSE on some Edge runtimes).  Install a native WNDPROC
+    # directly so WM_NCHITTEST is handled for both resize borders and the
+    # frameless title-bar drag surface.
+    _install_native_hit_test(handle, titlebar_drag=titlebar_drag)
     return True
 
 
 _RESIZE_SUBCLASS_CALLBACKS: dict[int, object] = {}
+_TITLEBAR_SUBCLASS_CALLBACKS: dict[int, object] = {}
+_NATIVE_WNDPROC_CALLBACKS: dict[int, object] = {}
+_NATIVE_WNDPROC_ORIGINALS: dict[int, int] = {}
+_NATIVE_NORMAL_BOUNDS: dict[int, tuple[int, int, int, int]] = {}
+_NATIVE_MINIMIZE_BOUNDS: dict[int, tuple[int, int, int, int]] = {}
+_WM_BEGIN_WINDOW_DRAG = 0x8000 + 0x4D1
+
+
+class _WindowPlacement(ctypes.Structure):
+    _fields_ = [
+        ("length", ctypes.wintypes.UINT),
+        ("flags", ctypes.wintypes.UINT),
+        ("showCmd", ctypes.wintypes.UINT),
+        ("ptMinPosition", ctypes.wintypes.POINT),
+        ("ptMaxPosition", ctypes.wintypes.POINT),
+        ("rcNormalPosition", ctypes.wintypes.RECT),
+    ]
 
 
 def _resize_hit_code(window_handle: int, lparam: int, border: int = 8) -> int | None:
@@ -317,7 +342,181 @@ def _resize_hit_code(window_handle: int, lparam: int, border: int = 8) -> int | 
     return None
 
 
+def _refresh_restored_window_content(window) -> bool:
+    """Refresh the hosted view after the native window returns from minimize.
+
+    A restored frameless Form can keep WebView2's last minimized surface until
+    the next resize. Reapply the client layout on its UI thread without
+    navigating the page or changing the user's window size.
+    """
+    native = getattr(window, "native", None)
+    if os.name != "nt" or native is None:
+        return False
+    try:
+        from System import Action
+
+        def refresh():
+            try:
+                if native.IsDisposed or native.Disposing:
+                    return
+                handle = int(native.Handle.ToInt64())
+                bounds = _NATIVE_MINIMIZE_BOUNDS.pop(handle, None)
+                if bounds and not ctypes.windll.user32.IsZoomed(handle):
+                    # WinForms still considers this Form frameless while its
+                    # Win32 style includes resize borders. Its restore layout
+                    # can subtract those borders again on every cycle.
+                    ctypes.windll.user32.SetWindowPos(
+                        handle, 0, *bounds, 0x0004 | 0x0010,
+                    )
+                view = getattr(native, "webview", None)
+                native.PerformLayout()
+                if view is not None and not view.IsDisposed:
+                    view.Size = native.ClientSize
+                    view.PerformLayout()
+                    view.Invalidate(True)
+                    view.Update()
+                native.Invalidate(True)
+                native.Update()
+            except Exception:
+                logging.exception("Failed to refresh restored window content")
+
+        native.BeginInvoke(Action(refresh))
+        return True
+    except Exception:
+        logging.exception("Failed to queue restored window content refresh")
+        return False
+
+
+def _titlebar_drag_hit_code(window_handle: int, lparam: int) -> int | None:
+    """Return HTCAPTION for blank areas of the custom title bar."""
+    if ctypes.windll.user32.IsZoomed(window_handle):
+        return None
+    rect = ctypes.wintypes.RECT()
+    if not ctypes.windll.user32.GetWindowRect(window_handle, ctypes.byref(rect)):
+        return None
+    x = ctypes.c_short(lparam & 0xFFFF).value
+    y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+    width = max(1, rect.right - rect.left)
+    rel_x = x - rect.left
+    rel_y = y - rect.top
+    if 0 <= rel_y <= 56:
+        # Keep the left toggle, centered mode buttons, and right controls
+        # interactive; the blank portions remain draggable.
+        left_drag_end = min(int(width * 0.42), 500)
+        right_drag_start = max(int(width * 0.58), width - 500)
+        if 52 <= rel_x < left_drag_end or right_drag_start < rel_x < width - 190:
+            return 2  # HTCAPTION
+    return None
+
+
+def _install_native_hit_test(window_handle: int, *, titlebar_drag: bool = True) -> bool:
+    """Install a direct WNDPROC hook for frameless window hit testing.
+
+    SetWindowSubclass is unavailable for some pywebview WinForms hosts.  A
+    direct WNDPROC hook is supported by those hosts and lets Windows perform
+    the normal move/resize operation after returning HTCAPTION/HT* codes.
+    """
+    if os.name != "nt" or not window_handle:
+        return False
+    if not ctypes.windll.user32.IsWindow(window_handle):
+        return False
+    if window_handle in _NATIVE_WNDPROC_CALLBACKS:
+        return True
+    wndproc_type = ctypes.WINFUNCTYPE(
+        ctypes.c_ssize_t,
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.c_size_t,
+        ctypes.c_ssize_t,
+    )
+    get_window_long = ctypes.windll.user32.GetWindowLongPtrW
+    set_window_long = ctypes.windll.user32.SetWindowLongPtrW
+    call_window_proc = ctypes.windll.user32.CallWindowProcW
+    default_window_proc = ctypes.windll.user32.DefWindowProcW
+    get_window_long.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    get_window_long.restype = ctypes.c_void_p
+    set_window_long.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+    set_window_long.restype = ctypes.c_void_p
+    call_window_proc.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint,
+        ctypes.c_size_t, ctypes.c_ssize_t,
+    ]
+    call_window_proc.restype = ctypes.c_ssize_t
+    default_window_proc.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    default_window_proc.restype = ctypes.c_ssize_t
+    original_proc = int(get_window_long(window_handle, -4) or 0)
+    if not original_proc:
+        return False
+
+    @wndproc_type
+    def native_proc(hwnd, message, wparam, lparam):
+        handle = int(hwnd)
+        if message == 0x0005 and int(wparam) == 1:  # WM_SIZE / SIZE_MINIMIZED
+            bounds = _NATIVE_NORMAL_BOUNDS.get(handle)
+            if bounds and handle not in _NATIVE_MINIMIZE_BOUNDS:
+                _NATIVE_MINIMIZE_BOUNDS[handle] = bounds
+        if message == _WM_BEGIN_WINDOW_DRAG:
+            # JS API calls run on a worker thread. Mouse capture and the
+            # Windows move loop must run on the thread owning the Form.
+            # WebView2's child HWND otherwise keeps the mouse events, so
+            # parent hit testing alone cannot start a real drag gesture.
+            if not ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000:
+                return 0
+            ctypes.windll.user32.ReleaseCapture()
+            return default_window_proc(hwnd, 0x00A1, 2, lparam)
+        if message == 0x00A1 and (int(wparam) == 2 or 10 <= int(wparam) <= 17):
+            # BorderStyle.None makes WinForms ignore non-client move/resize.
+            # Let Windows handle the hit codes supplied by this hook.
+            return default_window_proc(hwnd, message, wparam, lparam)
+        if message == 0x00A3 and int(wparam) == 2:  # WM_NCLBUTTONDBLCLK / HTCAPTION
+            # BorderStyle.None drops the default caption double-click too.
+            # Handle it on the owning UI thread, including when maximized.
+            ctypes.windll.user32.ShowWindow(hwnd, 9 if ctypes.windll.user32.IsZoomed(hwnd) else 3)
+            return 0
+        if message == 0x0084:  # WM_NCHITTEST
+            if not ctypes.windll.user32.IsZoomed(hwnd):
+                hit_code = _resize_hit_code(handle, int(lparam))
+                if hit_code is not None:
+                    return hit_code
+            if titlebar_drag:
+                hit_code = _titlebar_drag_hit_code(handle, int(lparam))
+                if hit_code is not None:
+                    return hit_code
+        result = call_window_proc(
+            ctypes.c_void_p(original_proc), hwnd, message, wparam, lparam,
+        )
+        if message == 0x0047 and handle not in _NATIVE_MINIMIZE_BOUNDS:  # WM_WINDOWPOSCHANGED
+            if not (ctypes.windll.user32.IsIconic(hwnd) or ctypes.windll.user32.IsZoomed(hwnd)):
+                rect = ctypes.wintypes.RECT()
+                if ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    _NATIVE_NORMAL_BOUNDS[handle] = (
+                        rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+                    )
+        if message == 0x0082:  # WM_NCDESTROY
+            _NATIVE_NORMAL_BOUNDS.pop(handle, None)
+            _NATIVE_MINIMIZE_BOUNDS.pop(handle, None)
+        return result
+
+    previous_proc = set_window_long(
+        window_handle, -4, ctypes.cast(native_proc, ctypes.c_void_p),
+    )
+    if not previous_proc:
+        return False
+    _NATIVE_WNDPROC_ORIGINALS[window_handle] = int(previous_proc)
+    _NATIVE_WNDPROC_CALLBACKS[window_handle] = native_proc
+    rect = ctypes.wintypes.RECT()
+    if ctypes.windll.user32.GetWindowRect(window_handle, ctypes.byref(rect)):
+        _NATIVE_NORMAL_BOUNDS[window_handle] = (
+            rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+        )
+    return True
+
+
 def _install_resize_hit_test(window_handle: int) -> bool:
+    # Kept as a compatibility wrapper for callers/tests from older builds.
+    # The direct WNDPROC hook handles resize and title-bar hit testing.
+    if window_handle in _NATIVE_WNDPROC_CALLBACKS:
+        return True
     if os.name != "nt" or window_handle in _RESIZE_SUBCLASS_CALLBACKS:
         return window_handle in _RESIZE_SUBCLASS_CALLBACKS
     callback_type = ctypes.WINFUNCTYPE(
@@ -352,6 +551,21 @@ def _install_resize_hit_test(window_handle: int) -> bool:
             hit_code = _resize_hit_code(int(hwnd), int(lparam))
             if hit_code is not None:
                 return hit_code
+            # WebView's CSS drag region can miss the first mousedown on some
+            # Edge runtimes. Report HTCAPTION from the blank titlebar areas so
+            # Windows starts the move natively, while controls remain usable.
+            rect = ctypes.wintypes.RECT()
+            if ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                x = ctypes.c_short(lparam & 0xFFFF).value
+                y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+                width = max(1, rect.right - rect.left)
+                rel_x = x - rect.left
+                rel_y = y - rect.top
+                if 8 <= rel_y <= 48:
+                    left_drag_end = min(int(width * 0.42), 500)
+                    right_drag_start = max(int(width * 0.58), width - 500)
+                    if 52 <= rel_x < left_drag_end or right_drag_start < rel_x < width - 190:
+                        return 2  # HTCAPTION
         return def_subclass_proc(hwnd, message, wparam, lparam)
 
     installed = bool(set_window_subclass(
@@ -362,6 +576,55 @@ def _install_resize_hit_test(window_handle: int) -> bool:
     ))
     if installed:
         _RESIZE_SUBCLASS_CALLBACKS[window_handle] = subclass_proc
+    return installed
+
+
+def _install_titlebar_drag_hit_test(window_handle: int) -> bool:
+    """Make the custom title bar movable even when WebView drops mousedown.
+
+    The frontend still exposes explicit drag regions, but native hit testing is
+    the reliable fallback for frameless Edge windows.  Only the blank portions
+    of the title bar report HTCAPTION; the left toggle, centered mode switcher,
+    and right window controls remain WebView client areas.
+    """
+    if window_handle in _NATIVE_WNDPROC_CALLBACKS:
+        return True
+    if os.name != "nt" or not window_handle or window_handle in _TITLEBAR_SUBCLASS_CALLBACKS:
+        return False
+    callback_type = ctypes.WINFUNCTYPE(
+        ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t,
+        ctypes.c_ssize_t, ctypes.c_size_t, ctypes.c_size_t,
+    )
+    def_subclass_proc = ctypes.windll.comctl32.DefSubclassProc
+    def_subclass_proc.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    def_subclass_proc.restype = ctypes.c_ssize_t
+    set_window_subclass = ctypes.windll.comctl32.SetWindowSubclass
+    set_window_subclass.argtypes = [ctypes.c_void_p, callback_type, ctypes.c_size_t, ctypes.c_size_t]
+    set_window_subclass.restype = ctypes.c_bool
+
+    @callback_type
+    def subclass_proc(hwnd, message, wparam, lparam, subclass_id, reference_data):
+        if message == 0x0084 and not ctypes.windll.user32.IsZoomed(hwnd):  # WM_NCHITTEST
+            rect = ctypes.wintypes.RECT()
+            if ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                x = ctypes.c_short(lparam & 0xFFFF).value
+                y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+                width = max(1, rect.right - rect.left)
+                rel_x = x - rect.left
+                rel_y = y - rect.top
+                if 0 <= rel_y <= 56:
+                    # Keep the left toggle, centered mode buttons, and right
+                    # window controls interactive. The remaining titlebar is
+                    # the native drag surface.
+                    left_drag_end = min(int(width * 0.42), 500)
+                    right_drag_start = max(int(width * 0.58), width - 500)
+                    if 52 <= rel_x < left_drag_end or right_drag_start < rel_x < width - 190:
+                        return 2  # HTCAPTION
+        return def_subclass_proc(hwnd, message, wparam, lparam)
+
+    installed = bool(set_window_subclass(window_handle, subclass_proc, 0x4D494F44, 0))
+    if installed:
+        _TITLEBAR_SUBCLASS_CALLBACKS[window_handle] = subclass_proc
     return installed
 
 
@@ -584,11 +847,35 @@ def _webview2_runtime_version() -> str:
 def _require_webview2_runtime() -> str:
     version = _webview2_runtime_version()
     if not version:
-        raise RuntimeError(
+        raise WebViewRuntimeMissing(
             "没有检测到 Microsoft Edge WebView2 Runtime。\n"
             "请先安装 WebView2 Runtime，再重新打开 Mio。"
         )
     return version
+
+
+class WebViewRuntimeMissing(RuntimeError):
+    pass
+
+
+def _require_windows_compatibility() -> dict:
+    from app.windows_compat import snapshot
+    current = snapshot()
+    if not current['supported']:
+        raise RuntimeError(current['reason'])
+    return current
+
+
+def _offer_webview2_download() -> None:
+    from app.windows_compat import WEBVIEW2_DOWNLOAD_URL
+    import webbrowser
+    # No automatic download or installer execution; the user chooses the official page.
+    answer = ctypes.windll.user32.MessageBoxW(None,
+        '缺少 Microsoft Edge WebView2 Runtime。Windows 10 上可能需要单独安装。\n'
+        '是否打开微软官方下载页？请选择 Evergreen Standalone Installer 的 x64 版本，安装后重开 Mio。',
+        APP_NAME, 0x4 | 0x30 | 0x100)
+    if answer == 6:
+        webbrowser.open(WEBVIEW2_DOWNLOAD_URL)
 
 
 def _acquire_single_instance() -> int | None:
@@ -667,6 +954,13 @@ def _configure_runtime_environment(runtime_root: Path) -> None:
     manifest_path = _build_manifest_path()
     if manifest_path is not None:
         os.environ["MIO_BUILD_MANIFEST"] = str(manifest_path)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            app_version = str(manifest.get("app_version") or "").strip()
+            if app_version:
+                os.environ["MIO_APP_VERSION"] = app_version
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            logger.debug("Unable to read app version from build manifest", exc_info=True)
         expected_build_id = _expected_build_id()
         if expected_build_id:
             os.environ["MIO_EXPECTED_BUILD_ID"] = expected_build_id
@@ -1173,7 +1467,44 @@ def _watch_backend_health(
             return
 
 
+def _bind_backend_listener(port: int, *, allow_fallback: bool) -> socket.socket:
+    """Reserve the actual listener, including Windows excluded-port checks."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if os.name == "nt":
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        try:
+            listener.bind((HOST, port))
+        except OSError as exc:
+            if not allow_fallback or (exc.errno not in {13, 48, 98, 10013, 10048}
+                                      and getattr(exc, "winerror", None) not in {10013, 10048}):
+                raise
+            listener.bind((HOST, 0))
+            logging.warning("后端端口 %s 无法绑定，自动使用可用端口 %s", port, listener.getsockname()[1])
+        listener.setblocking(False)
+        return listener
+    except BaseException:
+        listener.close()
+        raise
+
+
+def _prepare_backend_endpoint() -> None:
+    global PORT, _BACKEND_SOCKET
+    old_base = f"http://{HOST}:{PORT}"
+    _BACKEND_SOCKET = _bind_backend_listener(PORT, allow_fallback=not _PORT_EXPLICIT)
+    PORT = int(_BACKEND_SOCKET.getsockname()[1])
+    os.environ["MIO_PORT"] = str(PORT)
+    os.environ["MIO_INSTANCE_PORT"] = str(_INSTANCE_PORT)
+    if not _PORT_EXPLICIT:
+        os.environ["MIO_PORT_AUTO"] = "1"
+    if os.environ.get("MIO_PET_API_BASE") == old_base:
+        os.environ["MIO_PET_API_BASE"] = f"http://{HOST}:{PORT}"
+    _write_state_json(STATE_DIR / "后端地址.json", {"host": HOST, "port": PORT,
+                      "pid": os.getpid(), "base_url": f"http://{HOST}:{PORT}"})
+
+
 def _start_backend(runtime_root: Path):
+    global _BACKEND_SOCKET
     existing = _health()
     if existing is not None:
         if not _same_path(existing.get("project_root"), runtime_root):
@@ -1181,6 +1512,9 @@ def _start_backend(runtime_root: Path):
         return None, None
     if _port_is_open():
         raise RuntimeError(f"{PORT}端口已被其他程序占用，Mio 无法启动。")
+
+    if _BACKEND_SOCKET is None:
+        _BACKEND_SOCKET = _bind_backend_listener(PORT, allow_fallback=False)
 
     import uvicorn
     from app.main import app
@@ -1193,7 +1527,7 @@ def _start_backend(runtime_root: Path):
         access_log=False,
     )
     server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, name="mio-backend", daemon=True)
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [_BACKEND_SOCKET]}, name="mio-backend", daemon=True)
     thread.start()
 
     deadline = time.monotonic() + 25
@@ -1224,6 +1558,7 @@ class BackendRuntime:
             return self.thread
 
     def stop(self, *, timeout: float = 8) -> bool:
+        global _BACKEND_SOCKET
         with self._lock:
             server = self.server
             thread = self.thread
@@ -1235,6 +1570,9 @@ class BackendRuntime:
             if stopped:
                 self.server = None
                 self.thread = None
+                if _BACKEND_SOCKET is not None:
+                    _BACKEND_SOCKET.close()
+                    _BACKEND_SOCKET = None
             return stopped
 
     def recover(self, reason: str) -> bool:
@@ -1642,6 +1980,9 @@ class DesktopBridge(UpdateBridgeMixin):
         self._window = None
         self._hide_window = None
         self._window_maximized = False
+        self._resize_gesture = None
+        self._move_gesture = None
+        self._restore_bounds = None
         self._workspace = workspace
         self._workspace_controller = workspace_controller
 
@@ -1687,10 +2028,28 @@ class DesktopBridge(UpdateBridgeMixin):
         if action == "minimize":
             window.minimize()
         elif action == "maximize":
+            native = getattr(window, "native", None)
+            handle = int(native.Handle.ToInt64()) if native is not None and os.name == "nt" else 0
+            live = bool(handle and ctypes.windll.user32.IsWindow(handle))
+            if live:
+                self._window_maximized = bool(ctypes.windll.user32.IsZoomed(handle))
             if self._window_maximized:
-                window.restore()
+                if live:
+                    ctypes.windll.user32.ShowWindow(handle, 9)  # SW_RESTORE
+                else:
+                    window.restore()
+                if live and self._restore_bounds:
+                    ctypes.windll.user32.SetWindowPos(handle, 0, *self._restore_bounds, 0x0004 | 0x0010)
+                self._restore_bounds = None
             else:
-                window.maximize()
+                if live:
+                    rect = ctypes.wintypes.RECT()
+                    if ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(rect)):
+                        self._restore_bounds = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+                if live:
+                    ctypes.windll.user32.ShowWindow(handle, 3)  # SW_MAXIMIZE
+                else:
+                    window.maximize()
             self._window_maximized = not self._window_maximized
         elif action == "close":
             if self._hide_window is not None:
@@ -1702,6 +2061,34 @@ class DesktopBridge(UpdateBridgeMixin):
         else:
             return {"ok": False, "error": "不支持的窗口操作"}
         return {"ok": True, "maximized": self._window_maximized}
+
+    def window_drag(self) -> dict[str, object]:
+        """Queue a native move on the window's UI thread."""
+        window = self._window
+        native = getattr(window, "native", None) if window is not None else None
+        if native is None or os.name != "nt":
+            return {"ok": False, "error": "主窗口尚未就绪"}
+        handle = int(native.Handle.ToInt64())
+        # Keep the legacy non-client command for test doubles and unusual
+        # hosts that expose a handle which is not a live Win32 window.
+        if not ctypes.windll.user32.IsWindow(handle):
+            ctypes.windll.user32.ReleaseCapture()
+            ctypes.windll.user32.SendMessageW(handle, 0x00A1, 2, 0)
+            return {"ok": True}
+        if not _install_native_hit_test(handle):
+            return {"ok": False, "error": "无法初始化窗口拖动"}
+        point = ctypes.wintypes.POINT()
+        # GetCursorPos can be denied when the WebView and host run at
+        # different integrity levels. The owning window thread still has the
+        # active left-button gesture, so DefWindowProc can start the move with
+        # a zero lParam; do not turn a recoverable coordinate read into a UI
+        # error.
+        position = 0
+        if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+            position = (point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)
+        if not ctypes.windll.user32.PostMessageW(handle, _WM_BEGIN_WINDOW_DRAG, 0, position):
+            return {"ok": False, "error": "无法启动窗口拖动"}
+        return {"ok": True}
 
     def window_resize(self, direction: str) -> dict[str, object]:
         window = self._window
@@ -1724,6 +2111,112 @@ class DesktopBridge(UpdateBridgeMixin):
         ctypes.windll.user32.ReleaseCapture()
         ctypes.windll.user32.SendMessageW(handle, 0x00A1, hit_code, 0)
         return {"ok": True}
+
+    def window_move_by(self, offset_x: float, offset_y: float,
+                       gesture_id: str, finished: bool = False) -> dict[str, object]:
+        """Move from screen-coordinate deltas without client-frame offsets."""
+        if not isinstance(gesture_id, str) or not gesture_id or len(gesture_id) > 80:
+            return {"ok": False, "error": "无效的拖动操作"}
+        try:
+            dx, dy = float(offset_x), float(offset_y)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "无效的拖动距离"}
+        if not all(math.isfinite(n) and abs(n) <= 100000 for n in (dx, dy)):
+            return {"ok": False, "error": "无效的拖动距离"}
+        native = getattr(self._window, "native", None)
+        if native is None or os.name != "nt":
+            return {"ok": False, "error": "主窗口尚未就绪"}
+        handle = int(native.Handle.ToInt64())
+        with self._lock:
+            if ctypes.windll.user32.IsZoomed(handle):
+                # BorderStyle.None cannot restore through the normal caption
+                # move loop. Restore only after real pointer motion, anchoring
+                # the normal-size window beneath the same cursor position.
+                if max(abs(dx), abs(dy)) < 4:
+                    return {"ok": True, "maximized": True}
+                rect = ctypes.wintypes.RECT()
+                point = ctypes.wintypes.POINT()
+                placement = _WindowPlacement()
+                placement.length = ctypes.sizeof(placement)
+                if not (ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(rect))
+                        and ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+                        and ctypes.windll.user32.GetWindowPlacement(handle, ctypes.byref(placement))):
+                    return {"ok": False, "error": "无法读取窗口还原位置"}
+                normal = placement.rcNormalPosition
+                width, height = normal.right - normal.left, normal.bottom - normal.top
+                if self._restore_bounds:
+                    width, height = self._restore_bounds[2:]
+                if width <= 0 or height <= 0:
+                    return {"ok": False, "error": "窗口还原尺寸无效"}
+                scale = (ctypes.windll.user32.GetDpiForWindow(handle) or 96) / 96
+                start_x, start_y = point.x - round(dx * scale), point.y - round(dy * scale)
+                ratio = min(1.0, max(0.0, (start_x - rect.left) / max(1, rect.right - rect.left)))
+                left = start_x - round(width * ratio)
+                top = start_y - min(round(46 * scale), max(0, start_y - rect.top))
+                ctypes.windll.user32.ShowWindow(handle, 9)  # SW_RESTORE
+                ok = bool(ctypes.windll.user32.SetWindowPos(
+                    handle, 0, left + round(dx * scale), top + round(dy * scale),
+                    width, height, 0x0004 | 0x0010,
+                ))
+                self._move_gesture = None if finished else (gesture_id, left, top, scale)
+                self._window_maximized = False
+                self._restore_bounds = None
+                return {"ok": ok, **({} if ok else {"error": "窗口还原拖动失败"})}
+            if self._move_gesture is None or self._move_gesture[0] != gesture_id:
+                rect = ctypes.wintypes.RECT()
+                if not ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(rect)):
+                    return {"ok": False, "error": "无法读取窗口位置"}
+                scale = (ctypes.windll.user32.GetDpiForWindow(handle) or 96) / 96
+                self._move_gesture = (gesture_id, rect.left, rect.top, scale)
+            _, left, top, scale = self._move_gesture
+            ok = bool(ctypes.windll.user32.SetWindowPos(handle, 0, left + round(dx * scale), top + round(dy * scale), 0, 0, 0x0001 | 0x0004 | 0x0010))
+            if finished:
+                self._move_gesture = None
+        return {"ok": ok, **({} if ok else {"error": "窗口拖动失败"})}
+
+    def window_resize_by(self, direction: str, offset_x: float, offset_y: float,
+                         gesture_id: str, finished: bool = False) -> dict[str, object]:
+        """Resize from cumulative pointer offsets, independent of WebView capture."""
+        if direction not in {"left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"}:
+            return {"ok": False, "error": "不支持的缩放方向"}
+        if not isinstance(gesture_id, str) or not gesture_id or len(gesture_id) > 80:
+            return {"ok": False, "error": "无效的缩放操作"}
+        try:
+            dx, dy = float(offset_x), float(offset_y)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "无效的缩放距离"}
+        if not all(math.isfinite(n) and abs(n) <= 100000 for n in (dx, dy)):
+            return {"ok": False, "error": "无效的缩放距离"}
+        native = getattr(self._window, "native", None)
+        if native is None or os.name != "nt":
+            return {"ok": False, "error": "主窗口尚未就绪"}
+        handle = int(native.Handle.ToInt64())
+        if ctypes.windll.user32.IsZoomed(handle):
+            return {"ok": True, "ignored": True, "reason": "maximized"}
+        with self._lock:
+            if self._resize_gesture is None or self._resize_gesture[0] != gesture_id:
+                rect = ctypes.wintypes.RECT()
+                if not ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(rect)):
+                    return {"ok": False, "error": "无法读取窗口大小"}
+                scale = (ctypes.windll.user32.GetDpiForWindow(handle) or 96) / 96
+                self._resize_gesture = (gesture_id, direction, rect.left, rect.top, rect.right, rect.bottom, scale)
+            _, saved_direction, left, top, right, bottom, scale = self._resize_gesture
+            if saved_direction != direction:
+                return {"ok": False, "error": "缩放方向已改变"}
+            dx, dy = round(dx * scale), round(dy * scale)
+            min_width, min_height = (round(n * scale) for n in MAIN_WINDOW_MIN_SIZE)
+            if "left" in direction:
+                left = min(left + dx, right - min_width)
+            if "right" in direction:
+                right = max(right + dx, left + min_width)
+            if "top" in direction:
+                top = min(top + dy, bottom - min_height)
+            if "bottom" in direction:
+                bottom = max(bottom + dy, top + min_height)
+            ok = bool(ctypes.windll.user32.SetWindowPos(handle, 0, left, top, right - left, bottom - top, 0x0004 | 0x0010))
+            if finished:
+                self._resize_gesture = None
+        return {"ok": ok, **({} if ok else {"error": "调整窗口大小失败"})}
 
     def get_desktop_preferences(self) -> dict[str, object]:
         return {
@@ -1812,6 +2305,24 @@ class DesktopBridge(UpdateBridgeMixin):
             return {"ok": True, "path": str(path)}
         except (OSError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
+
+    def open_agent_conversation(self, conversation_id: str) -> dict[str, object]:
+        from app.conversation_state_service import require
+        try:
+            require(conversation_id)
+            import webview
+            from urllib.parse import urlencode
+            bridge = DesktopBridge('agent', self._workspace_controller)
+            window = webview.create_window('Mio Agent',
+                f'http://{HOST}:{PORT}/agent-app/?' + urlencode({'workspace':'agent','conversation_id':conversation_id,'v':WEBVIEW_CACHE_REPAIR_VERSION}),
+                js_api=bridge,width=1180,height=780,min_size=MAIN_WINDOW_MIN_SIZE,
+                resizable=True,frameless=True,easy_drag=True,shadow=True,confirm_close=False)
+            bridge.attach_window(window,window.destroy)
+            window.events.shown += lambda: _make_main_window_resizable(window,titlebar_drag=True)
+            window.events.restored += lambda: _refresh_restored_window_content(window)
+            return {'ok':True}
+        except (ValueError,OSError) as exc:
+            return {'ok':False,'error':str(exc)}
 
     def install_dependency_package(self, dep_id: str) -> dict[str, object]:
         """Only install a fixed dependency package explicitly selected by the user."""
@@ -2109,6 +2620,10 @@ def _run_window(
     _install_webview_recovery()
 
     webview.settings["ALLOW_DOWNLOADS"] = True
+    # Let pywebview's Edge drag bridge move only elements explicitly marked
+    # with .pywebview-drag-region.  This is the reliable path for frameless
+    # Windows Forms hosts; native WM_NCHITTEST remains as the resize fallback.
+    webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
     workspace_controller = WorkspaceWindowController()
     bridge = DesktopBridge("main", workspace_controller)
     agent_bridge = DesktopBridge("agent", workspace_controller)
@@ -2121,9 +2636,7 @@ def _run_window(
         min_size=MAIN_WINDOW_MIN_SIZE,
         resizable=True,
         frameless=True,
-        # Only the custom titlebar carries the drag region.  Leaving easy_drag
-        # enabled makes every click in a frameless window look like a move.
-        easy_drag=False,
+        easy_drag=True,
         shadow=True,
         background_color="#e9eff1",
         confirm_close=False,
@@ -2137,7 +2650,11 @@ def _run_window(
         min_size=MAIN_WINDOW_MIN_SIZE,
         resizable=True,
         frameless=True,
-        easy_drag=False,
+        # Keep pywebview's native drag-region path enabled as a fallback for
+        # WebView2 builds that swallow the first pointer event.  The frontend
+        # bridge and the native HTCAPTION hook still handle precise dragging;
+        # DRAG_REGION_DIRECT_TARGET_ONLY keeps buttons and mode controls live.
+        easy_drag=True,
         shadow=True,
         background_color="#eef1f0",
         confirm_close=False,
@@ -2180,10 +2697,15 @@ def _run_window(
     window.events.shown += configure_main_window
     window.events.shown += report_main_window_shown
     window.events.loaded += configure_main_window
+    window.events.restored += lambda: _refresh_restored_window_content(window)
 
     def configure_agent_window():
         try:
-            _make_main_window_resizable(agent_window)
+            # Keep the WebView pointer bridge for precise drag deltas, and also
+            # expose the blank titlebar as a native caption. On some WebView2
+            # builds the child view consumes pointerdown before JavaScript sees
+            # it; native HTCAPTION keeps the Agent window movable in that case.
+            _make_main_window_resizable(agent_window, titlebar_drag=True)
         except Exception:
             logging.exception("Failed to enable native Agent-window resizing")
 
@@ -2195,6 +2717,7 @@ def _run_window(
 
     agent_window.events.shown += configure_agent_window
     agent_window.events.loaded += configure_agent_window
+    agent_window.events.restored += lambda: _refresh_restored_window_content(agent_window)
     agent_window.events.closing += return_to_main_window
     agent_bridge.attach_window(agent_window, return_to_main_window)
 
@@ -2504,9 +3027,21 @@ def _install_webview_recovery() -> None:
 
 
 def main() -> int:
+    if '--extension-worker' in sys.argv:
+        _configure_source_import_path()
+        from app.extension_worker import main as extension_main
+        return extension_main()
     _configure_logging()
     _wait_for_recovery_parent()
     _configure_source_import_path()
+    if '--capability-probe-worker' in sys.argv:
+        from app.capability_probe_worker import main as probe_main
+        return probe_main(sys.argv[sys.argv.index('--capability-probe-worker') + 1:])
+    try:
+        _require_windows_compatibility()
+    except RuntimeError as exc:
+        _message_box(str(exc), error=True)
+        return 1
     for update_argument in ("--update-verify", "--update-restore"):
         if update_argument in sys.argv:
             try:
@@ -2568,6 +3103,7 @@ def main() -> int:
         show_event_handle = _create_show_event()
         pet_chat_event_handle = _create_pet_chat_event()
         logging.info("WebView2 runtime: %s", _require_webview2_runtime())
+        _prepare_backend_endpoint()
         runtime_root = _choose_runtime_root()
         _configure_runtime_environment(runtime_root)
         if _prepare_bundled_voice_runtime():
@@ -2585,11 +3121,16 @@ def main() -> int:
         return 0
     except Exception as exc:
         logging.error("Desktop startup failed: %s\n%s", exc, traceback.format_exc())
-        _message_box(str(exc), error=True)
+        if isinstance(exc, WebViewRuntimeMissing):
+            _offer_webview2_download()
+        else:
+            _message_box(str(exc), error=True)
         return 1
     finally:
         if backend_runtime is not None:
             backend_runtime.stop(timeout=8)
+        elif _BACKEND_SOCKET is not None:
+            _BACKEND_SOCKET.close()
         if show_event_handle is not None:
             ctypes.windll.kernel32.CloseHandle(show_event_handle)
         if pet_chat_event_handle is not None:
@@ -2598,4 +3139,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if '--mio-desktop-executor' in sys.argv:
+        from app.desktop_executor import worker_main
+        raise SystemExit(worker_main())
     raise SystemExit(main())

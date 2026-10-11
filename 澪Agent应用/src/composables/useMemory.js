@@ -6,8 +6,11 @@ import * as diaryApi from '../services/diaryApi.js'
 import * as memoryApi from '../services/memoryApi.js'
 
 export function useMemory(deps) {
+  let loadVersion = 0
   async function loadMemoryHub({ quiet = false } = {}) {
-    if (!quiet) deps.memoryLoading.value = true
+    const version = ++loadVersion
+    deps.memoryLoading.value = true
+    deps.memoryError.value = ''
     try {
       const [memory, reviews, weekly, monthly] = await Promise.all([
         memoryApi.loadMemory(),
@@ -15,6 +18,7 @@ export function useMemory(deps) {
         diaryApi.listWeeklyReviews(),
         diaryApi.listMonthlyReviews(),
       ])
+      if (version !== loadVersion) return
       deps.memoryData.value = memory
       deps.runtimeSummaryDraft.value = memory.runtime_summary?.content || ''
       deps.dailyReviews.value = reviews
@@ -25,17 +29,21 @@ export function useMemory(deps) {
       if (!deps.selectedMonthlyMonth.value) deps.selectedMonthlyMonth.value = deps.monthlyReviewItems.value[0]?.month || deps.logicalDate.value.slice(0, 7)
       deps.memoryLoaded.value = true
     } catch (error) {
-      deps.errorMessage.value = error.message
+      if (version === loadVersion) deps.memoryError.value = error.message
     } finally {
-      deps.memoryLoading.value = false
+      if (version === loadVersion) deps.memoryLoading.value = false
     }
   }
   async function resolveThread(threadId) {
+    if (deps.memoryBusy.value) return
+    deps.memoryBusy.value = `thread-${threadId}`
     try {
       await deps.request(`/api/threads/${threadId}/resolve`, { method: 'POST', body: '{}' })
       deps.memoryData.value.threads = deps.memoryData.value.threads.filter((item) => item.id !== threadId)
     } catch (error) {
       deps.errorMessage.value = error.message
+    } finally {
+      deps.memoryBusy.value = ''
     }
   }
   async function recordFollowUpResult(thread, payload) {
@@ -156,6 +164,20 @@ export function useMemory(deps) {
       deps.memoryBusy.value = ''
     }
   }
+  async function setMemoryAvailability(memory, action) {
+    if (deps.memoryBusy.value) return
+    deps.memoryBusy.value = `${action}-${memory.id}`
+    try {
+      await deps.request(`/api/memory/items/${memory.id}/${action}`, { method: 'POST', body: '{}' })
+      await loadMemoryHub({ quiet: true })
+    } catch (error) {
+      deps.errorMessage.value = error.message
+    } finally {
+      deps.memoryBusy.value = ''
+    }
+  }
+  const sleepStructuredMemory = memory => setMemoryAvailability(memory, 'sleep')
+  const wakeStructuredMemory = memory => setMemoryAvailability(memory, 'wake')
   async function rejectMemoryCandidate(memory) {
     if (deps.memoryBusy.value) return
     deps.memoryBusy.value = `candidate-${memory.id}`
@@ -204,8 +226,10 @@ export function useMemory(deps) {
       deps.newThreadContent.value = ''
       deps.newThreadFollowUp.value = ''
       await loadMemoryHub({ quiet: true })
+      return true
     } catch (error) {
       deps.errorMessage.value = error.message
+      return false
     } finally {
       deps.memoryBusy.value = ''
     }
@@ -334,5 +358,5 @@ export function useMemory(deps) {
       deps.memoryBusy.value = ''
     }
   }
-  return { loadMemoryHub, resolveThread, recordFollowUpResult, saveRuntimeSummary, memoryLayerLabel, memoryCategoryLabel, addStructuredMemory, archiveStructuredMemory, restoreStructuredMemory, confirmMemoryCandidate, rejectMemoryCandidate, editStructuredMemory, addMemoryThread, saveMemoryThread, deleteMemoryThread, saveConversationSummary, addConversationSummary, deleteConversationSummary, addProfileNote, saveProfileNote, deleteProfileNote }
+  return { loadMemoryHub, resolveThread, recordFollowUpResult, saveRuntimeSummary, memoryLayerLabel, memoryCategoryLabel, addStructuredMemory, archiveStructuredMemory, restoreStructuredMemory, confirmMemoryCandidate, rejectMemoryCandidate, sleepStructuredMemory, wakeStructuredMemory, editStructuredMemory, addMemoryThread, saveMemoryThread, deleteMemoryThread, saveConversationSummary, addConversationSummary, deleteConversationSummary, addProfileNote, saveProfileNote, deleteProfileNote }
 }

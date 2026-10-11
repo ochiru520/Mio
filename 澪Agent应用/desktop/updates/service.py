@@ -173,6 +173,47 @@ class UpdateService:
             if shutil.disk_usage(self.install_root).free < release.size * 5 + 256 * 1024**2:
                 raise UpdateError('安装磁盘空间不足，暂未退出应用。')
             self._status.update(state='preparing', message='正在保存升级前备份')
+        return self._install_prepared(release, self._package, self._manifest)
+
+    def install_local_candidate(self, root: Path, manifest_path: Path, expected_hash: str,
+                                base_build_id: str) -> dict:
+        from types import SimpleNamespace
+        from .local_candidate import verify_candidate, LOCAL_MANIFEST
+        from .helper import copy_managed_entry
+        with self._lock:
+            if self._status['state'] in BUSY:
+                raise UpdateError('已有更新任务正在执行。')
+            if not self.installed or not self.helper_source.is_file():
+                raise UpdateError('核心应用仅适用于包含更新助手的安装版。')
+            if self._privacy_paused():
+                raise UpdateError('执行已暂停，未安装候选。')
+            current = json.loads((self.install_root / '构建清单.json').read_text('utf-8'))
+            if current.get('build_id') != base_build_id:
+                raise UpdateError('正式版本已改变，请重新开发。')
+            candidate = verify_candidate(root, manifest_path, expected_hash, base_build_id=base_build_id)
+            size = sum(item['size'] for item in candidate['files'])
+            if shutil.disk_usage(self.install_root).free < size * 3 + 256 * 1024**2:
+                raise UpdateError('磁盘空间不足，未退出应用。')
+            self._cancel.clear()
+            self._status.update(state='preparing', message='正在固定已授权的本地候选')
+        cache_root = ensure_plain_path(self.cache / 'local-candidates' / expected_hash)
+        try:
+            program = cache_root / 'program'
+            if not program.exists():
+                copy_managed_entry(root, program)
+            pinned = cache_root / LOCAL_MANIFEST
+            pinned.write_bytes(manifest_path.read_bytes())
+            candidate = verify_candidate(program, pinned, expected_hash, base_build_id=base_build_id)
+            ensure_plain_path(self.install_root)
+            if self.state_root == self.install_root or self.state_root.is_relative_to(self.install_root / '_internal'):
+                raise UpdateError('数据位置与程序文件冲突，不能升级。')
+            release = SimpleNamespace(build_id=candidate['build_id'])
+            return self._install_prepared(release, program, pinned.read_bytes(), local_hash=expected_hash)
+        except Exception as exc:
+            self._set(state='failed', message=str(exc)[:500])
+            raise
+
+    def _install_prepared(self, release, package: Path, manifest: bytes, *, local_hash: str = '') -> dict:
         job = self.cache / 'jobs' / uuid.uuid4().hex
         lock = self.cache / 'install.lock'
         owns_lock = False
@@ -189,14 +230,17 @@ class UpdateService:
             prepared = True
             if self._cancelled():
                 raise UpdateCancelled('隐私暂停，已取消升级准备。')
-            (job / 'manifest.json').write_bytes(self._manifest)
+            (job / 'manifest.json').write_bytes(manifest)
             ticket = {'schema_version': 1, 'job': str(job), 'parent_pid': os.getpid(),
                       'install_root': str(self.install_root), 'state_root': str(self.state_root),
-                      'runtime_root': str(self.runtime_root), 'package': str(self._package),
+                      'runtime_root': str(self.runtime_root), 'package': str(package),
                       'backup_name': str(snapshot['backup_name']), 'backup_sha256': str(snapshot['backup_sha256']),
                       'previous_build_id': str(snapshot['previous_build_id']),
                       'target_build_id': release.build_id,
                       'helper_sha256': hashlib.sha256(helper.read_bytes()).hexdigest()}
+            if local_hash:
+                ticket.update(update_kind='local_candidate', local_manifest_sha256=local_hash,
+                              authorization='explicit_local_application')
             atomic_json(job / 'ticket.json', ticket)
             flags = 0x08000000 if os.name == 'nt' else 0
             process = self._spawn([str(helper), '--ticket', str(job / 'ticket.json')],

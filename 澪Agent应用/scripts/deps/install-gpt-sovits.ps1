@@ -11,6 +11,15 @@ $voiceDir = if ($env:MIO_VOICE_TRAINING_DIR) { $env:MIO_VOICE_TRAINING_DIR } els
 $genieEnvDir = Join-Path $voiceDir ".genie-env"
 $geniePython = Join-Path $genieEnvDir "Scripts\python.exe"
 $genieData = Join-Path $voiceDir "GenieData"
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$env:GENIE_DATA_DIR = $genieData
+$env:HUBERT_MODEL_DIR = Join-Path $genieData "chinese-hubert-base"
+$env:Chinese_G2P_DIR = Join-Path $genieData "G2P\ChineseG2P"
+$env:English_G2P_DIR = Join-Path $genieData "G2P\EnglishG2P"
+$env:SV_MODEL = Join-Path $genieData "speaker_encoder.onnx"
+$env:ROBERTA_MODEL_DIR = Join-Path $genieData "RoBERTa"
+$env:HF_HUB_OFFLINE = "1"
 $mioOnnx = Join-Path $voiceDir "models\genie\mio-v1"
 $runtimeMarker = Join-Path $genieEnvDir ".mio-genie-runtime-complete"
 $installMarker = Join-Path $voiceDir ".mio-native-voice-complete"
@@ -54,6 +63,13 @@ try {
     if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) { throw "安装包缺少 Mio 音色下载清单。" }
     if (-not (Test-Path -LiteralPath $packageInstaller -PathType Leaf)) { throw "安装包缺少 Mio 音色校验安装器。" }
     $source = Get-Content -LiteralPath $sourceManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($env:MIO_PACKAGE_SOURCE_JSON) {
+        $effectiveSource = $env:MIO_PACKAGE_SOURCE_JSON | ConvertFrom-Json
+        foreach ($field in @("format", "file_name", "size_bytes", "sha256")) {
+            if ([string]$effectiveSource.$field -ne [string]$source.$field) { throw "组件获取配置修改了固定包身份，已停止安装。" }
+        }
+        $source = $effectiveSource
+    }
     if ($source.format -ne "mio-native-voice-source") { throw "Mio 音色下载清单格式不正确。" }
     $packageName = [string]$source.file_name
     $expectedSize = [long]$source.size_bytes

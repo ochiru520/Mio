@@ -42,6 +42,13 @@ try {
     Write-DepsStatus -Stage "prepare" -Percent 2 -Message ("准备 Genie 运行引擎；安装到 " + $voiceDir)
     if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) { throw "安装包缺少 Genie 运行引擎下载清单。" }
     $source = Get-Content -LiteralPath $sourceManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($env:MIO_PACKAGE_SOURCE_JSON) {
+        $effectiveSource = $env:MIO_PACKAGE_SOURCE_JSON | ConvertFrom-Json
+        foreach ($field in @("format", "file_name", "size_bytes", "sha256")) {
+            if ([string]$effectiveSource.$field -ne [string]$source.$field) { throw "组件获取配置修改了固定包身份，已停止安装。" }
+        }
+        $source = $effectiveSource
+    }
     if ($source.format -ne "mio-genie-runtime-source") { throw "Genie 下载清单格式不正确。" }
     $packageName = [string]$source.file_name
     $expectedSize = [long]$source.size_bytes

@@ -55,5 +55,5 @@ async function perform(job, command, payload = {}) {
 </template>
 
 <style scoped>
-.job-recovery{padding:8px 0;font-size:12px;overflow-wrap:anywhere}.job-recovery label{display:grid;gap:4px;margin:8px 0}.job-recovery input,.job-recovery textarea,.job-recovery select{max-width:100%;box-sizing:border-box;font:inherit;color:inherit;background:var(--surface,#fff);border:1px solid var(--line,#ccc);padding:6px}.job-recovery button{margin:4px;padding:6px;border:1px solid var(--line,#ccc);background:var(--surface,#fff);color:inherit;cursor:pointer}.job-recovery small{display:block}
+.job-recovery{padding:8px 0;font-size:calc(12px * var(--fs, 1));overflow-wrap:anywhere}.job-recovery label{display:grid;gap:4px;margin:8px 0}.job-recovery input,.job-recovery textarea,.job-recovery select{max-width:100%;box-sizing:border-box;font:inherit;color:inherit;background:var(--surface);border:1px solid var(--line);padding:6px}.job-recovery button{margin:4px;padding:6px;border:1px solid var(--line);background:var(--surface);color:inherit;cursor:pointer}.job-recovery small{display:block}
 </style>

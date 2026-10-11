@@ -3,6 +3,12 @@
 # PowerShell 5.1 在 ErrorActionPreference=Stop 时会把原生命令的 stderr 当作异常中断，
 # 因此原生命令 stderr 不参与进度主循环；下载进度通过轮询输出文件大小计算并写入状态文件。
 
+# Child downloaders inherit the installer identity, rather than their own PID.
+$env:MIO_INSTALL_PID = [string]$PID
+$env:MIO_INSTALL_STARTED_TICKS = [string]([System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().ToFileTimeUtc())
+if (-not $env:MIO_INSTALL_ID) { $env:MIO_INSTALL_ID = [guid]::NewGuid().ToString("N") }
+if (-not $env:MIO_INSTALL_STARTED_AT) { $env:MIO_INSTALL_STARTED_AT = (Get-Date).ToString("o") }
+
 function Write-DepsStatus {
     param(
         [string]$Stage,
@@ -19,6 +25,10 @@ function Write-DepsStatus {
     )
     $payload = [ordered]@{
         id         = $env:MIO_DEP_ID
+        install_id = $env:MIO_INSTALL_ID
+        console_pid = [int]$env:MIO_INSTALL_PID
+        console_started_ticks = $env:MIO_INSTALL_STARTED_TICKS
+        started_at = $env:MIO_INSTALL_STARTED_AT
         stage      = $Stage
         percent    = $Percent
         message    = $Message
@@ -33,7 +43,14 @@ function Write-DepsStatus {
         updated_at = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
     }
     try {
-        $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $env:MIO_STATUS_FILE -Encoding UTF8
+        if (-not $env:MIO_STATUS_FILE) { return }
+        $temporary = $env:MIO_STATUS_FILE + "." + $PID + ".tmp"
+        $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $temporary -Encoding UTF8
+        if (Test-Path -LiteralPath $env:MIO_STATUS_FILE) {
+            [System.IO.File]::Replace($temporary, $env:MIO_STATUS_FILE, [System.Management.Automation.Language.NullString]::Value)
+        } else {
+            [System.IO.File]::Move($temporary, $env:MIO_STATUS_FILE)
+        }
     } catch {
     }
 }
@@ -96,6 +113,15 @@ function Find-MioModelPackage {
     return ""
 }
 
+function Get-DepsFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    } finally { $stream.Dispose(); $sha.Dispose() }
+}
+
 function Assert-MioModelPackage {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -108,13 +134,36 @@ function Assert-MioModelPackage {
         throw ($Label + "大小不符：实际 " + $item.Length + " 字节，要求 " + $ExpectedSize + " 字节。请删除旧包并重新取得当前版本。")
     }
     if ($ExpectedSha256) {
-        $actualHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actualHash = Get-DepsFileSha256 -Path $Path
         $expectedHash = $ExpectedSha256.Trim().ToLowerInvariant()
         if ($actualHash -ne $expectedHash) {
             throw ($Label + " SHA-256 不符：实际 " + $actualHash + "，要求 " + $expectedHash + "。文件可能是旧版或下载不完整。")
         }
     }
     return $item
+}
+
+function Assert-DepsZipArchive {
+    param([Parameter(Mandatory = $true)][string]$Path, [string[]]$RequiredFiles = @())
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        $names = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+        $buffer = New-Object byte[] 65536
+        foreach ($entry in $archive.Entries) {
+            $parts = $entry.FullName.Replace('\', '/').Split('/')
+            if ($parts -contains '..' -or $entry.FullName -match '^[\\/]|^[a-zA-Z]:') {
+                throw "ZIP 包含越界路径，已停止解压。"
+            }
+            if (-not $entry.Name) { continue }
+            [void]$names.Add($entry.Name)
+            $stream = $entry.Open()
+            try { while ($stream.Read($buffer, 0, $buffer.Length) -gt 0) { } } finally { $stream.Dispose() }
+        }
+        foreach ($name in $RequiredFiles) {
+            if (-not $names.Contains($name)) { throw ("ZIP 包缺少必需文件：" + $name) }
+        }
+    } finally { $archive.Dispose() }
 }
 
 function Limit-Int64 {
@@ -178,7 +227,9 @@ function Invoke-Download {
         [long]$ExpectedSize = 0,
         [string]$ExpectedSha256 = ""
     )
-    $partial = $Output + ".part"
+    if ($ExpectedSize -le 0 -or $ExpectedSha256 -notmatch "^[a-fA-F0-9]{64}$") {
+        throw "下载缺少可信的固定大小或 SHA-256 校验值，已停止。"
+    }
     $fileName = Split-Path -Leaf $Output
     $expectedHash = $ExpectedSha256.Trim().ToLowerInvariant()
 
@@ -189,7 +240,7 @@ function Invoke-Download {
         if ($size -le 0) { return $false }
         if ($ExpectedSize -gt 0 -and $size -ne $ExpectedSize) { return $false }
         if ($expectedHash) {
-            $actualHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+            $actualHash = Get-DepsFileSha256 -Path $Path
             if ($actualHash -ne $expectedHash) { return $false }
         }
         return $true
@@ -203,14 +254,24 @@ function Invoke-Download {
     if (Test-Path -LiteralPath $Output) {
         Remove-Item -LiteralPath $Output -Force -ErrorAction SilentlyContinue
     }
-    if ($ExpectedSize -gt 0 -and (Test-Path -LiteralPath $partial)) {
-        if ((Get-Item -LiteralPath $partial).Length -ge $ExpectedSize -and -not (Test-DownloadFile -Path $partial)) {
-            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
-        }
-    }
+    # Legacy partials cannot identify their source; never resume them.
+    $legacyPartial = $Output + ".part"
+    if (Test-Path -LiteralPath $legacyPartial) { Remove-Item -LiteralPath $legacyPartial -Force }
 
     $lastError = ""
     foreach ($url in $Urls) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $sourceHash = ([System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($url)))).Replace("-", "").ToLowerInvariant()
+        } finally { $sha.Dispose() }
+        $partial = $Output + ".source-" + $sourceHash.Substring(0, 16) + ".part"
+        if (Test-Path -LiteralPath $partial) {
+            $partialSize = (Get-Item -LiteralPath $partial).Length
+            if ($partialSize -ge $ExpectedSize) {
+                if (Test-DownloadFile -Path $partial) { Move-Item -LiteralPath $partial -Destination $Output -Force; return }
+                Remove-Item -LiteralPath $partial -Force
+            }
+        }
         $totalBytes = if ($ExpectedSize -gt 0) { $ExpectedSize } else { Resolve-UrlContentLength -Url $url }
         Write-Host ("正在下载 " + $url)
         $quotedUrl = [char]34 + $url + [char]34
@@ -338,7 +399,12 @@ function Ensure-DepsVenv {
             "https://registry.npmmirror.com/-/binary/python/3.10.11/python-3.10.11-amd64.exe",
             "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe"
         )
-        Invoke-Download -Urls $urls -Output $installer -Stage "downloading_python" -StartPercent 2 -EndPercent 14 -Label " Python 运行环境"
+        # SHA-256: python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe.sigstore
+        Invoke-Download -Urls $urls -Output $installer -Stage "downloading_python" -StartPercent 2 -EndPercent 14 -Label " Python 运行环境" -ExpectedSize 29037240 -ExpectedSha256 "d8dede5005564b408ba50317108b765ed9c3c510342a598f9fd42681cbe0648b"
+        $signature = Get-AuthenticodeSignature -LiteralPath $installer
+        if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Python Software Foundation") {
+            throw "Python 安装器签名无效或发布者不符，已停止执行。"
+        }
         Write-Host "正在静默安装 Python（只装给澪使用，不影响系统）..."
         $proc = Start-Process -FilePath $installer -ArgumentList @("/quiet", "InstallAllUsers=0", ('TargetDir="' + $baseDir + '"'), "PrependPath=0", "Include_pip=1", "Include_launcher=0", "Include_test=0", "AssociateFiles=0", "Shortcuts=0", "SimpleInstall=0") -WindowStyle Hidden -Wait -PassThru
         if ($proc.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $basePython)) {

@@ -32,7 +32,7 @@ def _key(kind: str, python: Path, model: Path) -> tuple:
     paths = [python, runtime / 'pyvenv.cfg']
     packages = runtime / 'Lib/site-packages'
     paths.append(packages)
-    names = ('genie_tts', 'jieba', 'numpy', 'onnxruntime') if kind == 'genie_runtime' else ('faster_whisper', 'ctranslate2', 'tokenizers', 'huggingface_hub', 'av')
+    names = ('genie_tts', 'jieba', 'numpy', 'onnxruntime') if kind == 'genie_runtime' else ('faster_whisper', 'ctranslate2', 'tokenizers', 'huggingface_hub', 'av', 'soundcard', 'cffi')
     for name in names:
         roots.append(packages / name)
         paths.append(packages / (name + '.py'))
@@ -87,7 +87,7 @@ def verify(kind: str, python: Path, model: Path) -> dict:
                 'assert int(numpy.__version__.split(".")[0]) < 2; '
                 'ort.InferenceSession(sys.argv[1], providers=["CPUExecutionProvider"])')
     elif kind == 'whisper':
-        code = ('import sys; from faster_whisper import WhisperModel; '
+        code = ('import sys; import soundcard; from faster_whisper import WhisperModel; '
                 'WhisperModel(sys.argv[1], device="cpu", compute_type="int8", '
                 'local_files_only=True)')
     else:

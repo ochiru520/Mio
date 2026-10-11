@@ -189,7 +189,7 @@ class WhisperRuntimeDetectionTests(unittest.TestCase):
             python.parent.mkdir(parents=True)
             python.write_bytes(b"python")
             site_packages = root / ".voice-env" / "Lib" / "site-packages"
-            for package in ("faster_whisper", "ctranslate2"):
+            for package in ("faster_whisper", "ctranslate2", "soundcard"):
                 init = site_packages / package / "__init__.py"
                 init.parent.mkdir(parents=True, exist_ok=True)
                 init.write_text("", encoding="utf-8")
@@ -208,6 +208,17 @@ class WhisperRuntimeDetectionTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         environment_check_service.whisper_runtime_candidates.cache_clear()
+
+    def test_model_and_transcriber_without_soundcard_are_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._create_runtime(root)
+            (root / '.voice-env/Lib/site-packages/soundcard/__init__.py').unlink()
+            layout = environment_check_service._whisper_runtime_layout(root)
+        self.assertTrue(layout['python_ready'])
+        self.assertTrue(layout['model_ready'])
+        self.assertFalse(layout['capture_ready'])
+        self.assertFalse(layout['ready'])
 
     def test_complete_external_runtime_is_reusable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

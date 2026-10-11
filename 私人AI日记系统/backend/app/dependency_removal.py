@@ -148,7 +148,9 @@ def uninstall(dep_id: str, token: str) -> dict:
             local_vision_service.stop_server()
         try:
             # Revalidate the entire plan after stopping processes and before any deletion.
-            _inventory(root, targets)
+            current_token, _, _ = _inventory(root, targets)
+            if current_token != plan['token']:
+                raise ValueError('停止组件期间文件已变化，请重新查看卸载范围并确认；未删除文件。')
             for target in targets:
                 _assert_safe(root, target)
                 if target.is_dir():

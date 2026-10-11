@@ -28,6 +28,33 @@ class ConversationMessageDeleteRequest(BaseModel):
     message_ids: list[int] = Field(min_length=1, max_length=100)
 
 
+class SidebarState(BaseModel):
+    pinned: bool | None = None
+    unread: bool | None = None
+    archived: bool | None = None
+
+
+@router.patch('/conversations/{conversation_id}/state')
+async def save_sidebar_state(conversation_id: str, payload: SidebarState):
+    from ..conversation_state_service import update
+    try: return update(conversation_id, **payload.model_dump(exclude_none=True))
+    except ValueError as exc: raise HTTPException(400,str(exc)) from exc
+
+
+@router.post('/conversations/{conversation_id}/fork')
+async def fork_conversation(conversation_id: str):
+    from ..conversation_state_service import fork
+    try: return await asyncio.to_thread(fork,conversation_id)
+    except (ValueError,OSError) as exc: raise HTTPException(400,str(exc)) from exc
+
+
+@router.get('/conversations/{conversation_id}/export')
+async def export_conversation(conversation_id: str):
+    from ..conversation_state_service import markdown
+    try: return {'markdown':markdown(conversation_id)}
+    except ValueError as exc: raise HTTPException(400,str(exc)) from exc
+
+
 @router.get("/conversations")
 async def list_conversations():
     return conversation_service.list_conversations()

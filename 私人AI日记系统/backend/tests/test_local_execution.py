@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import time
 from contextlib import closing
 from datetime import datetime, timedelta
@@ -280,15 +281,41 @@ def test_windows_command_cancel_kills_owned_descendants(project):
     kernel.WaitForSingleObject.restype=wintypes.DWORD
     kernel.CloseHandle.argtypes=[wintypes.HANDLE]
     root,_,config,ctx=project
+    shell_executable=terminal.shells()['powershell']
+    # CreateProcess with explicit paths/cwd avoids Start-Process's ShellExecute
+    # and desktop-session defaults. The terminal still owns the real process tree:
+    # PowerShell -> Python parent -> Python child.
+    (root/'parent.py').write_text(
+        'import pathlib, subprocess, sys\n'
+        'root = pathlib.Path(__file__).resolve().parent\n'
+        'print("PARENT_STARTED", flush=True)\n'
+        'child = subprocess.Popen([sys.executable, str(root / "child.py")], '
+        'cwd=str(root), creationflags=subprocess.CREATE_NO_WINDOW)\n'
+        'print("CHILD_SPAWNED " + str(child.pid), flush=True)\n'
+        'raise SystemExit(child.wait())\n',encoding='utf-8')
+    (root/'child.py').write_text(
+        'import os, pathlib, time\n'
+        'root = pathlib.Path(__file__).resolve().parent\n'
+        '(root / "child-pid.txt").write_text(str(os.getpid()), encoding="utf-8")\n'
+        'print("CHILD_READY", flush=True)\n'
+        '(root / "child-ready.txt").write_text("ready", encoding="utf-8")\n'
+        'while not (root / "child-release.txt").exists():\n'
+        '    time.sleep(0.1)\n'
+        '(root / "child-marker.txt").write_text("alive", encoding="utf-8")\n',encoding='utf-8')
+    def diagnostics(job):
+        current=terminal.read(ctx,job['job_id'])
+        return json.dumps({'shell_executable':shell_executable,**{key:current[key] for key in ('status','pid','exit_code','error','stdout','stderr')}},ensure_ascii=False)+\
+            '; files='+json.dumps(sorted(path.name for path in root.iterdir()),ensure_ascii=False)
+    command="& '"+sys.executable.replace("'","''")+"' '"+str(root/'parent.py').replace("'","''")+"'"
     async def run():
-        job=await terminal.start(ctx,"Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile','-Command',\"Set-Content child-pid.txt `$PID; Set-Content child-ready.txt ready; while (-not (Test-Path child-release.txt)) { Start-Sleep -Milliseconds 100 }; Set-Content child-marker.txt alive\"; Start-Sleep -Seconds 60",workspace_revision=config['revision'])
+        job=await terminal.start(ctx,command,workspace_revision=config['revision'])
         child_handle=None
         try:
             deadline=time.monotonic()+30
             while not (root/'child-ready.txt').exists() and time.monotonic()<deadline:
-                assert terminal.read(ctx,job['job_id'])['status']=='running'
+                assert terminal.read(ctx,job['job_id'])['status']=='running',diagnostics(job)
                 await asyncio.sleep(.1)
-            assert (root/'child-ready.txt').exists(), terminal.read(ctx,job['job_id'])
+            assert (root/'child-ready.txt').exists(),diagnostics(job)
             child_pid=int((root/'child-pid.txt').read_text(encoding='utf-8-sig').strip())
             child_handle=kernel.OpenProcess(0x00100000,False,child_pid)  # SYNCHRONIZE
             assert child_handle,ctypes.get_last_error()

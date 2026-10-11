@@ -137,3 +137,24 @@ def test_recalculation_failure_preserves_original_formulas(failure):
     assert not metadata['formula_values_recalculated'] and metadata['recalculation_engine'] == 'none'
     with closing(load_workbook(io.BytesIO(result), read_only=True)) as book:
         assert book['数据']['B1'].value == '=A1*2'
+
+
+def test_pdf_font_uses_configured_font_and_reports_missing_font(tmp_path, monkeypatch):
+    # Works without Chinese language packs on the CI host.
+    font = tmp_path / 'custom.ttf'
+    font.write_bytes(b'font-identity')
+    monkeypatch.setenv('MIO_PDF_FONT_PATH', str(font))
+    assert office.pdf_font_path().samefile(font)
+    font.unlink()
+    with pytest.raises(ValueError, match='MIO_PDF_FONT_PATH'):
+        office.pdf_font_path()
+
+
+def test_pdf_font_falls_back_to_installed_chinese_font(tmp_path, monkeypatch):
+    monkeypatch.delenv('MIO_PDF_FONT_PATH', raising=False)
+    monkeypatch.setenv('WINDIR', str(tmp_path))
+    fonts = tmp_path / 'Fonts'; fonts.mkdir()
+    with pytest.raises(ValueError, match='中文字体'):
+        office.pdf_font_path()
+    fallback = fonts / 'msyh.ttc'; fallback.write_bytes(b'font-identity')
+    assert office.pdf_font_path().samefile(fallback)

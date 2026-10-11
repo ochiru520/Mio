@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-from app import agent_task_service as tasks, db
+from app import agent_task_service as tasks, agent_tool_service, db
 from app.agent_creation_selection import bind_selected_workflow
 from app.agent_loop_service import run_agent_loop
 from app.agent_tool_service import ToolExecutionContext, ToolExecutionResult, execute_tool_call
@@ -107,12 +107,21 @@ class CreationSelectionTests(unittest.IsolatedAsyncioTestCase):
         db.create_agent_run('run-selection', 'exec-selection', conversation_id=self.conversation, source='desktop', source_message_id=self.message_id, model_id='test-model')
         context = ToolExecutionContext('run-selection', 'exec-selection', 'trace', self.conversation,
             self.message_id, '画一只白猫', 1, creation_workflow_id=QWEN)
-        with patch('app.creation_service.create_job', return_value=({'id': 'job_selected', 'status': 'created'}, True)) as create:
+        # Exercise availability using an isolated installation, including on CI.
+        comfyui = Path(self.temp.name) / 'ComfyUI'
+        comfyui.mkdir()
+        (comfyui / 'main.py').write_text('# test installation\n', encoding='utf-8')
+        with patch.object(agent_tool_service, 'settings', replace(agent_tool_service.settings, comfyui_root=comfyui)), \
+                patch('app.creation_service.create_job', return_value=({'id': 'job_selected', 'status': 'created'}, True)) as create:
             result = await execute_tool_call('comfyui_generate_image', {'prompt': '一只白猫'}, context)
-        self.assertEqual(result.status, 'completed')
+        self.assertEqual(result.status, 'completed', result.error)
         self.assertEqual(create.call_args.args[0].workflow_id, QWEN)
         step = db.list_agent_run_steps('run-selection')[0]
         self.assertEqual(json.loads(step['arguments_json'])['workflow_id'], QWEN)
+        receipt = db.list_tool_execution_receipts(limit=1)[0]
+        self.assertEqual(receipt['id'], result.receipt_id)
+        self.assertEqual(receipt['status'], 'executed')
+        self.assertEqual(json.loads(receipt['request_json'])['workflow_id'], QWEN)
         with self.assertRaises(ValueError):
             await execute_tool_call('comfyui_generate_video', {'prompt': 'cat'}, context)
 

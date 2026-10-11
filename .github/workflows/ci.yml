@@ -11,6 +11,7 @@ env:
   PYTHONUTF8: "1"
   PYTHONIOENCODING: utf-8
   PIP_PROGRESS_BAR: "off"
+  MIO_DISABLE_DOTENV: "1"
 
 jobs:
   backend:
@@ -26,6 +27,13 @@ jobs:
         run: python -m pip install -r "私人AI日记系统/backend/requirements.txt"
       - name: 安装测试依赖
         run: python -m pip install pytest==9.1.1
+      - name: 准备媒体与中文字体测试依赖
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/mio-ci-assets
+          key: windows-ci-ffmpeg-9.0.2-wenkai-1.520-v1
+      - name: 验证媒体与中文字体测试依赖
+        run: python "私人AI日记系统/backend/scripts/prepare_ci_assets.py"
       - name: 扫描高置信度密钥
         shell: pwsh
         run: |

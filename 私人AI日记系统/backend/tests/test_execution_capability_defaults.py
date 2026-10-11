@@ -2,6 +2,7 @@
 import asyncio
 import importlib
 import json
+import time
 from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,6 +16,16 @@ from app import desktop_control_service as desktop, execution_capability_default
 from app import execution_policy_service as policy, terminal_service as terminal
 from app.tool_registry import tool_registry
 from test_runtime_safety_v2 import isolated
+
+
+async def completed(context,job_id,timeout_seconds=45):
+    deadline=time.monotonic()+timeout_seconds
+    while time.monotonic()<deadline:
+        result=terminal.read(context,job_id)
+        if result['status']!='running' and job_id not in terminal._running:
+            return result
+        await asyncio.sleep(.05)
+    raise AssertionError(f'command did not terminate within {timeout_seconds}s: {result}')
 
 
 def inherited_project(tmp_path):
@@ -153,10 +164,7 @@ def test_running_inherited_command_stops_when_defaults_revoked(tmp_path):
         command = 'Start-Sleep -Seconds 30' if shell == 'powershell' else 'sleep 30'
         job = await terminal.start(context, command, shell, config['revision'])
         defaults.configure(expected_revision=1, execute_enabled=False)
-        for _ in range(100):
-            result = terminal.read(context, job['job_id'])
-            if result['status'] != 'running': break
-            await asyncio.sleep(.05)
+        result=await completed(context,job['job_id'],timeout_seconds=10)
         assert result['status'] == 'cancelled'
     asyncio.run(run())
 
@@ -220,10 +228,7 @@ def test_new_autonomous_tool_executes_without_confirmation_old_pending_is_preser
         policy.configure(expected_revision=1, mode='autonomous')
         dispatched = await execute_tool_call('terminal_start', arguments, second)
         assert dispatched.status == 'completed', dispatched.error
-        for _ in range(100):
-            result = terminal.read(second, dispatched.result['job_id'])
-            if result['status'] != 'running': break
-            await asyncio.sleep(.05)
+        result=await completed(second,dispatched.result['job_id'])
         assert result['status'] == 'completed' and 'default-run' in result['stdout']
         with closing(db.get_conn()) as conn:
             old = conn.execute('SELECT status FROM companion_actions WHERE id=?', (pending.action_id,)).fetchone()

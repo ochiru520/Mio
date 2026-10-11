@@ -4,6 +4,7 @@ import html
 import io
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shutil
@@ -186,6 +187,21 @@ def xlsx_bytes(content):
                     'recalculation_engine': 'LibreOffice' if recalculated else 'none'}
 
 
+def pdf_font_path():
+    configured = os.getenv('MIO_PDF_FONT_PATH', '').strip()
+    if configured:
+        font = Path(configured).expanduser()
+        if not font.is_file():
+            raise ValueError('MIO_PDF_FONT_PATH 指定的中文字体不存在。')
+        return font
+    font_dir = Path(os.getenv('WINDIR', 'C:/Windows')) / 'Fonts'
+    for name in ('simhei.ttf', 'msyh.ttc', 'simsun.ttc', 'msjh.ttc'):
+        font = font_dir / name
+        if font.is_file():
+            return font
+    raise ValueError('PDF 中文输出需要中文字体，请安装黑体/微软雅黑，或设置 MIO_PDF_FONT_PATH 指向中文 TrueType 字体。')
+
+
 def pdf_bytes(content):
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT
@@ -194,9 +210,7 @@ def pdf_bytes(content):
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, LongTable, TableStyle
-    font=Path('C:/Windows/Fonts/simhei.ttf')
-    if not font.is_file():
-        raise ValueError('PDF 中文输出需要本机黑体字体 simhei.ttf。')
+    font=pdf_font_path()
     if 'MioCJK' not in pdfmetrics.getRegisteredFontNames(): pdfmetrics.registerFont(TTFont('MioCJK',str(font)))
     pdfmetrics.registerFontFamily('MioCJK',normal='MioCJK',bold='MioCJK',italic='MioCJK',boldItalic='MioCJK')
     styles={name:ParagraphStyle(name,fontName='MioCJK',fontSize=size,leading=size*1.6,spaceAfter=8,wordWrap='CJK',alignment=TA_LEFT)

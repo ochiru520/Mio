@@ -39,7 +39,10 @@ class PackageSourcesTests(unittest.TestCase):
         directory.mkdir(parents=True)
         path = directory/'engine.zip'
         path.write_bytes(b'package')
-        self.assertEqual(packages.find_local_package({'file_name':'engine.zip'}), path)
+        found = packages.find_local_package({'file_name':'engine.zip'})
+        self.assertIsNotNone(found)
+        # Windows may spell the same temp directory with a long or 8.3 name.
+        self.assertTrue(found.samefile(path))
         self.assertIsNone(packages.find_local_package({'file_name':'../engine.zip'}))
         self.assertIsNone(packages.find_local_package({'file_name':'missing.zip'}))
 
@@ -49,7 +52,9 @@ class PackageSourcesTests(unittest.TestCase):
         (source/'engine.zip').write_bytes(b'package')
         self.settings.data_dir.mkdir()
         (self.settings.data_dir/'安装来源目录.txt').write_text(str(source),encoding='utf-8')
-        self.assertEqual(packages.find_local_package({'file_name':'engine.zip'}), source/'engine.zip')
+        found = packages.find_local_package({'file_name':'engine.zip'})
+        self.assertIsNotNone(found)
+        self.assertTrue(found.samefile(source/'engine.zip'))
 
     def test_corrupt_saved_configuration_is_not_reported_as_no_sources(self):
         self.settings.data_dir.mkdir()

@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import time
 from contextlib import closing
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -98,19 +99,23 @@ def test_code_paging_and_new_file_recovery(project):
     assert not (root/'nested/new.ts').exists()
 
 
-async def completed(context,job):
-    for _ in range(150):
+async def completed(context,job,timeout_seconds=45):
+    # Windows PowerShell cold startup on shared runners can exceed a few seconds.
+    # Wait for the watcher as well as the receipt so fixture teardown cannot race
+    # a worker still using this test's database and process handles.
+    deadline=time.monotonic()+timeout_seconds
+    while time.monotonic()<deadline:
         current=terminal.read(context,job['job_id'])
-        if current['status']!='running': return current
+        if current['status']!='running' and job['job_id'] not in terminal._running: return current
         await asyncio.sleep(.05)
-    raise AssertionError('command did not terminate')
+    raise AssertionError(f'command did not terminate within {timeout_seconds}s: {current}')
 
 
 @pytest.mark.parametrize('command,status,exit_code',[("Write-Output 'hello'; exit 0",'completed',0),("[Console]::Error.WriteLine('bad'); exit 7",'failed',7),("Start-Sleep -Seconds 10",'timed_out',None)])
 def test_real_terminal_success_failure_timeout(project,command,status,exit_code):
     _,_,config,context=project
     async def run():
-        job=await terminal.start(context,command,workspace_revision=config['revision'],timeout_seconds=1 if status=='timed_out' else 6)
+        job=await terminal.start(context,command,workspace_revision=config['revision'],timeout_seconds=1 if status=='timed_out' else 30)
         current=await completed(context,job)
         assert current['status']==status
         if exit_code is not None: assert current['exit_code']==exit_code
@@ -137,7 +142,10 @@ def test_verification_evidence_detects_later_file_changes(project):
     result=code.apply_patch(context,[{'path':'x.py','create':True,'content':'x=1\n'}],config['revision'])
     async def run():
         job=await terminal.verify(context,'test',config['revision'],result['change_id'])
-        assert (await completed(context,job))['evidence']['files_unchanged']
+        current=await completed(context,job)
+        assert current['status']=='completed',current
+        assert 'verified' in current['stdout'] and current['exit_code']==0
+        assert current['evidence']['files_unchanged']
         (root/'x.py').write_text('x=2\n')
         assert not terminal.read(context,job['job_id'])['evidence']['files_unchanged']
     asyncio.run(run())
@@ -150,7 +158,8 @@ def test_terminal_restart_does_not_replay_and_task_resumes_after_exit(project):
     async def run():
         job=await terminal.start(ctx,"Write-Output 'done'",workspace_revision=config['revision'])
         assert not tasks.ready_to_continue(tasks.get(task['id']))
-        await completed(ctx,job)
+        current=await completed(ctx,job)
+        assert current['status']=='completed' and 'done' in current['stdout'],current
         assert tasks.ready_to_continue(tasks.get(task['id']))
         with closing(db.get_conn()) as conn,conn: conn.execute("UPDATE terminal_jobs SET status='running' WHERE id=?",(job['job_id'],))
         terminal._initialized.discard(str(db.settings.db_path));terminal.initialize()
@@ -262,14 +271,38 @@ def test_code_patch_waits_for_concrete_approval_and_runs_only_once(project):
 
 def test_windows_command_cancel_kills_owned_descendants(project):
     if os.name!='nt': pytest.skip('Windows Job Object')
+    import ctypes
+    from ctypes import wintypes
+    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD]
+    kernel.OpenProcess.restype=wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]
+    kernel.WaitForSingleObject.restype=wintypes.DWORD
+    kernel.CloseHandle.argtypes=[wintypes.HANDLE]
     root,_,config,ctx=project
     async def run():
-        job=await terminal.start(ctx,"Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile','-Command',\"Set-Content child-ready.txt ready; Start-Sleep -Seconds 5; Set-Content child-marker.txt alive\"; Start-Sleep -Seconds 30",workspace_revision=config['revision'])
-        for _ in range(40):
-            if (root/'child-ready.txt').exists(): break
-            await asyncio.sleep(.1)
-        assert (root/'child-ready.txt').exists(), 'The child must actually start before cancellation'
-        terminal.stop(ctx,job['job_id']);await completed(ctx,job)
-        await asyncio.sleep(5)
-        assert not (root/'child-marker.txt').exists()
+        job=await terminal.start(ctx,"Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile','-Command',\"Set-Content child-pid.txt `$PID; Set-Content child-ready.txt ready; while (-not (Test-Path child-release.txt)) { Start-Sleep -Milliseconds 100 }; Set-Content child-marker.txt alive\"; Start-Sleep -Seconds 60",workspace_revision=config['revision'])
+        child_handle=None
+        try:
+            deadline=time.monotonic()+30
+            while not (root/'child-ready.txt').exists() and time.monotonic()<deadline:
+                assert terminal.read(ctx,job['job_id'])['status']=='running'
+                await asyncio.sleep(.1)
+            assert (root/'child-ready.txt').exists(), terminal.read(ctx,job['job_id'])
+            child_pid=int((root/'child-pid.txt').read_text(encoding='utf-8-sig').strip())
+            child_handle=kernel.OpenProcess(0x00100000,False,child_pid)  # SYNCHRONIZE
+            assert child_handle,ctypes.get_last_error()
+            assert kernel.WaitForSingleObject(child_handle,0)==258, 'Child must be alive before cancellation'
+            terminal.stop(ctx,job['job_id'])
+            assert (await completed(ctx,job,timeout_seconds=10))['status']=='cancelled'
+            deadline=time.monotonic()+10
+            while kernel.WaitForSingleObject(child_handle,0)==258 and time.monotonic()<deadline:
+                await asyncio.sleep(.05)
+            assert kernel.WaitForSingleObject(child_handle,0)==0, 'Owned descendant survived cancellation'
+            (root/'child-release.txt').write_text('release',encoding='utf-8')
+            assert not (root/'child-marker.txt').exists()
+        finally:
+            if job['job_id'] in terminal._running:
+                terminal.stop(ctx,job['job_id']);await completed(ctx,job,timeout_seconds=10)
+            if child_handle: kernel.CloseHandle(child_handle)
     asyncio.run(run())

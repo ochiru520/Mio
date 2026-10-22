@@ -214,9 +214,9 @@ def test_new_autonomous_tool_executes_without_confirmation_old_pending_is_preser
     from app.agent_tool_service import ToolExecutionContext, execute_tool_call
     _, project, linked = inherited_project(tmp_path)
     config = code.configuration(project['id'])
-    shell = 'powershell' if 'powershell' in terminal.shells() else 'bash'
-    command = "Write-Output 'default-run'" if shell == 'powershell' else "printf 'default-run'"
-    arguments = dict(command=command, shell=shell, workspace_revision=config['revision'])
+    shell = 'cmd' if 'cmd' in terminal.shells() else 'bash'
+    command = 'echo default-run' if shell == 'cmd' else "printf 'default-run'"
+    arguments = dict(command=command, shell=shell, workspace_revision=config['revision'], timeout_seconds=30)
     first = ToolExecutionContext('defaults_pending', 'defaults_pending_req', '', linked.conversation_id, 0, 'synthetic', 0)
     second = ToolExecutionContext('defaults_direct', 'defaults_direct_req', '', linked.conversation_id, 0, 'synthetic', 0)
     for context in (first, second):
@@ -229,7 +229,7 @@ def test_new_autonomous_tool_executes_without_confirmation_old_pending_is_preser
         dispatched = await execute_tool_call('terminal_start', arguments, second)
         assert dispatched.status == 'completed', dispatched.error
         result=await completed(second,dispatched.result['job_id'])
-        assert result['status'] == 'completed' and 'default-run' in result['stdout']
+        assert result['status'] == 'completed' and result['exit_code'] == 0 and 'default-run' in result['stdout']
         with closing(db.get_conn()) as conn:
             old = conn.execute('SELECT status FROM companion_actions WHERE id=?', (pending.action_id,)).fetchone()
         assert old['status'] == 'needs_confirmation'

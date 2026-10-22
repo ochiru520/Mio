@@ -44,22 +44,25 @@ def _state_root() -> Path:
 
 
 def _atomic(path: Path, value: dict):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
-    try:
-        with temp.open('x', encoding='utf-8') as stream:
-            json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
-            stream.flush(); os.fsync(stream.fileno())
-        os.replace(temp, path)
-    finally:
-        temp.unlink(missing_ok=True)
+    with _lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+        try:
+            with temp.open('x', encoding='utf-8') as stream:
+                json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
+                stream.flush(); os.fsync(stream.fileno())
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
 
 
 def _read(path: Path, default=None):
-    try:
-        return json.loads(path.read_text('utf-8'))
-    except FileNotFoundError:
-        return default
+    # Windows readers must not overlap this service's atomic file replacement.
+    with _lock:
+        try:
+            return json.loads(path.read_text('utf-8'))
+        except FileNotFoundError:
+            return default
 
 
 def _hash(path: Path) -> str:

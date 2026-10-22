@@ -42,6 +42,80 @@ def sources(tmp_path, monkeypatch):
     return backend, desktop, config
 
 
+@pytest.mark.parametrize('writer', ['save', 'atomic'])
+def test_job_read_waits_for_concurrent_json_replacement(tmp_path, monkeypatch, writer):
+    job = {'id': 'upgrade_' + '1'*32, 'status': 'completed'}
+    path = service._job_path(job['id'])
+    service._atomic(path, job)
+    replacing = threading.Event(); release = threading.Event()
+    reader_started = threading.Event(); reader_done = threading.Event()
+    errors = []; results = []
+    original_replace = os.replace
+    original_read = Path.read_text
+
+    def paused_replace(source, destination):
+        if Path(destination) == path:
+            replacing.set()
+            if not release.wait(5):
+                raise TimeoutError('test did not release JSON replacement')
+        return original_replace(source, destination)
+
+    def guarded_read(target, *args, **kwargs):
+        if target == path and replacing.is_set() and not release.is_set():
+            raise PermissionError('simulated Windows replacement sharing conflict')
+        return original_read(target, *args, **kwargs)
+
+    def write():
+        try:
+            if writer == 'save':
+                service._save(job, status='cancelled')
+            else:
+                service._atomic(path, dict(job, status='cancelled'))
+        except Exception as exc:
+            errors.append(exc)
+
+    def read():
+        reader_started.set()
+        try:
+            results.append(service.get(job['id']))
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            reader_done.set()
+
+    monkeypatch.setattr(os, 'replace', paused_replace)
+    monkeypatch.setattr(Path, 'read_text', guarded_read)
+    writing = threading.Thread(target=write)
+    reading = threading.Thread(target=read)
+    writing.start()
+    try:
+        assert replacing.wait(3)
+        reading.start()
+        assert reader_started.wait(3)
+        assert not reader_done.wait(0.2), 'reader entered an in-progress JSON replacement'
+    finally:
+        release.set()
+        writing.join(3)
+        if reading.ident is not None:
+            reading.join(3)
+    assert not writing.is_alive() and not reading.is_alive()
+    assert not errors
+    assert len(results) == 1 and results[0]['status'] == 'cancelled'
+
+
+def test_json_read_preserves_missing_default_and_reports_permission_errors(tmp_path, monkeypatch):
+    path = tmp_path / 'job.json'
+    default = {'missing': True}
+    assert service._read(path, default) is default
+
+    def denied(*args, **kwargs):
+        raise PermissionError('genuine access denial')
+
+    monkeypatch.setattr(Path, 'read_text', denied)
+    with pytest.raises(PermissionError, match='genuine access denial'):
+        service._read(path, default)
+
+
 def test_snapshot_keeps_dirty_source_excludes_credentials_data_dependencies(tmp_path):
     root = tmp_path / 'source'; root.mkdir()
     for name in ('src', 'node_modules', '数据', '.venv', 'generated'):

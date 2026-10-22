@@ -18,7 +18,7 @@ HELPER = Path(__file__).resolve().parents[1] / "scripts" / "napcat-loader.ps1"
 class NapCatLoaderTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="mio-napcat-loader-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.shell = self.root / "Shell 中文 # % ' 空格"
         self.shell.mkdir()
         self.main = self.shell / "napcat.mjs"
@@ -207,7 +207,7 @@ class NapCatLoaderTests(unittest.TestCase):
 class NapCatHotfixInstallerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="mio-napcat-hotfix-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.bundle = self.root / "bundle"
         self.bundle.mkdir()
         for name in ("napcat-control.ps1", "napcat-loader.ps1", "repair-napcat-installation.ps1"):

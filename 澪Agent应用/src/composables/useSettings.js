@@ -4,6 +4,7 @@
  */
 import { nextTick } from 'vue'
 import * as settingsApi from '../services/settingsApi.js'
+import { saveRuntimeSettingsWithRecovery } from '../services/runtimeSettingsSave.js'
 
 export function useSettings(deps) {
   function focusComposer() {
@@ -72,48 +73,74 @@ export function useSettings(deps) {
     localStorage.setItem('mio_right_sidebar_visible', String(deps.rightSidebarVisible.value))
     deps.showSettingsFeedback(section, 'success', section === 'general' ? '基础设置已保存' : '外观与界面设置已保存并生效')
   }
-  async function loadRuntimeSettings({ quiet = false } = {}) {
-    if (deps.runtimeSettingsBusy.value) return
+  function runtimeDraftIsDirty() {
+    const baseline = deps.savedRuntimeSettingsSource()
+    return Object.keys(deps.runtimeSettingsDraft.value).some(key =>
+      JSON.stringify(deps.runtimeSettingsDraft.value[key]) !== JSON.stringify(baseline[key]))
+  }
+  async function loadRuntimeSettings({ quiet = false, discardDraft = false } = {}) {
+    if (deps.runtimeSettingsBusy.value) return false
+    if (!discardDraft && deps.runtimeSettingsReady.value && runtimeDraftIsDirty()) return false
     deps.runtimeSettingsBusy.value = true
     try {
       const result = await settingsApi.loadRuntimeSettings()
+      if (!discardDraft && deps.runtimeSettingsReady.value && runtimeDraftIsDirty()) return false
       deps.runtimeSettingsDraft.value = { ...(result.settings || {}) }
       deps.runtimeSettingsRevision.value = result.revision || ''
       deps.savedRuntimeSettings.value = deps.serializeSettings(deps.runtimeSettingsDraft.value)
       deps.runtimeSettingsReady.value = true
+      return true
     } catch (error) {
       if (!quiet) deps.errorMessage.value = error.message
+      return false
     } finally {
       deps.runtimeSettingsBusy.value = false
     }
+  }
+  async function reloadRuntimeSettings() {
+    if (deps.runtimeSettingsBusy.value) return false
+    if (runtimeDraftIsDirty() && !await deps.showAppConfirm({
+      title: '重新读取运行设置？', message: '运行设置中尚未保存的修改将被最新设置替换，其他设置草稿会保留。',
+      confirmText: '重新读取', danger: true,
+    })) return false
+    const section = deps.activeSettingsSection.value
+    const loaded = await loadRuntimeSettings({ discardDraft: true })
+    if (loaded) deps.errorMessage.value = ''
+    deps.showSettingsFeedback(section, loaded ? 'success' : 'error', loaded ? '已读取最新运行设置' : '重新读取失败，请稍后重试')
+    return loaded
   }
   async function saveRuntimeSettings() {
     if (deps.runtimeSettingsBusy.value || !deps.runtimeSettingsReady.value) return false
     deps.runtimeSettingsBusy.value = true
     deps.errorMessage.value = ''
+    const section = deps.activeSettingsSection.value
+    const label = deps.activeSettingsItem.value.label
     try {
       const baseline = deps.savedRuntimeSettingsSource()
-      const payload = Object.fromEntries((deps.runtimeSettingKeysBySection[deps.activeSettingsSection.value] || [])
+      const payload = Object.fromEntries((deps.runtimeSettingKeysBySection[section] || [])
         .filter(key => JSON.stringify(deps.runtimeSettingsDraft.value[key]) !== JSON.stringify(baseline[key]))
         .map(key => [key, deps.runtimeSettingsDraft.value[key]]))
       for (const key of deps.privateRuntimePathKeys) delete payload[key]
-      const result = await deps.request('/api/settings/runtime', {
-        method: 'PATCH',
-        headers: deps.runtimeSettingsRevision.value ? { 'If-Match': deps.runtimeSettingsRevision.value } : {},
-        body: JSON.stringify(payload),
+      if (!Object.keys(payload).length) return true
+      const changes = JSON.parse(JSON.stringify(payload))
+      const result = await saveRuntimeSettingsWithRecovery(changes, {
+        baseline, revision: deps.runtimeSettingsRevision.value,
       })
-      deps.runtimeSettingsDraft.value = { ...(result.settings || {}) }
+      const remainingDraft = Object.fromEntries(Object.entries(deps.runtimeSettingsDraft.value)
+        .filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(
+          Object.hasOwn(changes, key) ? changes[key] : baseline[key])))
+      deps.runtimeSettingsDraft.value = { ...(result.settings || {}), ...remainingDraft }
       deps.runtimeSettingsRevision.value = result.revision || ''
-      deps.savedRuntimeSettings.value = deps.serializeSettings(deps.runtimeSettingsDraft.value)
+      deps.savedRuntimeSettings.value = deps.serializeSettings(result.settings || {})
       await deps.loadBootstrap({ quiet: true })
       const pendingRestart = result.application?.restart_required?.length
-      deps.showSettingsFeedback(deps.activeSettingsSection.value, 'success', pendingRestart
-        ? `${deps.activeSettingsItem.value.label}设置已保存，组件路径需重启应用后生效`
-        : `${deps.activeSettingsItem.value.label}设置已保存并生效`)
+      deps.showSettingsFeedback(section, 'success', pendingRestart
+        ? `${label}设置已保存，组件路径需重启应用后生效`
+        : `${label}设置已保存并生效`)
       return true
     } catch (error) {
       deps.errorMessage.value = error.message
-      deps.showSettingsFeedback(deps.activeSettingsSection.value, 'error', `${deps.activeSettingsItem.value.label}设置保存失败`)
+      deps.showSettingsFeedback(section, 'error', `${label}设置保存失败：${error.message}`)
       return false
     } finally {
       deps.runtimeSettingsBusy.value = false
@@ -402,7 +429,7 @@ export function useSettings(deps) {
     const enteringSettings = deps.activeView.value !== 'settings'
     if (!enteringSettings && sectionId === deps.activeSettingsSection.value) {
       if (sectionId === 'profile' && !deps.mioProfileReady.value) await loadMioProfileSettings({ quiet: true })
-      if (['general', 'conversation', 'diary', 'qq', 'advanced'].includes(sectionId) && !deps.runtimeSettingsReady.value) await loadRuntimeSettings()
+      if (['general', 'conversation', 'diary', 'qq', 'advanced'].includes(sectionId)) await loadRuntimeSettings()
       return
     }
     if (!enteringSettings && deps.isSettingsSectionDirty(deps.activeSettingsSection.value)) {
@@ -418,7 +445,7 @@ export function useSettings(deps) {
     localStorage.setItem(new URLSearchParams(window.location.search).get('workspace') === 'agent' ? 'mio_agent_settings_section' : 'mio_settings_section', sectionId)
     if (sectionId === 'profile') await loadMioProfileSettings({ quiet: true })
     if (sectionId === 'data') deps.refreshDataPrivacy()
-    if (!deps.runtimeSettingsReady.value) loadRuntimeSettings()
+    if (['general', 'conversation', 'diary', 'qq', 'advanced'].includes(sectionId)) await loadRuntimeSettings()
   }
-  return { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelChange, applyDisplayMode, saveAppearanceSettings, loadRuntimeSettings, saveRuntimeSettings, loadMioProfileSettings, saveMioProfileSettings, uploadProfileAvatar, resetProfileAvatar, uploadAppearanceImage, resetAppearanceImage, saveConversationSettings, saveActiveSettings, resetActiveSettings, openSettingsSection }
+  return { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelChange, applyDisplayMode, saveAppearanceSettings, loadRuntimeSettings, reloadRuntimeSettings, saveRuntimeSettings, loadMioProfileSettings, saveMioProfileSettings, uploadProfileAvatar, resetProfileAvatar, uploadAppearanceImage, resetAppearanceImage, saveConversationSettings, saveActiveSettings, resetActiveSettings, openSettingsSection }
 }

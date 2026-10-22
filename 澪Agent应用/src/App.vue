@@ -377,7 +377,7 @@ const { handlePetChatKeydown, beginPetChatWindowDrag, resetPetCallCapture, submi
 })
 
 import { useSettings } from './composables/useSettings.js'
-const { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelChange, applyDisplayMode, saveAppearanceSettings, loadRuntimeSettings, saveRuntimeSettings, loadMioProfileSettings, saveMioProfileSettings, uploadProfileAvatar, resetProfileAvatar, uploadAppearanceImage, resetAppearanceImage, saveConversationSettings, saveActiveSettings, resetActiveSettings, openSettingsSection } = useSettings({
+const { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelChange, applyDisplayMode, saveAppearanceSettings, loadRuntimeSettings, reloadRuntimeSettings, saveRuntimeSettings, loadMioProfileSettings, saveMioProfileSettings, uploadProfileAvatar, resetProfileAvatar, uploadAppearanceImage, resetAppearanceImage, saveConversationSettings, saveActiveSettings, resetActiveSettings, openSettingsSection } = useSettings({
   get DISPLAY_MODE_PRESETS() { return DISPLAY_MODE_PRESETS },
   get activeSettingsItem() { return activeSettingsItem },
   get activeSettingsSection() { return activeSettingsSection },
@@ -2125,6 +2125,7 @@ provide('mio-settings-page', reactive({
   runtimeSettingsBusy,
   runtimeSettingsDraft,
   runtimeSettingsReady,
+  reloadRuntimeSettings,
   webSearchTestBusy,
   webSearchTestQuery,
   webSearchTestResult,

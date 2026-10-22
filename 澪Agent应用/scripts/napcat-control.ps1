@@ -256,16 +256,14 @@ function Start-NapCatManagedProcess {
             throw "检测到普通 QQ 正在运行。请先从系统托盘彻底退出 QQ，再由 Mio 启动机器人 QQ。"
         }
 
-        $mainUrl = ([IO.Path]::GetFullPath($shell.Main)).Replace("\", "/")
-        [IO.File]::WriteAllText(
-            $shell.Load,
-            "(async () => {await import(`"file:///$mainUrl`")})()",
-            [Text.UTF8Encoding]::new($false)
-        )
-        if (Test-Path -LiteralPath $shell.Patch -PathType Leaf) {
-            $env:NAPCAT_PATCH_PACKAGE = $shell.Patch
+        $loaderHelper = Join-Path $PSScriptRoot "napcat-loader.ps1"
+        if (-not (Test-Path -LiteralPath $loaderHelper -PathType Leaf)) {
+            throw "缺少 NapCat 加载修复脚本 napcat-loader.ps1，请修复 Mio 程序文件。"
         }
-        $env:NAPCAT_LOAD_PATH = $shell.Load
+        . $loaderHelper
+        $preparedLoader = Initialize-MioNapCatLoader -ShellRoot $shell.Root -QQPath $qqPath
+        $env:NAPCAT_PATCH_PACKAGE = $preparedLoader.Patch
+        $env:NAPCAT_LOAD_PATH = $preparedLoader.Load
         $env:NAPCAT_INJECT_PATH = $shell.Hook
         $env:NAPCAT_LAUNCHER_PATH = $shell.BootMain
         $env:NAPCAT_MAIN_PATH = $shell.Main

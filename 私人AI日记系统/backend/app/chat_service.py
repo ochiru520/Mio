@@ -337,6 +337,17 @@ INTERNAL_NOTE_RE = re.compile(
     r"|（本轮新消息）"
 )
 INTERNAL_NOTE_START_RE = re.compile(rf"[\[【]\s*{INTERNAL_NOTE_LABEL}\s*[:：]?")
+# 模型有时会省略“内部消息时间”标题，只复述时间标签。仅匹配行首完整标签，
+# 不触碰普通时间答案、句内引用、Markdown 引文或代码里的时间文本。
+LEAKED_TIME_LABEL = (
+    r"(?:今天（昨晚）\s*|(?:今天|昨天|前天|\d{4}-\d{2}-\d{2})\s*)"
+    r"(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?"
+    r"(?:（(?:\d+ 天前|未来时间记录，谨慎使用)）)?"
+    r"(?:（本轮新消息）)?"
+)
+LEAKED_TIME_PREFIX_RE = re.compile(
+    rf"^\s*(?:\[\s*{LEAKED_TIME_LABEL}\s*\]|【\s*{LEAKED_TIME_LABEL}\s*】)\s*"
+)
 THINK_BLOCK_RE = re.compile(r"<(?:think|analysis)>[\s\S]*?</(?:think|analysis)>", re.IGNORECASE)
 REASONING_FINAL_MARKER_RE = re.compile(
     r"(?im)^\s*(?:natural(?:\s+(?:answer|response))?|final(?:\s+answer)?|answer|assistant\s+response|response)\s*[:：]\s*"
@@ -384,6 +395,40 @@ USER_PRODUCTIVE_ACTIVITY_RE = re.compile(
 )
 
 
+def _strip_leaked_time_annotations(reply: str) -> str:
+    lines: list[str] = []
+    fence_character = ""
+    fence_length = 0
+    for line in reply.splitlines():
+        fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence_character:
+            lines.append(line)
+            if (
+                fence is not None
+                and fence.group(1)[0] == fence_character
+                and len(fence.group(1)) >= fence_length
+                and not fence.group(2).strip()
+            ):
+                fence_character = ""
+            continue
+        if fence is not None:
+            fence_character = fence.group(1)[0]
+            fence_length = len(fence.group(1))
+            lines.append(line)
+            continue
+        # 四空格/Tab 缩进也是 Markdown 代码，里面的时间示例不能当内部标注。
+        if line.startswith(("    ", "\t")):
+            lines.append(line)
+            continue
+        stripped = line
+        while LEAKED_TIME_PREFIX_RE.match(stripped):
+            stripped = LEAKED_TIME_PREFIX_RE.sub("", stripped, count=1)
+        if line.strip() and not stripped.strip():
+            continue
+        lines.append(stripped)
+    return "\n".join(lines)
+
+
 def clean_chat_reply(reply: str) -> str:
     from .agent_reply_protocol import strip_tool_protocol
     reply = strip_tool_protocol(reply)
@@ -428,7 +473,7 @@ def clean_chat_reply(reply: str) -> str:
         if line.strip() and not stripped.strip():
             continue
         lines.append(stripped)
-    return "\n".join(lines).strip()
+    return _strip_leaked_time_annotations("\n".join(lines)).strip()
 
 
 def _strip_unlabeled_reasoning(reply: str) -> tuple[str, bool]:
@@ -1055,7 +1100,7 @@ def _build_current_time_context(current: datetime | None = None) -> str:
 当前时段提示：{topic}。
 
 时间使用规则：
-- 历史消息开头的「[内部消息时间：…]」以及「（本轮新消息）」是系统给你的内部标注，只用来帮你判断时间。回复里绝对不能出现这类方括号标注或任何类似格式，一个字都不能带。
+- 历史消息开头的「[内部消息时间：…]」以及「（本轮新消息）」是系统给你的内部标注，只用来帮你判断时间。回复里绝对不能出现这类方括号标注或任何类似格式，也不能缩写成「[今天 21:21]」或放在每句正文前。用户问时间时用自然语言回答，不要给回复加时间标签。
 - 每轮开口前先在内部确认：现在的年月日、星期、时分和时间段，再理解用户说的“今天、昨天、刚才、早上、晚上”。不要依赖模型自己的时间感。
 - 这是本轮对话的真实当前时间。用户问日期、星期、几点或现在是什么时段时，直接依据它回答，不要猜。
 - 当前时间的优先级高于聊天历史、长期记忆和旧日记。绝不能把旧消息发生的时段误当成现在。

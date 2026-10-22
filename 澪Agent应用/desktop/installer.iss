@@ -1,5 +1,5 @@
-﻿#define MyAppName "Mio"
-#define MyAppVersion "0.4.0"
+#define MyAppName "Mio"
+#define MyAppVersion "0.4.1"
 #define MyAppPublisher "Mio Project"
 #define MyAppExeName "Mio.exe"
 
@@ -14,7 +14,7 @@ UsePreviousTasks=yes
 DisableDirPage=no
 DefaultGroupName={#MyAppName}
 OutputDir=..\release
-OutputBaseFilename=Mio-0.4.0-Windows-x64-Setup
+OutputBaseFilename=Mio-0.4.1-Windows-x64-Setup
 SetupIconFile=mio.ico
 #ifdef MioFastPackage
 Compression=zip

@@ -172,6 +172,8 @@
   gap: 0;
   overflow: hidden;
 }
+.settings-header-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.settings-header-actions .text-button { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .settings-page-header {
   display: flex;
   min-height: 92px;

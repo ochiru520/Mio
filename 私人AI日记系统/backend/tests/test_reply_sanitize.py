@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app.chat_service import (
     _remove_replayed_previous_turn,
@@ -70,6 +72,46 @@ class ReplySanitizeTests(unittest.TestCase):
             replies_for_source(reply, "qq"),
             ["游戏玩了几天，也该玩得差不多了", "澪不是不让你玩"],
         )
+
+    def test_shortened_time_labels_do_not_become_qq_messages(self) -> None:
+        reply = "[今天 21:21]\n我在。\n[今天 21:23]\n慢慢说。"
+        self.assertEqual(replies_for_source(reply, "qq"), ["我在", "慢慢说"])
+        self.assertEqual(replies_for_source("[今天 21:21]", "qq"), [])
+        self.assertEqual(replies_for_source("**[今天 21:21]**\n我在。", "qq"), ["我在"])
+        self.assertEqual(
+            replies_for_source("[内部消息时间：今天 21:21][今天 21:21] 我在。", "qq"),
+            ["我在"],
+        )
+
+    def test_shortened_time_prefixes_keep_the_message_body(self) -> None:
+        for marker in (
+            "[今天 21:21]", "[今天21:21]", "【昨天 09:03】", "[今天（昨晚）23:59]",
+            "[2026-10-22 21:21:30]", "[2026-10-20 21:21（2 天前）]",
+            "[今天 21:21（本轮新消息）]",
+        ):
+            with self.subTest(marker=marker):
+                self.assertEqual(replies_for_source(f"{marker} 我在。", "qq"), ["我在"])
+
+    def test_time_answers_and_explicit_quotations_survive_cleaning(self) -> None:
+        for reply in (
+            "现在是今天 21:21。", "21:21", "今天 21:21", "2026-10-22 21:21",
+            "你看到的 [今天 21:21] 是时间标签。", '"[今天 21:21]"',
+            "“[今天 21:21]”", "> [今天 21:21]", "`[今天 21:21]`",
+        ):
+            with self.subTest(reply=reply):
+                self.assertEqual(clean_chat_reply(reply), reply)
+
+    def test_timestamp_examples_inside_markdown_code_survive(self) -> None:
+        for reply in (
+            "```text\n[今天 21:21]\n```", "~~~~text\n[昨天 21:23]\n~~~~",
+            "示例：\n    [今天 21:21]", "示例：\n\t[今天 21:21]",
+        ):
+            with self.subTest(reply=reply):
+                self.assertEqual(clean_chat_reply(reply), reply)
+
+    def test_time_prefix_cleanup_resumes_after_code_fence(self) -> None:
+        reply = "```text\n[今天 21:21]\n```\n[今天 21:23]\n我在。"
+        self.assertEqual(clean_chat_reply(reply), "```text\n[今天 21:21]\n```\n我在。")
 
     def test_inline_markers_are_stripped(self) -> None:
         reply = "[内部消息时间：今天 08:10（本轮新消息）]\n醒了就好。"
@@ -197,6 +239,27 @@ class DiaryStatusSyncTests(unittest.TestCase):
         self.assertIn("## 今日成长", updated)
         self.assertIn("状态：完成", updated)
         self.assertIn("原因：持续推进两小时", updated)
+
+
+class QqTimeLabelDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_only_spoken_bodies_reach_onebot_send_callback(self) -> None:
+        from app.routes import onebot
+
+        replies = replies_for_source("[今天 21:21]\n我在。\n[今天 21:23] 慢慢说。", "qq")
+        for event, action in (
+            ({"message_type": "private", "user_id": 42}, "send_private_msg"),
+            ({"message_type": "group", "group_id": 123, "user_id": 42}, "send_group_msg"),
+        ):
+            with self.subTest(action=action):
+                send = AsyncMock()
+                with patch.object(onebot, "settings", SimpleNamespace(
+                    qq_reply_initial_delay_seconds=0, qq_reply_delay_seconds=0,
+                )):
+                    await onebot._send_replies(event, replies, send)
+                self.assertEqual(send.await_count, 2)
+                actions = [call.args[0] for call in send.await_args_list]
+                self.assertEqual([item["action"] for item in actions], [action, action])
+                self.assertEqual([item["params"]["message"] for item in actions], ["我在", "慢慢说"])
 
 
 if __name__ == "__main__":

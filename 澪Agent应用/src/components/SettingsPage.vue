@@ -79,7 +79,10 @@ export default {
         <component :is="activeSettingsItem.icon" :size="20" />
         <div><h1>{{ agent ? ({ appearance: '外观主题', profile: '人设与表达' })[activeSettingsSection] || activeSettingsItem.label : activeSettingsItem.label }}</h1><p>{{ agent && activeSettingsSection === 'appearance' ? '主题、字体与消息信息，和 Mio 聊天共用' : activeSettingsItem.description }}</p></div>
       </div>
-      <span v-if="isSettingsSectionDirty(activeSettingsSection)" class="settings-unsaved">有未保存修改</span>
+      <div class="settings-header-actions">
+        <span v-if="isSettingsSectionDirty(activeSettingsSection)" class="settings-unsaved">有未保存修改</span>
+        <button v-if="['general', 'conversation', 'diary', 'qq', 'advanced'].includes(activeSettingsSection) && runtimeSettingsReady" type="button" class="text-button" :disabled="runtimeSettingsBusy" @click="reloadRuntimeSettings"><RefreshCw :size="14" />重新读取</button>
+      </div>
     </header>
 
     <div v-if="settingsFeedback.section === activeSettingsSection" :class="['settings-feedback', settingsFeedback.type]">{{ settingsFeedback.message }}</div>

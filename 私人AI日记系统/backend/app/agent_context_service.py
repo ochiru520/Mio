@@ -16,6 +16,8 @@ from .agent_result_context import encode, model_result
 
 def initialize():
     with closing(db.get_conn()) as conn, conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS agent_context_compression_requests (
+            conversation_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, requested_at TEXT NOT NULL)""")
         conn.execute('''CREATE TABLE IF NOT EXISTS agent_context_cache (
             task_id TEXT PRIMARY KEY REFERENCES agent_tasks(id) ON DELETE CASCADE, summary TEXT NOT NULL DEFAULT '',
             source_hash TEXT NOT NULL DEFAULT '', through_step INTEGER NOT NULL DEFAULT 0,
@@ -27,6 +29,27 @@ def initialize():
             conn.execute("ALTER TABLE agent_context_cache ADD COLUMN last_compressed_at TEXT NOT NULL DEFAULT ''")
         if 'evidence_hash' not in columns:
             conn.execute("ALTER TABLE agent_context_cache ADD COLUMN evidence_hash TEXT NOT NULL DEFAULT ''")
+
+
+
+def request_force_compression(conversation_id: str) -> dict[str, object]:
+    """Queue one durable request; the next planner tick performs the model call."""
+    import uuid
+    if not str(conversation_id or "").strip():
+        raise ValueError("压缩请求缺少当前会话。")
+    if conversation_id.startswith("qq_group_"):
+        raise ValueError("群聊不能压缩或维护私人上下文。")
+    initialize()
+    with closing(db.get_conn()) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        pending = conn.execute('SELECT request_id FROM agent_context_compression_requests WHERE conversation_id=?',
+                               (conversation_id,)).fetchone()
+        identifier = pending['request_id'] if pending else uuid.uuid4().hex
+        if not pending:
+            conn.execute('INSERT INTO agent_context_compression_requests VALUES(?,?,?)',
+                         (conversation_id, identifier, db.now_iso()))
+    return {"status": "queued", "conversation_id": conversation_id, "request_id": identifier,
+            "message": "已请求压缩，下一次 Agent 规划时执行；当前工具执行不会重入规划。"}
 
 
 def _cache(task_id):
@@ -45,7 +68,15 @@ def usage_for_conversation(conversation_id):
         row = conn.execute('''SELECT c.usage_json FROM agent_context_cache c
             JOIN agent_tasks t ON t.id=c.task_id WHERE t.conversation_id=?
             ORDER BY c.updated_at DESC LIMIT 1''', (conversation_id,)).fetchone()
-    return json.loads(row[0]) if row else None
+    if not row:
+        return None
+    usage = json.loads(row[0])
+    # A saved measurement keeps its token count, not an obsolete configuration.
+    limit = max(1000, int(settings.chat_context_max_tokens))
+    used = max(0, int(usage.get('used_tokens') or 0))
+    return {**usage, 'max_tokens': limit, 'percent': round(used / limit * 100, 1),
+            'token_percent': round(used / limit * 100, 1), 'estimated': True,
+            'warning': used >= int(limit * float(settings.chat_context_compress_ratio))}
 
 
 def _protocol_groups(messages):
@@ -147,16 +178,17 @@ async def compact_context(messages, *, source_messages, protocol_messages, task,
                           timeout=None, allow_summary=True, prompt_projection=None):
     """Return the next actual prompt and any metered summary completion."""
     cache = _cache(task['id'])
+    with closing(db.get_conn()) as conn:
+        pending = conn.execute('SELECT request_id FROM agent_context_compression_requests WHERE conversation_id=?',
+                               (task['conversation_id'],)).fetchone()
+    forced = bool(pending)
+    force_status = 'deferred' if forced else ''
     limit = max(1000, int(settings.chat_context_max_tokens))
-    window = 32768
     api_mode = 'chat_completions'
     from .model_registry import get_model_profile
     try:
         profile = get_model_profile(model_id)
-        window = int(profile.context_window_tokens or 0)
         api_mode = profile.api_mode
-        if window:
-            limit = min(limit, max(1000, int(window * .65)))
     except ValueError:
         pass
     trigger = int(limit * float(settings.chat_context_compress_ratio))
@@ -206,11 +238,11 @@ async def compact_context(messages, *, source_messages, protocol_messages, task,
     digest = hashlib.sha256(encode([source_hash, cutoff, new_old]).encode()).hexdigest()
     completions = []
     catch_up = bool(cache['summary']) and bool(new_old)
-    if allow_summary and (before >= trigger or evidence_changed or catch_up) and (new_old or source_changed) and digest != cache['failed_hash']:
+    if allow_summary and (forced or before >= trigger or evidence_changed or catch_up) and (new_old or source_changed) and (forced or digest != cache['failed_hash']):
         payload = {'previous_summary': cache['summary'], 'original_goal': task['original_goal'],
                    'current_state': task['snapshot'], 'source_material': old_source if source_changed else [],
                    'new_evidence': []}
-        input_limit = max(1000, min(24000, int((window or 32768) * .75)))
+        input_limit = limit
         source_included = source_changed
         if estimate_tokens(encode(payload)) > input_limit:
             # Oversized source material remains visible; never silently summarize an unread slice.
@@ -238,6 +270,7 @@ async def compact_context(messages, *, source_messages, protocol_messages, task,
                 {'role': 'user', 'content': encode(payload)}], model_id=model_id,
                 reasoning_level='low', request_id=f"{request_id}:context-compress:{cache['compression_count'] + 1}"), timeout=timeout)
             completions.append(completion)
+            force_status = 'compressed' if forced else ''
             summary = str(completion.content or '').strip()
             if not summary or len(summary) > 6000:
                 raise ValueError('上下文摘要为空或过长。')
@@ -250,21 +283,29 @@ async def compact_context(messages, *, source_messages, protocol_messages, task,
         except Exception:
             # Failure does not invent progress or repeat the same paid attempt each round.
             cache['failed_hash'] = digest
+            force_status = 'failed' if forced else ''
+    if forced and allow_summary:
+        if force_status == 'deferred':
+            force_status = 'noop'
+        with closing(db.get_conn()) as conn, conn:
+            conn.execute('DELETE FROM agent_context_compression_requests WHERE conversation_id=? AND request_id=?',
+                         (task['conversation_id'], pending['request_id']))
     used = prompt_tokens(output)
     compression_status = 'failed' if cache['failed_hash'] else 'compressed' if cache['summary'] else 'not_needed'
     compression_warning = '自动摘要暂未成功，旧证据保持可回读；当前上下文仍按估算显示。' if cache['failed_hash'] else ''
-    if not compression_warning and not allow_summary and before >= trigger:
+    if not compression_warning and not allow_summary and (before >= trigger or forced):
         compression_status = 'deferred'
         compression_warning = '本轮模型调用预算不足，自动摘要已暂缓；原文与工具证据保持可回读。'
     if used >= limit:
         compression_warning += (' ' if compression_warning else '') + '当前提示仍超过上下文预算；固定规则、工具说明和最新资料保持完整，未静默截断。'
     usage = {'used_tokens': used, 'max_tokens': limit, 'used_chars': len(encode(output)),
              'max_chars': settings.chat_context_max_chars, 'percent': round(used / limit * 100, 1),
+             'token_percent': round(used / limit * 100, 1),
              'has_summary': bool(cache['summary']), 'compression_count': cache['compression_count'],
              'compression_triggered': bool(cache['summary']), 'warning': used >= trigger,
              'last_compressed_at': cache['last_compressed_at'], 'compress_ratio': float(settings.chat_context_compress_ratio),
              'compression_status': compression_status, 'compression_warning': compression_warning,
-             'auto_compression_enabled': True,
+             'auto_compression_enabled': True, 'force_compression_status': force_status,
              'context_kind': 'agent_planner', 'estimated': True, 'scope': 'current_planner_prompt_including_tool_schemas'}
     with closing(db.get_conn()) as conn, conn:
         conn.execute('''INSERT INTO agent_context_cache VALUES(?,?,?,?,?,?,?,?,?,?)

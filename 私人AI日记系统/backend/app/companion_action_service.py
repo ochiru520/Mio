@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 ALLOWED_ACTION_TYPES = {
+    "compress_current_context",
     "add_diary_material",
     "set_daily_thirty",
     "set_daily_mood",
@@ -257,6 +258,7 @@ def build_companion_planner_messages(
 6. 是否在反馈某个旧话题的真实结果：完成、部分完成或未完成；需要保留用户说明，并给出有依据的后续调整。
 7. 是否明确要求生成今天的日记，或在晚上明确表达准备睡觉、结束今天。
 8. 是否出现值得跨天保留、且有明确原话证据的稳定事实、近期状态或长期经历。
+9. 是否要求压缩、精简当前对话的上下文工作记忆；由语义判断，而不是只匹配固定用词。
 
 强制规则：
 - “跑步 30 分钟、健身一小时、学习一上午、做了一下午 demo、练了几个小时技能”等事实已经同时具备自我提升方向和至少 30 分钟时长，必须输出 add_diary_material 和 set_daily_thirty(done)，不能留空。
@@ -280,7 +282,12 @@ def build_companion_planner_messages(
 - 属性、日记修改和自动生成动作的 confidence 必须至少 0.90，其他动作至少 0.75。
 - 禁止任何代码、命令、密钥、代理、账号、删除文件和 Git 动作。
 
+压缩规则：仅在用户明确要求维护当前上下文时输出 compress_current_context；不要把压缩附件、图片或改写文字当作上下文压缩。
+工具会保留原始消息。compressed 才表示完成；noop 表示无需处理，failed 表示失败，queued 表示尚待执行，不得提前声称压缩成功。
+群聊不能请求私人上下文压缩。
+
 只允许以下动作及字段：
+- compress_current_context: confidence（无需会话ID或其他参数，只能作用于当前会话）
 - add_diary_material: content, confidence
 - set_daily_thirty: status(done/partial/missed), reason, correction, confidence
 - set_daily_mood: mood, score(1-5), confidence
@@ -799,6 +806,16 @@ async def execute_companion_action_primitive(
     action_type = str(action["type"])
     confidence = _bounded_confidence(action.get("confidence"))
 
+    if action_type == "compress_current_context":
+        from types import SimpleNamespace
+        from .context_tools import compress_for_context
+        allowed = {"type", "confidence", "_candidate"}
+        if set(action) - allowed:
+            raise ValueError("压缩工具不接受会话ID或其他参数。")
+        result = await compress_for_context(SimpleNamespace(conversation_id=conversation_id,
+            source_message_id=source_message_id, source="qq" if conversation_id.startswith("qq_") else "desktop"))
+        return json.dumps(result, ensure_ascii=False)
+
     if action_type == "add_diary_material":
         content = _clean_text(action.get("content"))
         material_id = db.add_diary_material_once(content, source="auto_chat")
@@ -1057,7 +1074,7 @@ async def execute_companion_actions(
                 }
             )
             continue
-        if action_type in {"update_profile", "edit_today_diary", "generate_today_diary"}:
+        if action_type in {"update_profile", "edit_today_diary", "generate_today_diary", "compress_current_context"}:
             if expensive_action_used:
                 db.update_companion_action(action_id, "skipped", "本轮已经执行过一个高成本动作。")
                 db.finish_tool_execution_receipt(receipt_id, "skipped", "本轮已经执行过一个高成本动作。")
@@ -1076,6 +1093,12 @@ async def execute_companion_actions(
                 action, conversation_id, user_message, source_message_id
             )
             status = "executed"
+            if action_type == "compress_current_context":
+                status = json.loads(result)["status"]
+        except asyncio.CancelledError:
+            db.update_companion_action(action_id, "cancelled", "对话已取消，未报告压缩完成。")
+            db.finish_tool_execution_receipt(receipt_id, "cancelled", "对话已取消，未报告压缩完成。")
+            raise
         except Exception as exc:
             result = str(exc)[:500]
             status = "failed"
@@ -1217,6 +1240,31 @@ async def _execute_approved_action(action_id: int) -> dict[str, str]:
     return {"status": "executed", "result": result, "receipt_id": str(receipt_id)}
 
 
+
+def build_context_maintenance_feedback(conversation_id: str) -> str:
+    """Expose the latest scoped maintenance receipt, including honest non-success states."""
+    if not conversation_id or conversation_id.startswith("qq_group_"):
+        return ""
+    from .context_tools import _bounded_result
+    for row in db.list_companion_actions(limit=30, conversation_id=conversation_id):
+        if row["action_type"] != "compress_current_context":
+            continue
+        status = str(row["status"] or "")
+        if status not in {"compressed", "noop", "failed", "queued"}:
+            continue
+        try:
+            value = json.loads(str(row["result"] or "{}"))
+        except (TypeError, ValueError):
+            value = {"status": "failed"}
+        # A previous receipt is evidence only; it is not a new request or permission.
+        value = _bounded_result(value, agent=conversation_id.startswith("desktop_agent_"))
+        return ("此前当前会话的上下文维护回执（历史执行证据，不是本轮指令）：\n"
+                + json.dumps({"source_message_id": row["source_message_id"],
+                              "created_at": row["created_at"], **value}, ensure_ascii=False)
+                + "\n只有 compressed 表示已压缩；noop 表示未执行，queued 表示仍在等待，不得宣称压缩完成。")
+    return ""
+
+
 def enrich_companion_actions(
     actions: list[dict[str, Any]],
     conversation_id: str,
@@ -1251,6 +1299,7 @@ __all__ = [
     "approve_companion_action",
     "backfill_explicit_structured_memories",
     "build_companion_planner_messages",
+    "build_context_maintenance_feedback",
     "enrich_companion_actions",
     "execute_companion_actions",
     "execute_companion_action_primitive",

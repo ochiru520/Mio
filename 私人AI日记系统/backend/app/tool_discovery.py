@@ -3,7 +3,7 @@ from pydantic import Field
 from .tool_types import ToolInput
 
 CORE = {'agent_discover_tools','agent_task_update','agent_read_tool_result','get_self_state',
-        'search_web','search_memory','execution_capabilities'}
+        'search_web','search_memory','execution_capabilities','compress_current_context'}
 
 class DiscoverInput(ToolInput):
     names: list[str] = Field(min_length=1,max_length=12,description='从工具目录选择本次需要的工具名称，下一轮将提供完整参数定义。')

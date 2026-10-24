@@ -611,6 +611,8 @@ from .extension_tools import DEFINITIONS as EXTENSION_TOOL_DEFINITIONS
 tool_registry.register_many(EXTENSION_TOOL_DEFINITIONS)
 from .self_upgrade_tools import DEFINITIONS as SELF_UPGRADE_TOOL_DEFINITIONS
 tool_registry.register_many(SELF_UPGRADE_TOOL_DEFINITIONS)
+from .context_tools import DEFINITIONS as CONTEXT_TOOL_DEFINITIONS
+tool_registry.register_many(CONTEXT_TOOL_DEFINITIONS)
 
 __all__ = [
     "ToolDefinition",

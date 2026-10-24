@@ -1451,13 +1451,15 @@ async def run_agent_loop(
             _record_run_event(run_id, f"{run_id}:tool-batch:{step_index}", "tool_batch_completed", {
                 "step_index": step_index, "tools": [item.public_dict() for item in results],
             })
-            stalled_rounds = 0 if any(item.status == "completed" for item in results) else stalled_rounds + 1
+            def progressed(item):
+                return item.status == "completed" or (item.tool_name == "compress_current_context" and item.status == "queued")
+            stalled_rounds = 0 if any(progressed(item) for item in results) else stalled_rounds + 1
             if stalled_rounds >= 3:
                 task_status = "waiting_user"
                 tasks.update(task_id, snapshot={"blocker": "连续执行未取得进展，请检查错误后继续。"})
                 break
             for call, result in zip(batch, results):
-                if result.status == "completed":
+                if progressed(result):
                     key = json.dumps({"name": call.name, "arguments": call.arguments}, sort_keys=True, ensure_ascii=False)
                     if tool_registry.require(call.name).permission == ToolPermission.READ_ONLY:
                         successful_read_keys.add(key)

@@ -17,6 +17,7 @@ from .tool_registry import ToolDefinition, ToolPermission, tool_registry
 
 TERMINAL_STEP_STATUSES = {
     "completed",
+    "queued",
     "failed",
     "cancelled",
     "timed_out",
@@ -29,6 +30,7 @@ from .extension_tools import NAMES as EXTENSION_TOOL_NAMES
 from .self_upgrade_tools import NAMES as SELF_UPGRADE_TOOL_NAMES
 
 PRIVATE_DATA_TOOLS = {
+    "compress_current_context",
     'skill_list', 'skill_read', 'agent_read_task_inputs',
     'agent_read_tool_result',
     "creation_inspect_workflow", "creation_read_workflow_source", "creation_remember_workflow",
@@ -328,6 +330,9 @@ async def _dispatch_write_tool(
     context: ToolExecutionContext,
 ) -> dict[str, Any]:
     from . import execution_policy_service as policy
+    if name == 'compress_current_context':
+        from .context_tools import compress_for_context
+        return await compress_for_context(context)
     if name not in policy.CONTROL:
         policy.require_write(context, '写入或电脑操作')
     from .extension_tools import NAMES as EXTENSIONS, dispatch as extension_dispatch
@@ -618,13 +623,15 @@ async def execute_tool_call(
             error=error,
         )
 
+    queued = definition.name == "compress_current_context" and result.get("status") == "queued"
+    status = "queued" if queued else "completed"
     if action_id:
-        db.update_companion_action(action_id, "executed", str(result.get("result") or "执行完成"))
-    db.finish_tool_execution_receipt(receipt_id, "executed", _json(result, 1000))
-    db.update_agent_run_step(step_id, "completed", result_json=_json_full(result))
+        db.update_companion_action(action_id, "queued" if queued else "executed", str(result.get("message") or result.get("result") or "执行完成"))
+    db.finish_tool_execution_receipt(receipt_id, "queued" if queued else "executed", _json(result, 1000))
+    db.update_agent_run_step(step_id, status, result_json=_json_full(result))
     return ToolExecutionResult(
         definition.name,
-        "completed",
+        status,
         result,
         step_id,
         action_id=action_id,

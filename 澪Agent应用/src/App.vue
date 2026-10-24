@@ -2,6 +2,7 @@
 import { monthlyCatalog } from './monthlyCatalog.js'
 import { executionActionLabels } from './executionRecordPresentation.js'
 import { messageCacheRateLabel } from './messageTokenUsage.js'
+import { DEFAULT_CONTEXT_MAX_TOKENS, contextUsagePresentation } from './contextUsageState.js'
 import { MODEL_CATALOG_KEY, mergeModelCatalog } from './modelCatalogSync.js'
 import UpdateNotice from './components/UpdateNotice.vue'
 // Domain composition; factories do not eagerly access their dependencies.
@@ -849,7 +850,7 @@ const qqStartupEnabled = ref(false)
 const savedQqStartupEnabled = ref(false)
 const savedGroupChatSettings = ref('')
 const savedCompanionSettings = ref({ pet: '', voice: '', observation: '' })
-const runtimeSettingsDraft = ref({})
+const runtimeSettingsDraft = ref({ chat_context_max_tokens: DEFAULT_CONTEXT_MAX_TOKENS })
 const savedRuntimeSettings = ref('')
 const runtimeSettingsRevision = ref('')
 const runtimeSettingsReady = ref(false)
@@ -1029,7 +1030,7 @@ watch(creationWorkflowId, value => localStorage.setItem('mio_agent_creation_work
 const chatVoiceLanguage = ref('auto')
 const showModelMenu = ref(false)
 const modelMenuSection = ref('root')
-const contextUsage = ref({ used_chars: 0, max_chars: 18000, percent: 0, has_summary: false })
+const contextUsage = ref({ used_tokens: 0, max_tokens: DEFAULT_CONTEXT_MAX_TOKENS, percent: 0, has_summary: false })
 const attachments = ref([])
 const isFileDragging = ref(false)
 const qqBusy = ref('')
@@ -1575,7 +1576,7 @@ const runtimeSettingKeysBySection = {
     'qq_proactive_day_start_hour', 'qq_proactive_day_end_hour', 'qq_proactive_check_seconds',
   ],
   conversation: [
-    'chat_history_limit', 'chat_raw_history_limit', 'chat_context_max_chars', 'chat_recent_keep_messages',
+    'chat_history_limit', 'chat_raw_history_limit', 'chat_context_max_tokens', 'chat_recent_keep_messages',
     'memory_context_days', 'memory_context_max_chars', 'memory_context_messages_per_day',
     'chat_follow_up_capture_seconds', 'chat_follow_up_max_capture_count',
     'agent_attachment_max_count', 'agent_text_attachment_max_chars', 'agent_document_attachment_max_bytes',
@@ -1685,13 +1686,9 @@ const compactActiveModelLabel = computed(() => isAutoRouting.value
 const compactCurrentReasoningLabel = computed(() => isAutoRouting.value
   ? '自动'
   : compactReasoningLabel(reasoningLevel.value))
-const contextPercent = computed(() => Math.max(0, Math.min(100, Number(contextUsage.value?.percent || 0))))
+const contextPercent = computed(() => Math.min(100, contextUsagePresentation(contextUsage.value).percent))
 const contextRingStyle = computed(() => ({ '--context-percent': `${contextPercent.value}%` }))
-const contextUsageLabel = computed(() => {
-  const used = Number(contextUsage.value?.used_chars || 0).toLocaleString('zh-CN')
-  const limit = Number(contextUsage.value?.max_chars || 18000).toLocaleString('zh-CN')
-  return `当前上下文：${used} / ${limit} 字（${contextPercent.value.toFixed(1)}%）`
-})
+const contextUsageLabel = computed(() => contextUsagePresentation(contextUsage.value).label)
 const selectedConversation = computed(() => conversations.value.find((item) => item.id === selectedConversationId.value) || null)
 const chatSubtitle = computed(() => {
   if (isAgentWorkspace) return '独立 Agent 工作对话 · 模型负责规划，运行层负责验证'
@@ -2753,7 +2750,7 @@ async function setPetChatWindowState(open) {
       <div v-if="errorMessage" class="error-banner"><span>{{ errorMessage }}</span><button type="button" title="关闭" @click="errorMessage = ''"><X :size="16" /></button></div>
       <AgentHomePage v-if="isAgentWorkspace && activeView === 'home'" @navigate="navigatePrimaryView" />
       <AgentSettingsPage v-else-if="isAgentWorkspace && activeView === 'settings'" @preferences-change="applyAgentPreferences" @return="returnToApp" />
-      <HomePage v-else-if="activeView === 'home'" :logical-date="logicalDate" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="Boolean(companionStatus.pet?.running)" @navigate="activeView = $event" @open-diary="openDiary" @open-thread="openHomeThread" />
+      <HomePage v-else-if="activeView === 'home'" :logical-date="logicalDate" :context-usage="contextUsage" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="Boolean(companionStatus.pet?.running)" @navigate="activeView = $event" @open-diary="openDiary" @open-thread="openHomeThread" />
       <ChatPage v-else-if="activeView === 'chat'" />
       <RecordsPage v-else-if="['diaries', 'stats', 'memory'].includes(activeView)" :thread-focus="homeThreadFocus" />
       <AgentWorkspaceHub v-else-if="isAgentWorkspace && activeView === 'projects'" @open-conversation="async (id) => { await selectConversation(id); activeView = 'chat' }" />

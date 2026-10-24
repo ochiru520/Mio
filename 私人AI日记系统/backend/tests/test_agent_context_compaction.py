@@ -45,7 +45,9 @@ def run(t, source, protocol, observations, **extra):
 
 
 def test_budget_summary_is_cached_and_native_pairs_stay_complete(monkeypatch):
-    object.__setattr__(settings, 'chat_context_max_tokens', 3000)
+    # Keep the complete synthetic source within the summary call's token budget.
+    object.__setattr__(settings, 'chat_context_max_tokens', 30000)
+    object.__setattr__(settings, 'chat_context_compress_ratio', .1)
     t = task(); source, protocol, observations = materials()
     count = []
     with patch.object(llm, 'call_chat_completion_result', AsyncMock(return_value=completion())) as model:
@@ -117,7 +119,9 @@ def durable_steps(t, count, name='search_memory'):
 
 
 def test_durable_history_beyond_ui_window_is_incrementally_summarized_and_rebuilt():
-    object.__setattr__(settings, 'chat_context_max_tokens', 3000)
+    # Keep the complete synthetic source within the summary call's token budget.
+    object.__setattr__(settings, 'chat_context_max_tokens', 30000)
+    object.__setattr__(settings, 'chat_context_compress_ratio', .1)
     t = task(); source, _, _ = materials()
     ids = durable_steps(t, 120)
     observations = tasks.observations(t['id'])

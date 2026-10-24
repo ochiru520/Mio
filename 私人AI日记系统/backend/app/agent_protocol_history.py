@@ -38,7 +38,11 @@ def record(run_id, turn, completion, executed, task_id):
         metadata_json=encode({'task_id': task_id}))
 
 
-def history(task_id, model_id, *, max_chars=24000):
+def history(task_id, model_id, *, max_chars=None, max_tokens=None):
+    # max_chars is retained for older callers but no longer clips protocol history.
+    from .config import settings
+    from .context_service import estimate_tokens
+    token_limit = max(1000, int(settings.chat_context_max_tokens if max_tokens is None else max_tokens))
     with closing(db.get_conn()) as conn:
         rows = conn.execute('''SELECT h.content_json FROM agent_run_messages h JOIN agent_task_runs r ON r.run_id=h.run_id
             WHERE r.task_id=? AND h.role='protocol_turn' ORDER BY h.id DESC''', (task_id,)).fetchall()
@@ -61,8 +65,8 @@ def history(task_id, model_id, *, max_chars=24000):
             else:
                 value = {'status': pair['status'], 'reason': pair['error']}
             messages.append({'role': 'tool', 'tool_call_id': pair['call_id'], 'content': encode(value)})
-        size = len(encode(messages))
-        if used + size > max_chars:
+        size = estimate_tokens(encode(messages))
+        if selected and used + size > token_limit:
             omitted += 1
             continue
         used += size; selected.append(messages)

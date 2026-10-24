@@ -295,22 +295,14 @@ def _summary_with_marker(summary: str, last_message_id: int) -> str:
     return f"<!-- last_message_id:{last_message_id} -->\n{summary.strip()}"
 
 
-def _format_message_rows(rows: list[Row], max_chars: int = 9000) -> str:
+def _format_message_rows(rows: list[Row]) -> str:
     import json
 
-    lines: list[str] = []
-    total = 0
-    for row in rows:
-        role = str(row["role"])
-        if role not in {"user", "assistant"}:
-            continue
-        line = json.dumps({"created_at": str(row["created_at"]), "role": role,
-                           "content": _compact_text(_row_content(row), 500)}, ensure_ascii=False)
-        total += len(line)
-        if total > max_chars:
-            break
-        lines.append(line)
-    return "\n".join(lines)
+    # The summary watermark may cover only text the compressor actually received.
+    # Keep complete message contents; batching is controlled by token budget below.
+    return "\n".join(json.dumps({"created_at": str(row["created_at"]), "role": str(row["role"]),
+                                 "content": _row_content(row)}, ensure_ascii=False)
+                     for row in rows if str(row["role"]) in {"user", "assistant"})
 
 
 def _trim_rows_to_budget(rows: list[Row], max_chars: int) -> list[Row]:
@@ -408,6 +400,15 @@ def build_recent_user_timeline_context(conversation_id: str) -> str:
     )
 
 
+def _uncompressed_rows(history_rows: list[Row], summary_last_id: int) -> list[Row]:
+    if not summary_last_id:
+        return history_rows
+    raw_messages = [row for row in history_rows if int(row["id"]) > summary_last_id]
+    if len(raw_messages) < settings.chat_recent_keep_messages:
+        raw_messages = history_rows[-settings.chat_recent_keep_messages :]
+    return raw_messages
+
+
 def _select_raw_messages(
     history_rows: list[Row],
     periodic_context: str,
@@ -415,26 +416,13 @@ def _select_raw_messages(
     summary_last_id: int,
     over_budget: bool,
 ) -> list[Row]:
-    if summary_last_id:
-        raw_messages = [row for row in history_rows if int(row["id"]) > summary_last_id]
-        if len(raw_messages) < settings.chat_recent_keep_messages:
-            raw_messages = history_rows[-settings.chat_recent_keep_messages :]
-    else:
-        raw_messages = history_rows[-settings.chat_history_limit :]
-        if not over_budget:
-            raw_messages = history_rows
-
-    remaining_chars = max(
-        2000,
-        settings.chat_context_max_chars - len(periodic_context) - len(summary_text),
-    )
-    selected = _trim_rows_to_budget(raw_messages, remaining_chars)
+    raw_messages = _uncompressed_rows(history_rows, summary_last_id)
     token_limit = max(1000, int(settings.chat_context_max_tokens))
     remaining_tokens = max(
         512,
         token_limit - estimate_tokens(periodic_context) - estimate_tokens(summary_text),
     )
-    return _trim_rows_to_token_budget(selected, remaining_tokens)
+    return _trim_turn_rows_to_token_budget(raw_messages, remaining_tokens)
 
 
 def _usage_values(periodic_context: str, summary_text: str, raw_messages: list[Row]) -> tuple[int, int]:
@@ -474,16 +462,10 @@ def preview_chat_context_usage(conversation_id: str, history_rows: list[Row]) ->
     raw_total_tokens = (
         estimate_tokens(periodic_context)
         + estimate_tokens(summary_text)
-        + sum(_row_token_count(row) for row in history_rows)
+        + sum(_row_token_count(row) for row in _uncompressed_rows(history_rows, summary_last_id))
     )
     warning, compression_triggered = _context_thresholds(raw_total_tokens)
-    over_budget = (
-        len(periodic_context)
-        + len(summary_text)
-        + sum(_row_char_count(row) for row in history_rows)
-        > settings.chat_context_max_chars
-        or compression_triggered
-    )
+    over_budget = compression_triggered
     raw_messages = _select_raw_messages(
         history_rows,
         periodic_context,
@@ -496,7 +478,8 @@ def preview_chat_context_usage(conversation_id: str, history_rows: list[Row]) ->
     return {
         "used_chars": used_chars,
         "max_chars": max_chars,
-        "percent": round(min(100.0, used_chars / max_chars * 100), 1) if max_chars else 0.0,
+        "percent": round(min(100.0, used_tokens / max_tokens * 100), 1) if max_tokens else 0.0,
+        "estimated": True,
         "used_tokens": used_tokens,
         "max_tokens": max_tokens,
         "token_percent": round(min(100.0, used_tokens / max_tokens * 100), 1) if max_tokens else 0.0,
@@ -520,16 +503,10 @@ def build_chat_context_snapshot(conversation_id: str, history_rows: list[Row]) -
     raw_total_tokens = (
         estimate_tokens(periodic_context)
         + estimate_tokens(summary_text)
-        + sum(_row_token_count(row) for row in history_rows)
+        + sum(_row_token_count(row) for row in _uncompressed_rows(history_rows, summary_last_id))
     )
     warning, compression_triggered = _context_thresholds(raw_total_tokens)
-    over_budget = (
-        len(periodic_context)
-        + len(summary_text)
-        + sum(_row_char_count(row) for row in history_rows)
-        > settings.chat_context_max_chars
-        or compression_triggered
-    )
+    over_budget = compression_triggered
     raw_messages = _select_raw_messages(
         history_rows,
         periodic_context,
@@ -567,10 +544,11 @@ def build_fast_chat_context_snapshot(
     history_rows: list[Row],
     *,
     recent_messages: int | None = None,
-    recent_turns: int = 8,
-    max_tokens: int = 3600,
+    recent_turns: int | None = None,
+    max_tokens: int | None = None,
 ) -> ChatContext:
     """Build a bounded context for ordinary chat without model compression or broad diary scans."""
+    max_tokens = int(settings.chat_context_max_tokens if max_tokens is None else max_tokens)
     query = _latest_user_query(history_rows)
     temporal_query = _temporal_lookup_query(query, history_rows)
     current_user_message_id = next(
@@ -611,7 +589,8 @@ def build_fast_chat_context_snapshot(
         "\n\n---\n\n".join(context_parts),
         max(700, int(max_tokens) - 1500),
     )
-    raw_messages = _rows_by_recent_user_turns(list(history_rows), recent_turns)
+    raw_messages = (list(history_rows) if recent_turns is None
+                    else _rows_by_recent_user_turns(list(history_rows), recent_turns))
     if recent_messages is not None:
         raw_messages = raw_messages[-max(2, int(recent_messages)) :]
     raw_messages = _trim_turn_rows_to_token_budget(
@@ -740,12 +719,11 @@ def build_periodic_memory_context(
     return _compact_text(prefix + context, settings.memory_context_max_chars)
 
 
-@operation("memory", automatic=True)
-async def _compress_old_messages(
+def _compression_messages(
     conversation_id: str,
     previous_summary: str,
     old_rows: list[Row],
-) -> str:
+) -> list[dict[str, str]]:
     old_text = _format_message_rows(old_rows)
     from .mio_profile import role_identity_context
 
@@ -766,18 +744,35 @@ async def _compress_old_messages(
 {old_text}
 
 请输出更新后的压缩记忆。"""
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _compression_batch(conversation_id: str, summary: str, rows: list[Row]) -> list[Row]:
+    limit = max(1000, int(settings.chat_context_max_tokens))
+    low, high = 0, len(rows)
+    while low < high:
+        middle = (low + high + 1) // 2
+        messages = _compression_messages(conversation_id, summary, rows[:middle])
+        used = sum(estimate_tokens(message["content"]) + 8 for message in messages)
+        if used <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    return rows[:low]
+
+
+@operation("memory", automatic=True)
+async def _compress_old_messages(conversation_id: str, previous_summary: str, old_rows: list[Row], *, model_id: str | None = None) -> str:
     return await call_chat_completion(
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=0.2,
+        _compression_messages(conversation_id, previous_summary, old_rows), temperature=0.2,
+        **({"model_id": model_id} if model_id else {}),
     )
 
 
 async def build_chat_context(
     conversation_id: str,
     history_rows: list[Row],
+    *, force: bool = False, model_id: str | None = None,
 ) -> ChatContext:
     periodic_context = build_periodic_memory_context(
         conversation_id,
@@ -789,22 +784,21 @@ async def build_chat_context(
     summary_text = _strip_summary_marker(summary_content)
     summary_last_id = _summary_last_message_id(summary_content)
 
-    base_chars = len(periodic_context) + len(summary_text)
-    raw_chars = sum(_row_char_count(row) for row in history_rows)
     base_tokens = estimate_tokens(periodic_context) + estimate_tokens(summary_text)
-    raw_tokens = sum(_row_token_count(row) for row in history_rows)
+    raw_tokens = sum(_row_token_count(row) for row in _uncompressed_rows(history_rows, summary_last_id))
     warning, compression_triggered = _context_thresholds(base_tokens + raw_tokens)
-    over_budget = (
-        base_chars + raw_chars > settings.chat_context_max_chars
-        or compression_triggered
-    )
+    over_budget = compression_triggered or force
 
     if over_budget and history_rows:
         keep = max(4, settings.chat_recent_keep_messages)
         old_rows = [row for row in history_rows[:-keep] if int(row["id"]) > summary_last_id]
+        old_rows = _compression_batch(conversation_id, summary_text, old_rows)
         if old_rows:
             try:
-                new_summary = await _compress_old_messages(conversation_id, summary_text, old_rows)
+                new_summary = await _compress_old_messages(conversation_id, summary_text, old_rows,
+                    **({"model_id": model_id} if model_id else {}))
+                if not str(new_summary or "").strip():
+                    raise ValueError("上下文摘要为空，未推进摘要水位。")
                 summary_last_id = int(old_rows[-1]["id"])
                 summary_text = _compact_text(new_summary, 1400)
                 db.replace_memory(
@@ -849,3 +843,25 @@ async def build_chat_context(
         warning=warning,
         compression_triggered=compression_triggered,
     )
+
+
+async def force_compress_context(conversation_id: str, model_id: str | None = None) -> dict[str, object]:
+    """Compress eligible older chat now; do not alter or delete source messages."""
+    if str(conversation_id or "").startswith("qq_group_"):
+        raise ValueError("群聊不能压缩或维护私人上下文。")
+    rows = list(db.get_recent_messages(limit=settings.chat_raw_history_limit, conversation_id=conversation_id))
+    before = preview_chat_context_usage(conversation_id, rows)
+    previous = db.get_latest_memory(SUMMARY_TYPE, tags=conversation_id)
+    previous_id = _summary_last_message_id(str(previous["content"] or "")) if previous else 0
+    candidates = [row for row in rows[:-max(4, settings.chat_recent_keep_messages)]
+                  if int(row["id"]) > previous_id]
+    eligible = _compression_batch(conversation_id, _strip_summary_marker(str(previous["content"] or "")) if previous else "", candidates)
+    await build_chat_context(conversation_id, rows, force=True, model_id=model_id)
+    current = db.get_latest_memory(SUMMARY_TYPE, tags=conversation_id)
+    current_id = _summary_last_message_id(str(current["content"] or "")) if current else 0
+    status = "compressed" if current_id > previous_id else "failed" if eligible else "noop"
+    return {"status": status, "conversation_id": conversation_id,
+            "before": before, "after": preview_chat_context_usage(conversation_id, rows),
+            "summary_through_message_id": current_id,
+            "message": {"compressed": "较早聊天已压缩，原始消息保留。", "noop": "没有可继续压缩的较早消息，最近完整轮次保持原文。",
+                        "failed": "摘要未成功，摘要水位未推进，原始消息保留。"}[status]}

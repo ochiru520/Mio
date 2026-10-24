@@ -16,7 +16,7 @@ DEFAULTS = dict(mode='autonomous', read_scope='project', terminal_mode='host',
                 network_enabled=False, confirm_project_edits=False,
                 sandbox_image='python:3.12-alpine')
 LABELS = dict(read_only='只查看', assisted='帮我做事', autonomous='自主执行')
-CONTROL = {'agent_task_update', 'terminal_stop', 'desktop_stop', 'extension_stop',
+CONTROL = {'agent_task_update', 'compress_current_context', 'terminal_stop', 'desktop_stop', 'extension_stop',
            'self_upgrade_stop', 'creation_cancel_job', 'agent_discover_tools'}
 
 

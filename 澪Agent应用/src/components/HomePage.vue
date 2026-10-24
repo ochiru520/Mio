@@ -1,4 +1,5 @@
 <script>
+import { contextUsagePresentation } from '../contextUsageState.js'
 import {
   ArrowRight,
   BookOpen,
@@ -140,6 +141,7 @@ export default {
       }[this.todayState.daily_thirty_status || 'unknown']
     },
     summaryWidgets() {
+      const context = contextUsagePresentation(this.contextUsage)
       const widgets = [
         {
           id: 'daily_thirty',
@@ -185,9 +187,9 @@ export default {
         },
         {
           id: 'token_stats',
-          label: '上下文',
-          value: `${Number(this.contextUsage.percent || 0).toFixed(1)}%`,
-          detail: `${Number(this.contextUsage.used_chars || 0).toLocaleString('zh-CN')} / ${Number(this.contextUsage.max_chars || 18000).toLocaleString('zh-CN')} 字`,
+          label: '上下文预算',
+          value: `${context.percent.toFixed(1)}%`,
+          detail: context.amount,
         },
       ]
       return widgets.filter((item) => this.homeWidgets[item.id] !== false)

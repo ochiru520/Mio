@@ -77,8 +77,11 @@ def test_protocol_compaction_drops_only_complete_pairs_and_never_leaves_orphaned
         step_id = store(task, payload, run_id=run_id)
         completion = _completion(ToolCall(f'call_{index}', 'synthetic_read', '{}'))
         protocol.record(run_id, 0, completion, {f'call_{index}': ToolExecutionResult('synthetic_read','completed',payload,step_id)}, task['id'])
-    history = protocol.history(task['id'], 'test-model', max_chars=4000)
+    history = protocol.history(task['id'], 'test-model', max_tokens=1000)
     ids = {call['id'] for item in history for call in item.get('tool_calls', [])}
     outputs = {item['tool_call_id'] for item in history if item['role'] == 'tool'}
     assert ids == outputs and 'call_24' in ids and len(ids) < 25
     assert '省略' in history[0]['content']
+
+    legacy = protocol.history(task['id'], 'test-model', max_chars=4000)
+    assert len([item for item in legacy if item['role'] == 'tool']) == 25

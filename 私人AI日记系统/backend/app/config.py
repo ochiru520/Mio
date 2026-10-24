@@ -119,6 +119,20 @@ def _default_proxy_url() -> str:
     )
 
 
+DEFAULT_CHAT_CONTEXT_MAX_TOKENS = 272000
+MIN_CHAT_CONTEXT_MAX_TOKENS = 1000
+MAX_CHAT_CONTEXT_MAX_TOKENS = 2000000
+
+
+def _default_chat_context_max_tokens() -> int:
+    # Older installers wrote this default into .env. Upgrade only that sentinel;
+    # saved runtime settings and every other valid environment value stay explicit.
+    value = _env_int("CHAT_CONTEXT_MAX_TOKENS", DEFAULT_CHAT_CONTEXT_MAX_TOKENS)
+    if value == 18000:
+        value = DEFAULT_CHAT_CONTEXT_MAX_TOKENS
+    return min(MAX_CHAT_CONTEXT_MAX_TOKENS, max(MIN_CHAT_CONTEXT_MAX_TOKENS, value))
+
+
 RUNTIME_SETTING_SPECS: dict[str, tuple[str, float | int | None, float | int | None]] = {
     "openai_timeout_seconds": ("int", 5, 300),
     "openai_request_deadline_seconds": ("int", 10, 600),
@@ -130,7 +144,8 @@ RUNTIME_SETTING_SPECS: dict[str, tuple[str, float | int | None, float | int | No
     "action_planner_temperature": ("float", 0.0, 2.0),
     "chat_history_limit": ("int", 1, 500),
     "chat_raw_history_limit": ("int", 1, 1000),
-    "chat_context_max_chars": ("int", 4000, 200000),
+    "chat_context_max_chars": ("int", 4000, 200000),  # Legacy diagnostic field only.
+    "chat_context_max_tokens": ("int", MIN_CHAT_CONTEXT_MAX_TOKENS, MAX_CHAT_CONTEXT_MAX_TOKENS),
     "chat_recent_keep_messages": ("int", 4, 100),
     "memory_context_days": ("int", 1, 90),
     "memory_context_max_chars": ("int", 1000, 50000),
@@ -281,8 +296,8 @@ class Settings:
     chat_history_limit: int = _env_int("CHAT_HISTORY_LIMIT", 80)
     chat_raw_history_limit: int = _env_int("CHAT_RAW_HISTORY_LIMIT", 160)
     chat_context_max_chars: int = _env_int("CHAT_CONTEXT_MAX_CHARS", 18000)
-    # 字符预算继续用于兼容旧设置；token 预算用于判断真实上下文压力。
-    chat_context_max_tokens: int = _env_int("CHAT_CONTEXT_MAX_TOKENS", 18000)
+    # Mio 工作预算；模型真实窗口由服务端校验，旧字符字段仅兼容诊断。
+    chat_context_max_tokens: int = _default_chat_context_max_tokens()
     chat_context_warning_ratio: float = _env_float("CHAT_CONTEXT_WARNING_RATIO", 0.75)
     chat_context_compress_ratio: float = _env_float("CHAT_CONTEXT_COMPRESS_RATIO", 0.82)
     chat_recent_keep_messages: int = _env_int("CHAT_RECENT_KEEP_MESSAGES", 24)

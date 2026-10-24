@@ -524,7 +524,7 @@ class AgentMessageMetadataTests(unittest.TestCase):
         self.assertEqual(result["attachments"], attachments)
         self.assertNotIn("attachments_json", result)
 
-    def test_context_usage_reports_real_character_budget(self) -> None:
+    def test_context_usage_reports_token_budget_with_legacy_diagnostics(self) -> None:
         conversation_id = "desktop_context_test"
         db.create_agent_conversation(conversation_id)
         db.save_message("user", "这是上下文内容", source="desktop", conversation_id=conversation_id)
@@ -533,7 +533,9 @@ class AgentMessageMetadataTests(unittest.TestCase):
 
         self.assertGreater(result["used_chars"], 0)
         self.assertEqual(result["max_chars"], db.settings.chat_context_max_chars)
-        self.assertGreater(result["percent"], 0)
+        self.assertGreater(result["used_tokens"], 0)
+        self.assertEqual(result["max_tokens"], db.settings.chat_context_max_tokens)
+        self.assertEqual(result["percent"], round(result["used_tokens"] / result["max_tokens"] * 100, 1))
 
     def test_day_dashboard_exposes_detailed_state_and_history(self) -> None:
         logical_date = db.today_string()

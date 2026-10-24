@@ -33,12 +33,12 @@ test('operations merge repeated receipt ids and exclude task bookkeeping', () =>
   assert.deepEqual(processOperations(events).map(step => [step.step_id, step.status]), [['a', 'completed'], ['c', 'failed']])
 })
 
-test('context display separates current estimated window from cumulative billed usage', () => {
+test('context display separates the estimated token budget from cumulative billed usage', () => {
   const shown = contextUsagePresentation({ used_tokens: 4000, max_tokens: 20000, percent: 20, has_summary: true, compression_count: 2, total_tokens: 171768 })
   assert.equal(shown.amount, '4,000 / 20,000 token（估算）')
   assert.equal(shown.compression, '已自动压缩 2 次，完整记录保留')
   assert.equal(shown.label.includes('171,768'), false)
-  assert.equal(contextUsagePresentation({ used_chars: 3000, max_chars: 18000, percent: 16.7 }).amount, '3,000 / 18,000 字')
+  assert.equal(contextUsagePresentation({ used_chars: 3000, max_chars: 18000, percent: 16.7 }).amount, '0 / 272,000 token（估算）')
   assert.equal(contextUsagePresentation({ auto_compression_enabled: false }).compression, '自动压缩未启用')
   assert.equal(contextUsagePresentation({ has_summary: true, compression_count: 2, compression_warning: '摘要失败，已缩短旧记录；完整记录可回读' }).compression, '摘要失败，已缩短旧记录；完整记录可回读')
 })

@@ -4,6 +4,7 @@
  */
 import { apiRequest } from '../services/api.js'
 import * as chatApi from '../services/chatApi.js'
+import { contextUsagePresentation } from '../contextUsageState.js'
 import { filterConversationsForWorkspace } from '../workspaceState.js'
 import { nextTick, ref } from 'vue'
 import { captureReadingPosition, restoreReadingPosition } from '../conversationScroll.js'
@@ -304,7 +305,7 @@ export function useConversations(deps) {
       deps.selectedConversationId.value = conversation.id
       localStorage.setItem(deps.conversationStorageKey, conversation.id)
       deps.messages.value = []
-      deps.contextUsage.value = { used_chars: 0, max_chars: deps.contextUsage.value.max_chars || 18000, percent: 0, has_summary: false }
+      deps.contextUsage.value = { used_tokens: 0, max_tokens: contextUsagePresentation(deps.contextUsage.value).limit, percent: 0, has_summary: false }
       await nextTick()
       document.querySelector('.composer-input')?.focus()
     } catch (error) {

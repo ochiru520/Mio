@@ -1547,7 +1547,7 @@ async def _chat_with_ai_unlocked(
 
     manuals = load_manuals(max_chars=1200) if fast_path else load_manuals()
     history_rows = list(db.get_recent_messages(
-        limit=min(96, settings.chat_raw_history_limit) if fast_path else settings.chat_raw_history_limit,
+        limit=settings.chat_raw_history_limit,
         conversation_id=conversation_id,
     ))
     if not persist:
@@ -1567,11 +1567,8 @@ async def _chat_with_ai_unlocked(
         )
         chat_context = build_chat_context_snapshot(conversation_id, history_rows)
     else:
-        chat_context = (
-            build_fast_chat_context_snapshot(conversation_id, history_rows)
-            if fast_path
-            else await build_chat_context(conversation_id, history_rows)
-        )
+        # Ordinary and Agent chats share one token budget and compression threshold.
+        chat_context = await build_chat_context(conversation_id, history_rows)
     mark_runtime_stage("context_ready")
     lookup_message = build_contextual_lookup_message(message, list(chat_context.raw_messages))
     # Fast chat may use a smaller context, but it cannot suppress an explicit
@@ -1610,6 +1607,10 @@ async def _chat_with_ai_unlocked(
         runtime_blocks.append(extra_system_context.strip()[:6000])
     if self_snapshot_context:
         runtime_blocks.append(self_snapshot_context)
+    from .companion_action_service import build_context_maintenance_feedback
+    maintenance_feedback = build_context_maintenance_feedback(conversation_id)
+    if maintenance_feedback:
+        runtime_blocks.append(maintenance_feedback)
     if chat_context.system_context:
         runtime_blocks.append(chat_context.system_context)
     runtime_blocks.append(_build_current_time_context(local_now))

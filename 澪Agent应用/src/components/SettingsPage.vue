@@ -212,7 +212,7 @@ export default {
       </div></div>
 <template v-if="runtimeSettingsReady">
         <div class="settings-section-block"><h2>上下文与消息合并</h2><div class="settings-form-grid">
-          <label><span>上下文最大字数</span><input v-model.number="runtimeSettingsDraft.chat_context_max_chars" type="number" min="4000" max="200000" step="1000" /></label>
+          <label><span>上下文预算（Token）</span><input v-model.number="runtimeSettingsDraft.chat_context_max_tokens" type="number" min="1000" max="2000000" step="1000" /></label>
           <label><span>压缩后保留消息</span><input v-model.number="runtimeSettingsDraft.chat_recent_keep_messages" type="number" min="4" max="100" /></label>
           <label><span>显示历史消息</span><input v-model.number="runtimeSettingsDraft.chat_history_limit" type="number" min="1" max="500" /></label>
           <label><span>原始历史上限</span><input v-model.number="runtimeSettingsDraft.chat_raw_history_limit" type="number" min="1" max="1000" /></label>

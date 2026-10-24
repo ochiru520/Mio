@@ -17,7 +17,7 @@
     "verify:speech-interrupt": "node scripts/verify-speech-interrupt.js"
   },
   "devDependencies": {
-    "electron": "43.7.9",
+    "electron": "43.8.3",
     "electron-builder": "26.15.3"
   },
   "build": {

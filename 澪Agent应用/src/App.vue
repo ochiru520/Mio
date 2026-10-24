@@ -616,6 +616,7 @@ const workspaceSearchParams = new URLSearchParams(window.location.search)
 const workspaceMode = workspaceSearchParams.get('workspace') === 'agent' ? 'agent' : 'main'
 const agentSurfaceMode = ref(localStorage.getItem('mio_agent_surface_mode') || 'work')
 const isAgentWorkspace = workspaceMode === 'agent'
+const returnToChatRequested = !isAgentWorkspace && (workspaceSearchParams.get('mio_return') === 'chat' || Boolean(localStorage.getItem('mio_return_to_chat')))
 const conversationStorageKey = isAgentWorkspace ? 'mio_agent_conversation_id' : 'mio_conversation_id'
 
 const DEFAULT_APP_PREFERENCES = {
@@ -799,6 +800,7 @@ function applyStoredAppPreferences() {
 function handleAppPreferencesStorage(event) {
   if (event.key === MODEL_CATALOG_KEY) void refreshModelCatalog()
   if (event.key === 'mio_app_preferences') applyStoredAppPreferences()
+  if (!isAgentWorkspace && event.key === 'mio_return_to_chat' && event.newValue) activeView.value = 'chat'
   if (event.key === 'mio_profile_updated' && !isSettingsSectionDirty('profile')) {
     void loadMioProfileSettings({ quiet: true })
   }
@@ -821,9 +823,11 @@ const storedAgentView = localStorage.getItem('mio_agent_active_view') || 'home'
 const devInitialView = import.meta.env.DEV ? workspaceSearchParams.get('view') : null
 const activeView = ref(isAgentWorkspace
   ? normalizeAgentView(storedAgentView)
-  : (validInitialViews.has(devInitialView) || devInitialView === 'settings'
-      ? devInitialView
-      : (validInitialViews.has(initialAppPreferences.default_open_page) ? initialAppPreferences.default_open_page : 'home')))
+  : (returnToChatRequested
+      ? 'chat'
+      : (validInitialViews.has(devInitialView) || devInitialView === 'settings'
+          ? devInitialView
+          : (validInitialViews.has(initialAppPreferences.default_open_page) ? initialAppPreferences.default_open_page : 'home'))))
 const settingsReturnView = ref(activeView.value)
 const homeThreadFocus = ref(null)
 function openHomeThread(thread) {
@@ -2506,6 +2510,10 @@ onMounted(async () => {
   document.addEventListener('keydown', handleDocumentKeydown)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('storage', handleAppPreferencesStorage)
+  if (!isAgentWorkspace && returnToChatRequested) {
+    window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+    localStorage.removeItem('mio_return_to_chat')
+  }
   window.addEventListener('focus', refreshModelCatalog)
   window.addEventListener('mio-model-catalog-changed', refreshModelCatalog)
   window.addEventListener('mio:open-pet-chat', focusDesktopPetChat)

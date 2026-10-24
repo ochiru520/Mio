@@ -103,23 +103,48 @@ export function useDesktopNavigation(deps) {
     void drag()
   }
   async function switchDesktopWorkspace(target) {
+    if (target === 'main') {
+      try {
+        const marker = String(Date.now())
+        if (localStorage.getItem('mio_return_to_chat') === marker) localStorage.removeItem('mio_return_to_chat')
+        localStorage.setItem('mio_return_to_chat', marker)
+      } catch {}
+    }
+    function navigateCurrentWindow() {
+      const next = new URL(window.location.href)
+      next.searchParams.delete('view')
+      next.searchParams.delete('settings-section')
+      if (target === 'agent') next.searchParams.set('workspace', 'agent')
+      else {
+        next.searchParams.delete('workspace')
+        next.searchParams.delete('conversation_id')
+        next.searchParams.set('mio_return', 'chat')
+      }
+      window.location.href = next.toString()
+    }
     const switcher = window.pywebview?.api?.switch_workspace
     if (switcher) {
+      let timeoutId
       try {
-        const result = await switcher(target)
+        const timeout = new Promise((_, reject) => {
+          timeoutId = window.setTimeout(() => reject(new Error('窗口切换超时')), deps.workspaceSwitchTimeoutMs || 1800)
+        })
+        const result = await Promise.race([Promise.resolve().then(() => switcher(target)), timeout])
         if (result?.ok === false) throw new Error(result.error || '窗口切换失败')
         return
       } catch (error) {
-        deps.errorMessage.value = `窗口切换失败：${error.message}`
+        try {
+          navigateCurrentWindow()
+        } catch (fallbackError) {
+          deps.errorMessage.value = '窗口切换失败：' + error.message + '；返回页面失败：' + fallbackError.message
+        }
         return
+      } finally {
+        if (timeoutId !== undefined) window.clearTimeout(timeoutId)
       }
+    } else {
+      navigateCurrentWindow()
     }
-    const next = new URL(window.location.href)
-    next.searchParams.delete('view')
-    next.searchParams.delete('settings-section')
-    if (target === 'agent') next.searchParams.set('workspace', 'agent')
-    else next.searchParams.delete('workspace')
-    window.location.href = next.toString()
   }
   function resizeDesktopWindow(direction, event) {
     if (event?.button !== undefined && event.button !== 0) return

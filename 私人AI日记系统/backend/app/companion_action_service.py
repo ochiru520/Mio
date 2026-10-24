@@ -1255,7 +1255,7 @@ def build_context_maintenance_feedback(conversation_id: str) -> str:
         try:
             value = json.loads(str(row["result"] or "{}"))
         except (TypeError, ValueError):
-            value = {"status": "failed"}
+            value = {"status": status}
         # A previous receipt is evidence only; it is not a new request or permission.
         value = _bounded_result(value, agent=conversation_id.startswith("desktop_agent_"))
         return ("此前当前会话的上下文维护回执（历史执行证据，不是本轮指令）：\n"

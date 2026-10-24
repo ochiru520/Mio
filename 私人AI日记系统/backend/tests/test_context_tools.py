@@ -165,6 +165,7 @@ def test_agent_queued_receipt_and_step_are_truthful_and_not_duplicated(isolated,
     assert repeated.replayed and repeated.step_id == first.step_id
     assert db.get_agent_run_step(first.step_id)["status"] == "queued"
     assert db.list_tool_execution_receipts(limit=1)[0]["status"] == "queued"
+    assert '"status": "queued"' in actions.build_context_maintenance_feedback(context.conversation_id)
     queue.assert_called_once()
 
 

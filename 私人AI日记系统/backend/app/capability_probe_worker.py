@@ -32,12 +32,13 @@ def audio_valid(content: bytes) -> bool:
 
 async def chat() -> dict:
     from .model_registry import get_model_profile
+    from .provider_compat import model_connection_configured
     from .routes.models import _request_chat_via_routes
     try:
         profile = get_model_profile()
     except ValueError:
         raise ProbeFailure('not_configured') from None
-    if not profile.api_key or profile.api_key_error:
+    if not model_connection_configured(profile):
         raise ProbeFailure('authentication')
     response, *_ = await _request_chat_via_routes(profile.base_urls[0], profile.api_key,
         profile.model, profile.auth_scheme, profile.api_mode)

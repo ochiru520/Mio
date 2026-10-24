@@ -252,9 +252,11 @@ class ConfigurationService:
             min(1800, int(data.get("voice_idle_timeout_seconds", 180))),
         )
         voice_engine = str(data.get("voice_engine") or self._dep_MIO_VOICE_ENGINE()).strip().lower()
-        data["voice_engine"] = voice_engine if voice_engine in {"gpt_sovits", "cloud"} else self._dep_MIO_VOICE_ENGINE()
+        data["voice_engine"] = voice_engine if voice_engine in {"gpt_sovits", "cloud", "indextts2"} else self._dep_MIO_VOICE_ENGINE()
         local_runtime = str(data.get("local_voice_runtime") or self._dep_GENIE_VOICE_RUNTIME()).strip().lower()
         data["local_voice_runtime"] = local_runtime if local_runtime in {self._dep_GENIE_VOICE_RUNTIME(), self._dep_LEGACY_GPT_SOVITS_RUNTIME()} else self._dep_GENIE_VOICE_RUNTIME()
+        data["indextts2_url"] = str(data.get("indextts2_url") or "http://127.0.0.1:11996").strip().rstrip("/")[:2000]
+        data["indextts2_ref_audio"] = str(data.get("indextts2_ref_audio") or "").strip()[:4000]
         data["cloud_tts_api_key"] = str(data.get("cloud_tts_api_key") or "").strip()
         data["cloud_tts_app_id"] = str(data.get("cloud_tts_app_id") or "").strip()[:200]
         cloud_speaker = str(data.get("cloud_tts_speaker") or self._dep_DEFAULT_CONFIG()["cloud_tts_speaker"]).strip()
@@ -418,9 +420,11 @@ class ConfigurationService:
             min(1800, int(normalized.get("voice_idle_timeout_seconds", 180))),
         )
         voice_engine = str(normalized.get("voice_engine") or self._dep_MIO_VOICE_ENGINE()).strip().lower()
-        normalized["voice_engine"] = voice_engine if voice_engine in {"gpt_sovits", "cloud"} else self._dep_MIO_VOICE_ENGINE()
+        normalized["voice_engine"] = voice_engine if voice_engine in {"gpt_sovits", "cloud", "indextts2"} else self._dep_MIO_VOICE_ENGINE()
         local_runtime = str(normalized.get("local_voice_runtime") or self._dep_GENIE_VOICE_RUNTIME()).strip().lower()
         normalized["local_voice_runtime"] = local_runtime if local_runtime in {self._dep_GENIE_VOICE_RUNTIME(), self._dep_LEGACY_GPT_SOVITS_RUNTIME()} else self._dep_GENIE_VOICE_RUNTIME()
+        normalized["indextts2_url"] = str(normalized.get("indextts2_url") or "http://127.0.0.1:11996").strip().rstrip("/")[:2000]
+        normalized["indextts2_ref_audio"] = str(normalized.get("indextts2_ref_audio") or "").strip()[:4000]
         normalized["cloud_tts_api_key"] = str(normalized.get("cloud_tts_api_key") or "").strip()
         normalized["cloud_tts_app_id"] = str(normalized.get("cloud_tts_app_id") or "").strip()[:200]
         cloud_speaker = str(normalized.get("cloud_tts_speaker") or self._dep_DEFAULT_CONFIG()["cloud_tts_speaker"]).strip()

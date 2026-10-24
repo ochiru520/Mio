@@ -321,6 +321,7 @@ def build_structured_memory_context(conversation_id: str, query: str = "") -> st
     rows = retrieve_memory_items(query, limit=16)
     if not rows:
         return ""
+    from .mio_profile import role_identity_context
     labels = {"L0": "核心事实与稳定偏好", "L1": "近期状态", "L2": "长期经历"}
     sections: list[str] = []
     source_dates: dict[int, str] = {}
@@ -375,6 +376,8 @@ def build_structured_memory_context(conversation_id: str, query: str = "") -> st
         "historical 只能当作过去事件；current 也要服从有效期与最后确认时间；time_unknown 不得说成最近。"
         "只有“来源记录日”可以帮助解释当时的相对时间；“记录维护于”只是数据库维护时间，"
         "绝不能据此推断事情发生日期。\n\n"
+        + role_identity_context()
+        + "\n历史记录可能保留旧称呼；不据此改写当前角色卡或推断为不同的人。\n\n"
         + "\n\n".join(sections)
     )
 

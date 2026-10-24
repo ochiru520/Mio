@@ -36,6 +36,8 @@ from ..provider_compat import (
     models_endpoint_candidates,
     normalize_api_base_url,
     response_is_json,
+    allows_empty_api_key,
+    is_local_api_url,
 )
 from ..provider_presets import provider_preset, public_provider_presets
 
@@ -51,7 +53,9 @@ async def model_catalog():
             'hidden_model_providers': hidden_default_provider_records()}
 
 
-def _provider_client_routes() -> list[tuple[str, str]]:
+def _provider_client_routes(base_url: str = "") -> list[tuple[str, str]]:
+    if base_url and is_local_api_url(base_url):
+        return [("直连", "")]
     mode = str(settings.openai_proxy_mode or "auto").strip().lower()
     proxy_url = str(settings.openai_proxy_url or "").strip()
     routes: list[tuple[str, str]] = []
@@ -76,7 +80,7 @@ class ModelProfileRequest(BaseModel):
     variant_name: str = ""
     model: str
     base_url: str
-    api_key: str
+    api_key: str = ""
     supports_vision: bool = False
     supports_tool_calls: bool | None = None
     supports_structured_output: bool = True
@@ -113,7 +117,7 @@ class ProviderModelRequest(BaseModel):
 class ProviderCreateRequest(BaseModel):
     provider_name: str
     base_url: str
-    api_key: str
+    api_key: str = ""
     provider_kind: str = "relay"
     provider_protocol: str = "openai"
     auth_scheme: str = "auto"
@@ -126,7 +130,7 @@ class ModelDiscoveryRequest(BaseModel):
     provider_kind: str = "relay"
     provider_protocol: str = "openai"
     base_url: str = ""
-    api_key: str
+    api_key: str = ""
     preset_id: str = ""
     default_api_mode: str = "auto"
 
@@ -151,12 +155,17 @@ def _normalize_provider_request(
 ) -> tuple[str, str, str]:
     kind = provider_kind.strip().lower() or "relay"
     protocol = provider_protocol.strip().lower() or "openai"
-    if kind not in {"official", "relay"}:
-        raise HTTPException(status_code=400, detail="请选择官方 API 或中转站。")
+    if kind not in {"official", "relay", "local"}:
+        raise HTTPException(status_code=400, detail="请选择官方 API、中转站或本地服务。")
     if protocol not in {"openai", "deepseek", "opencode_go"}:
         raise HTTPException(status_code=400, detail="当前只支持 OpenAI 兼容、DeepSeek 官方和 OpenCode Go 协议。")
     selected_preset = provider_preset(preset_id)
     if selected_preset is not None:
+        if selected_preset["kind"] == "local":
+            try:
+                return "local", str(selected_preset["protocol"]), normalize_api_base_url(base_url or str(selected_preset["base_url"]))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         return (
             str(selected_preset["kind"]),
             str(selected_preset["protocol"]),
@@ -192,7 +201,7 @@ async def _request_models_endpoint(
     last_response: httpx.Response | None = None
     preferred_error: httpx.Response | None = None
     for endpoint in _models_endpoint_candidates(base_url):
-        for auth_scheme in auth_scheme_candidates():
+        for auth_scheme in (auth_scheme_candidates() if api_key else ["bearer"]):
             response = await client.get(endpoint, headers=auth_headers(api_key, auth_scheme))
             json_label = "JSON" if response_is_json(response) else "非JSON"
             attempts.append(f"{endpoint} [{auth_scheme}] -> HTTP {response.status_code} {json_label}")
@@ -241,7 +250,7 @@ async def _request_models_via_routes(
     all_attempts: list[str] = []
     last_result: tuple[httpx.Response, str, str, str] | None = None
     route_errors: list[str] = []
-    for route_label, proxy_url in _provider_client_routes():
+    for route_label, proxy_url in _provider_client_routes(base_url):
         try:
             async with httpx.AsyncClient(**_provider_client_kwargs(proxy_url)) as client:
                 response, endpoint, attempts, auth_scheme = await _request_models_endpoint(
@@ -387,7 +396,7 @@ async def _request_chat_endpoint(
         endpoints = list(dict.fromkeys(response_endpoints + chat_endpoints))
     for endpoint in endpoints:
         request_api_mode = "responses" if endpoint.rstrip("/").lower().endswith("/responses") else "chat_completions"
-        for auth_scheme in auth_scheme_candidates(preferred_auth_scheme):
+        for auth_scheme in (auth_scheme_candidates(preferred_auth_scheme) if api_key else ["bearer"]):
             payload = (
                 {"model": model, "input": "只回复OK", "max_output_tokens": 4}
                 if request_api_mode == "responses"
@@ -545,7 +554,7 @@ async def _request_chat_via_routes(
     all_attempts: list[str] = []
     last_result: tuple[httpx.Response, str, str, str] | None = None
     route_errors: list[str] = []
-    for route_label, proxy_url in _provider_client_routes():
+    for route_label, proxy_url in _provider_client_routes(base_url):
         try:
             async with httpx.AsyncClient(**_provider_client_kwargs(proxy_url)) as client:
                 response, endpoint, attempts, auth_scheme = await _request_chat_endpoint(
@@ -638,7 +647,7 @@ async def create_provider(payload: ProviderCreateRequest):
         for item in payload.models:
             record = item.model_dump()
             if record.get("supports_tool_calls") is None:
-                record["supports_tool_calls"] = kind == "official"
+                record["supports_tool_calls"] = kind in {"official", "local"}
             model_records.append(record)
         provider_id, profiles = save_custom_provider(
             values,
@@ -666,7 +675,7 @@ async def discover_models(payload: ModelDiscoveryRequest):
         payload.preset_id,
     )
     api_key = payload.api_key.strip()
-    if not api_key:
+    if not api_key and not allows_empty_api_key(kind, (base_url,)):
         raise HTTPException(status_code=400, detail="请先填写API Key。")
     preset = provider_preset(payload.preset_id)
     try:
@@ -708,7 +717,7 @@ async def discover_models(payload: ModelDiscoveryRequest):
         if not model:
             continue
         metadata = suggest_model_metadata(model)
-        pricing = model_catalog_entry(model) or provider_prices.get(model, {})
+        pricing = {} if kind == "local" else model_catalog_entry(model) or provider_prices.get(model, {})
         api_mode = provider_model_api_mode(
             protocol,
             model,
@@ -724,6 +733,7 @@ async def discover_models(payload: ModelDiscoveryRequest):
             "pricing_source": str(pricing.get("pricing_source") or "unconfigured"),
             "api_mode": api_mode,
             "api_supported": api_mode != "messages",
+            **({"supports_tool_calls": True, "privacy_location": "local_device"} if kind == "local" else {}),
         })
     models.sort(key=lambda item: str(item["model"]).lower())
     return {
@@ -749,7 +759,7 @@ async def test_model_profile(profile_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     api_key_error = str(getattr(profile, "api_key_error", "") or "")
-    if api_key_error or not profile.api_key:
+    if api_key_error or (not profile.api_key and not allows_empty_api_key(getattr(profile, "provider_kind", "relay"), profile.base_urls)):
         raise HTTPException(
             status_code=400,
             detail={

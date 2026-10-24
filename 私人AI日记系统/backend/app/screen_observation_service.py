@@ -22,6 +22,7 @@ from .llm import (
     call_chat_completion_result,
 )
 from .model_registry import ModelProfile, list_model_profiles
+from .provider_compat import model_connection_configured
 from .mio_profile import load_mio_profile
 from .screen_behavior_service import (
     BehaviorDecision,
@@ -216,7 +217,7 @@ def _recent_context(conversation_id: str, *, limit: int = 8, max_chars: int = 22
 
 
 def _configured_profiles():
-    return [profile for profile in list_model_profiles() if profile.base_urls and profile.api_key]
+    return [profile for profile in list_model_profiles() if model_connection_configured(profile)]
 
 
 def _vision_profiles():

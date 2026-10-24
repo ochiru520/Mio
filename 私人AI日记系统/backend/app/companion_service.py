@@ -128,6 +128,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "speak_screen_observations": True,
     "speak_game_observations": True,
     "qq_voice_mode": "adaptive",
+    "indextts2_url": "http://127.0.0.1:11996",
+    "indextts2_ref_audio": "",
     "gpt_sovits_url": "http://127.0.0.1:9880",
     "gpt_sovits_ref_audio": "",
     "gpt_sovits_prompt_text": "",
@@ -928,7 +930,7 @@ def iter_speech_wav_stream(
     if not clean:
         raise ValueError("这条消息没有可朗读的正文。")
     clean = clean[:600]
-    if load_config().get("voice_engine") == "cloud":
+    if load_config().get("voice_engine") in {"cloud", "indextts2"}:
         # 云端引擎一次合成完整 WAV，兼容流式接口的消费方。
         yield synthesize_speech_wav(clean, context=context, emotion=emotion)
         return
@@ -1367,7 +1369,7 @@ def _speak_wav_worker_impl(
             if on_audio_started is not None:
                 on_audio_started(latency)
 
-        if load_config().get("voice_engine") == "cloud":
+        if load_config().get("voice_engine") in {"cloud", "indextts2"}:
             content = synthesize_speech_wav(
                 text,
                 context=context,
@@ -1565,7 +1567,7 @@ def speak_text(
     )
     worker.start()
     if wait:
-        worker.join(timeout=150)
+        worker.join(timeout=330 if config.get("voice_engine") == "indextts2" else 150)
         if worker.is_alive():
             _gpt_sovits_last_error = "本地语音播放超时"
             return False
@@ -1589,6 +1591,16 @@ def synthesize_speech_wav(
         raise ValueError("这条消息没有可朗读的正文。")
     clean = clean[:600]
     engine_config = load_config()
+    if engine_config.get("voice_engine") == "indextts2":
+        from . import indextts2_service
+        try:
+            content = indextts2_service.synthesize_wav(clean, engine_config)
+            content = _postprocess_speech_wav(content, int(engine_config.get("voice_volume", 85)))
+            _gpt_sovits_last_error = ""
+            return content
+        except (ValueError, OSError) as exc:
+            _gpt_sovits_last_error = str(exc)
+            raise OSError(f"IndexTTS2 语音暂时不可用：{exc}") from exc
     if engine_config.get("voice_engine") == "cloud":
         try:
             content = cloud_tts.synthesize_wav(clean, engine_config)
@@ -1781,6 +1793,12 @@ def _probe_gpt_sovits(*, force: bool = False) -> bool:
 
 def voice_runtime_status(*, force_probe: bool = False) -> dict[str, Any]:
     config = load_config()
+    if config.get("voice_engine") == "indextts2":
+        from . import indextts2_service
+        status = indextts2_service.runtime_status(config)
+        if _gpt_sovits_last_error:
+            status["last_error"] = _gpt_sovits_last_error
+        return status
     reference = str(config.get("gpt_sovits_ref_audio") or "")
     reference_path = Path(reference) if reference else None
     if config.get("voice_engine") == "cloud":
@@ -1937,6 +1955,11 @@ def voice_runtime_status(*, force_probe: bool = False) -> dict[str, Any]:
 
 def voice_runtime_health() -> dict[str, Any]:
     """Return cached/process-only TTS health without issuing an HTTP probe."""
+    if load_config().get("voice_engine") == "indextts2":
+        return {"runtime": "indextts2", "managed_running": False, "desired_running": False,
+                "observed_running": None, "probe_age_seconds": None, "probe_stale": True,
+                "last_error": _gpt_sovits_last_error, "warmup_state": "idle", "warmup_error": "",
+                "last_first_audio_ms": None}
     if _uses_genie_runtime():
         from . import genie_tts_service
 
@@ -1988,6 +2011,8 @@ def voice_runtime_health() -> dict[str, Any]:
 
 
 def start_voice_service() -> dict[str, Any]:
+    if load_config().get("voice_engine") == "indextts2":
+        raise OSError("IndexTTS2 使用独立服务，请按语音设置中的启动命令运行；Mio 不代管此进程。")
     status = start_gpt_sovits_service()
     warm_voice_runtime_async()
     return status
@@ -2037,10 +2062,14 @@ def signal_frontend_ready() -> bool:
 
 
 def stop_voice_service() -> dict[str, Any]:
+    if load_config().get("voice_engine") == "indextts2":
+        raise OSError("请在 IndexTTS2 独立服务终端按 Ctrl+C 停止。")
     return stop_gpt_sovits_service()
 
 
 def restart_voice_service() -> dict[str, Any]:
+    if load_config().get("voice_engine") == "indextts2":
+        raise OSError("请在 IndexTTS2 独立服务终端停止后重新运行启动命令。")
     return restart_gpt_sovits_service()
 
 
@@ -2216,6 +2245,8 @@ def _warm_genie_language(language: str) -> None:
 
 
 def warm_voice_runtime() -> dict[str, Any]:
+    if load_config().get("voice_engine") == "indextts2":
+        return {"warmup_state": "idle", "warmup_error": "IndexTTS2 由独立服务加载，请保存并试听验证。"}
     uses_genie = _uses_genie_runtime()
     genie_hot = False
     if uses_genie:
@@ -2272,6 +2303,8 @@ def warm_voice_runtime() -> dict[str, Any]:
 
 
 def warm_voice_runtime_async() -> bool:
+    if load_config().get("voice_engine") == "indextts2":
+        return False
     uses_genie = _uses_genie_runtime()
     genie_cold = False
     if uses_genie:
@@ -2299,7 +2332,7 @@ def warm_voice_language_async(language: str) -> bool:
     if selected not in {"zh", "ja"}:
         return False
     config = load_config()
-    if not config.get('voice_enabled', True) or config.get('voice_engine') == 'cloud':
+    if not config.get('voice_enabled', True) or config.get('voice_engine') in {'cloud', 'indextts2'}:
         return False
 
     if _uses_genie_runtime():

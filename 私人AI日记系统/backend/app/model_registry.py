@@ -698,10 +698,12 @@ def save_custom_provider(
         provider_record.get("default_api_mode"),
         base_url=base_url,
     )
-    if not provider_name or not base_url or not api_key:
-        raise ValueError("供应商名称、API地址和API Key不能为空。")
-    if provider_kind not in {"official", "relay"}:
-        raise ValueError("供应商类型必须是官方 API 或中转站。")
+    from .provider_compat import allows_empty_api_key, normalize_api_base_url
+    base_url = normalize_api_base_url(base_url)
+    if not provider_name or (not api_key and not allows_empty_api_key(provider_kind, (base_url,))):
+        raise ValueError("供应商名称、API地址和API Key不能为空；本地服务未开启鉴权时可不填 Key。")
+    if provider_kind not in {"official", "relay", "local"}:
+        raise ValueError("供应商类型必须是官方 API、中转站或本地服务。")
     if provider_protocol not in {"openai", "deepseek", "opencode_go"}:
         raise ValueError("当前只支持 OpenAI 兼容、DeepSeek 官方和 OpenCode Go 协议。")
     if auth_scheme not in {"auto", "bearer", "x-api-key", "api-key"}:
@@ -738,7 +740,7 @@ def save_custom_provider(
             "supports_tool_calls": bool(record.get("supports_tool_calls")),
             "supports_structured_output": bool(record.get("supports_structured_output", True)),
             "context_window_tokens": max(4096, int(record.get("context_window_tokens") or 32768)),
-            "privacy_location": str(record.get("privacy_location") or "external_provider")[:40],
+            "privacy_location": "local_device" if provider_kind == "local" else str(record.get("privacy_location") or "external_provider")[:40],
             "api_mode": str(
                 record.get("api_mode")
                 or provider_model_api_mode(

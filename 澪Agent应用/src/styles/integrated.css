@@ -274,8 +274,8 @@
 .integrated-chat-layout.conversation-drawer-pinned { grid-template-columns: 272px minmax(0, 1fr); }
 .integrated-chat-layout .chat-column {
   position: relative;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -288,11 +288,10 @@
 .conversation-new-button { display: flex; min-height: 36px; align-items: center; justify-content: center; gap: 7px; margin: 8px 0 10px; color: var(--accent-hover); background: var(--accent-soft); border: 0; border-radius: 6px; cursor: pointer; }
 .conversation-drawer-list { display: grid; gap: 4px; overflow: auto; }.conversation-drawer-list article { position: relative; border-radius: 6px; }.conversation-drawer-list article.active { background: var(--mio-blue-soft); box-shadow: inset 3px 0 0 var(--mio-blue); }.conversation-drawer-list article > button { display: flex; width: 100%; min-height: 54px; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 9px 8px; text-align: left; background: transparent; border: 0; cursor: pointer; }.conversation-drawer-list article > button span { display: grid; min-width: 0; gap: 3px; }.conversation-drawer-list strong,.conversation-drawer-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.conversation-drawer-list strong { font-size: calc(11px * var(--fs, 1)); }.conversation-drawer-list small,.conversation-drawer-list time { color: var(--muted); font-size: calc(9px * var(--fs, 1)); }.conversation-drawer-actions { position: absolute; right: 5px; bottom: 3px; display: none; }.conversation-drawer-list article:hover .conversation-drawer-actions,.conversation-drawer-list article.active .conversation-drawer-actions { display: flex; }.conversation-drawer-actions button { padding: 4px; background: transparent; border: 0; cursor: pointer; }
 .conversation-drawer-trigger { position: absolute; z-index: 8; top: 10px; left: 12px; display: flex; max-width: 200px; min-height: 32px; align-items: center; gap: 7px; padding: 5px 9px; color: var(--text-muted); background: color-mix(in srgb, var(--surface-raised) 90%, transparent); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }.conversation-drawer-trigger span { overflow: hidden; font-size: calc(10px * var(--fs, 1)); text-overflow: ellipsis; white-space: nowrap; }
-.integrated-chat-layout .message-scroll { grid-row: 1; min-height: 0; overflow: auto; padding-top: 54px; background: transparent; }
+.integrated-chat-layout .message-scroll { min-height: 0; overflow: auto; padding-top: 54px; background: transparent; }
 .integrated-chat-layout .composer-wrap {
-  grid-row: 2;
   height: auto;
-  align-self: end;
+  align-self: stretch;
   padding: 8px clamp(18px, 3vw, 38px) 8px;
   background: transparent;
   border-top: 0;

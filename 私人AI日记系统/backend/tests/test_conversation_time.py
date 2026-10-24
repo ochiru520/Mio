@@ -73,7 +73,7 @@ class ConversationTimeTests(unittest.TestCase):
         self.assertIn("今天间隔约 3 小时后重新开始", context)
         self.assertNotIn("跨天", context)
 
-    def test_message_annotations_mark_current_turn_without_leaking_as_reply(self) -> None:
+    def test_message_annotations_use_stable_absolute_timestamps(self) -> None:
         old_row = {
             "id": 1,
             "created_at": "2026-07-13T23:30:00+08:00",
@@ -84,8 +84,8 @@ class ConversationTimeTests(unittest.TestCase):
         }
         old_content = _annotate_history_content(old_row, "今天很累。", self.current, 2)
         current_content = _annotate_history_content(current_row, "醒了。", self.current, 2)
-        self.assertEqual(old_content, "[内部消息时间：昨天 23:30]\n今天很累。")
-        self.assertEqual(current_content, "[内部消息时间：今天 08:10（本轮新消息）]\n醒了。")
+        self.assertEqual(old_content, "[内部消息时间：2026-07-13T23:30:00+08:00]\n今天很累。")
+        self.assertEqual(current_content, "[内部消息时间：2026-07-14T08:10:00+08:00]\n醒了。")
 
     def test_before_four_cross_midnight_is_same_record_day(self) -> None:
         current = datetime.fromisoformat("2026-07-18T01:00:00+08:00")

@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from .config import settings
 from . import windows_compat
 from .model_registry import list_model_profiles
+from .provider_compat import model_connection_configured
 from .napcat_service import _incomplete_napcat_shells, _napcat_launchers
 from .ollama_model_files import manifest_complete as _ollama_manifest_complete
 
@@ -947,7 +948,7 @@ def passive_environment_status() -> dict[str, Any]:
         free_bytes = 0
     database_exists = settings.db_path.is_file()
     profiles = list_model_profiles()
-    configured_models = sum(bool(profile.api_key and profile.base_urls) for profile in profiles)
+    configured_models = sum(model_connection_configured(profile) for profile in profiles)
     required = {
         "windows": windows_ready,
         "architecture": architecture_ready,

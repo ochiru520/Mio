@@ -3,6 +3,7 @@ import AgentTasksPage from './AgentTasksPage.vue'
 import AgentTaskProgress from './AgentTaskProgress.vue'
 import { receiptSummary } from '../agentProcessState.js'
 import { contextUsagePresentation } from '../contextUsageState.js'
+import { messageCacheRateLabel, messageTokenUsageTitle } from '../messageTokenUsage.js'
 import { artifactPreviewTarget } from '../artifactPreviewTarget.js'
 import ExecutionPolicy from './ExecutionPolicy.vue'
 import AgentToolPicker from './AgentToolPicker.vue'
@@ -312,7 +313,7 @@ function closeImagePreview() {
                 <template v-if="turn.role === 'assistant'">
                   <span v-if="context.displayVisibility.message_model">{{ context.messageModelLabel(turn) }}</span>
                   <span v-if="context.displayVisibility.message_model">{{ context.reasoningLabel(turn.reasoning_level || 'auto') }}</span>
-                  <span v-if="context.isAgentWorkspace || context.displayVisibility.message_tokens" :title="context.isAgentWorkspace ? '包含本轮多次模型调用，累计用量不等于当前上下文占用' : undefined">{{ context.isAgentWorkspace ? '本轮累计 ' : '' }}{{ Number(turn.prompt_tokens || 0) + Number(turn.completion_tokens || 0) }} token</span>
+                  <span v-if="context.isAgentWorkspace || context.displayVisibility.message_tokens" class="message-token-usage" :title="messageTokenUsageTitle(turn, context.isAgentWorkspace)">{{ context.isAgentWorkspace ? '本轮累计 ' : '' }}{{ Number(turn.prompt_tokens || 0) + Number(turn.completion_tokens || 0) }} token · {{ messageCacheRateLabel(turn) }}</span>
                   <span v-if="context.isAgentWorkspace || context.displayVisibility.response_latency">{{ turn.total_latency_ms ? `${(Number(turn.total_latency_ms) / 1000).toFixed(1)} 秒` : '耗时未记录' }}</span>
                   <span v-if="context.isAgentWorkspace || context.displayVisibility.message_cost">{{ context.formatCost(turn) }}</span>
                   <span v-if="context.displayVisibility.message_play">{{ context.turnVoiceLanguageLabel(turn) }}</span>

@@ -1,6 +1,7 @@
 <script setup>
 import { monthlyCatalog } from './monthlyCatalog.js'
 import { executionActionLabels } from './executionRecordPresentation.js'
+import { messageCacheRateLabel } from './messageTokenUsage.js'
 import { MODEL_CATALOG_KEY, mergeModelCatalog } from './modelCatalogSync.js'
 import UpdateNotice from './components/UpdateNotice.vue'
 // Domain composition; factories do not eagerly access their dependencies.
@@ -1134,6 +1135,8 @@ const companionStatus = ref({
       speak_game_observations: true,
       qq_voice_mode: 'adaptive',
       gpt_sovits_url: 'http://127.0.0.1:9880',
+      indextts2_url: 'http://127.0.0.1:11996',
+      indextts2_ref_audio: '',
       local_voice_runtime: 'genie',
       gpt_sovits_ref_audio: '',
       gpt_sovits_prompt_text: '',
@@ -1538,6 +1541,7 @@ const companionSettingKeys = {
     'pet_call_min_speech_ms', 'pet_call_max_turn_seconds',
     'voice_enabled', 'voice_startup_enabled', 'voice_idle_timeout_seconds', 'voice_engine', 'local_voice_runtime', 'voice_volume', 'voice_streaming_enabled', 'speak_proactive',
     'default_voice_profile_id', 'voice_profiles',
+    'indextts2_url', 'indextts2_ref_audio',
     'cloud_tts_api_key', 'cloud_tts_app_id', 'cloud_tts_speaker', 'cloud_tts_speech_rate',
     'pet_speech_language', 'qq_voice_mode', 'gpt_sovits_url', 'gpt_sovits_text_language',
     'gpt_sovits_translate_to_japanese', 'screen_ai_enabled', 'screen_audio_enabled',
@@ -1550,6 +1554,7 @@ const companionSettingKeys = {
   voice: [
     'voice_enabled', 'voice_startup_enabled', 'voice_idle_timeout_seconds', 'voice_engine', 'local_voice_runtime', 'voice_volume', 'voice_streaming_enabled', 'speak_proactive',
     'default_voice_profile_id', 'voice_profiles',
+    'indextts2_url', 'indextts2_ref_audio',
     'pet_speech_language', 'speech_translation_model_id',
     'qq_voice_mode', 'gpt_sovits_url', 'gpt_sovits_text_language', 'gpt_sovits_translate_to_japanese',
     'cloud_tts_api_key', 'cloud_tts_app_id', 'cloud_tts_speaker', 'cloud_tts_speech_rate',
@@ -2818,7 +2823,7 @@ async function setPetChatWindowState(open) {
             <span><small>今日输入</small><b>{{ formatTokenCount(tokenUsageData.today?.prompt_tokens) }}</b></span>
             <span><small>今日输出</small><b>{{ formatTokenCount(tokenUsageData.today?.completion_tokens) }}</b></span>
             <span><small>今日推理</small><b>{{ formatTokenCount(tokenUsageData.today?.reasoning_tokens) }}</b></span>
-            <span><small>缓存输入</small><b>{{ formatTokenCount(tokenUsageData.today?.cached_prompt_tokens) }}</b></span>
+            <span title="命中率 = 上游报告缓存输入 ÷ 今日总输入，按 token 加权，包含未报告缓存的调用。横线表示暂无可确认比例，可能尚无输入、缓存为 0 或上游未报告。"><small>缓存输入 · {{ messageCacheRateLabel(tokenUsageData.today) }}</small><b>{{ formatTokenCount(tokenUsageData.today?.cached_prompt_tokens) }}</b></span>
           </div>
           <div class="token-day-list" role="region" aria-label="每日 Token 用量" tabindex="0">
             <header><span>日期</span><span>对话</span><span>观察</span><span>合计</span></header>
@@ -2836,16 +2841,18 @@ async function setPetChatWindowState(open) {
         <div class="provider-kind-picker">
           <button type="button" :class="{ active: providerForm.provider_kind === 'official' }" @click="selectProviderKind('official')">官方 API</button>
           <button type="button" :class="{ active: providerForm.provider_kind === 'relay' }" @click="selectProviderKind('relay')">中转站</button>
+          <button type="button" :class="{ active: providerForm.provider_kind === 'local' }" @click="selectProviderKind('local')">本地模型</button>
         </div>
-        <div v-if="providerForm.provider_kind === 'official'" class="provider-official-picker">
+        <div v-if="providerForm.provider_kind !== 'relay'" class="provider-official-picker">
           <select :value="providerForm.preset_id" @change="selectProviderPreset($event.target.value)">
             <option value="">选择常用供应商</option>
-            <option v-for="preset in providerPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
+            <option v-for="preset in providerPresets.filter(item => providerForm.provider_kind === 'local' ? item.kind === 'local' : item.kind !== 'local')" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
           </select>
         </div>
         <label>供应商名称<input v-model.trim="providerForm.provider_name" :disabled="Boolean(providerForm.preset_id)" autofocus placeholder="例如 OpenAI 中转站" /></label>
-        <label>API地址<input v-model.trim="providerForm.base_url" :disabled="Boolean(providerForm.preset_id)" placeholder="https://example.com/v1" /></label>
-        <label>API Key<input v-model="providerForm.api_key" type="password" autocomplete="off" placeholder="sk-..." /></label>
+        <label>API地址<input v-model.trim="providerForm.base_url" :disabled="Boolean(providerForm.preset_id) && providerForm.provider_kind !== 'local'" :placeholder="providerForm.provider_kind === 'local' ? 'http://127.0.0.1:1234/v1' : 'https://example.com/v1'" /></label>
+        <label>{{ providerForm.provider_kind === 'local' ? 'API Key（未启用鉴权可留空）' : 'API Key' }}<input v-model="providerForm.api_key" type="password" autocomplete="off" placeholder="sk-..." /></label>
+        <p v-if="providerForm.provider_kind === 'local'" class="provider-privacy-note">在 LM Studio 或 Ollama 启动服务后，填写服务地址并获取模型。Agent 需要所选模型及模板支持工具调用；连接测试只验证聊天。</p>
         <label>接口模式<select v-model="providerForm.default_api_mode"><option value="auto">自动识别</option><option value="responses">Responses API（Codex）</option><option value="chat_completions">Chat Completions</option></select></label>
         <div class="provider-discovery-bar">
           <span>{{ providerForm.provider_kind === 'official' ? '按官方模型接口获取' : 'OpenAI 兼容 / New API 中转站' }}</span>
@@ -2885,6 +2892,7 @@ async function setPetChatWindowState(open) {
           API Key 只保存在本机 D 盘数据目录，不会在页面中回显。
         </div>
         <label class="checkbox-field"><input v-model="providerForm.supports_vision" type="checkbox" />支持图片识别</label>
+        <label v-if="providerForm.provider_kind === 'local'" class="checkbox-field"><input v-model="providerForm.supports_tool_calls" type="checkbox" />模型支持工具调用（用于自动选择）</label>
         <footer>
           <button type="button" @click="closeProviderPanel">取消</button>
           <button class="primary-button" type="button" :disabled="providerBusy" @click="saveProvider">{{ providerBusy ? '正在保存' : `保存${discoveredModels.filter((item) => item.selected).length || 1}个模型` }}</button>

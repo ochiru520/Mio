@@ -18,6 +18,7 @@ from ..llm import LLMConfigError, call_chat_completion
 from ..life_loop_service import diary_lifecycle
 from ..markdown_rendering import render_safe_markdown
 from ..model_registry import list_model_profiles
+from ..provider_compat import model_connection_configured
 from ..prompts import build_diary_edit_messages, build_diary_messages
 from ..web import templates
 
@@ -63,13 +64,13 @@ def _diary_export_entries(rows) -> list[tuple[str, str]]:
 
 def _diary_model_id() -> str:
     """Resolve the configured default profile instead of sending an empty ID."""
-    profiles = [profile for profile in list_model_profiles() if profile.base_urls and profile.api_key]
+    profiles = [profile for profile in list_model_profiles() if model_connection_configured(profile)]
     from ..model_runtime import model_selection
     requested, _ = model_selection("record")
     if requested and requested != "auto":
         selected = next((profile for profile in profiles if profile.id == requested), None)
         if selected is None:
-            raise LLMConfigError("日记专用模型不可用，请在日记设置中重新选择模型并检查供应商密钥。")
+            raise LLMConfigError("日记专用模型不可用，请在日记设置中重新选择模型并检查服务地址、启动状态或鉴权。")
         return selected.id
     selected = next((profile for profile in profiles if profile.is_default), None)
     if selected is None and profiles:

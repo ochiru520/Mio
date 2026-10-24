@@ -2,6 +2,8 @@ from __future__ import annotations
 
 
 PROVIDER_PRESETS: tuple[dict[str, object], ...] = (
+    {"id": "lm_studio", "name": "LM Studio", "kind": "local", "protocol": "openai", "base_url": "http://127.0.0.1:1234/v1", "default_api_mode": "chat_completions", "note": "先在 LM Studio 启动本地服务器并加载模型；未开启鉴权时 API Key 可留空。Agent 需要模型和聊天模板支持工具调用。"},
+    {"id": "ollama", "name": "Ollama", "kind": "local", "protocol": "openai", "base_url": "http://127.0.0.1:11434/v1", "default_api_mode": "chat_completions", "note": "连接 Ollama 的 OpenAI 兼容接口；API Key 通常可留空，Agent 需要使用支持工具调用的模型。"},
     {"id": "openai", "name": "OpenAI", "kind": "official", "protocol": "openai", "base_url": "https://api.openai.com/v1"},
     {"id": "deepseek", "name": "DeepSeek", "kind": "official", "protocol": "deepseek", "base_url": "https://api.deepseek.com/v1"},
     {"id": "opencode_go", "name": "OpenCode Go", "kind": "official", "protocol": "opencode_go", "base_url": "https://opencode.ai/zen/go/v1", "note": "GPT/Luna/Grok 走 Responses；GLM/Kimi/DeepSeek/MiMo/Hy3 走 Chat Completions；Claude /messages 暂不支持。"},

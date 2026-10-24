@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import unittest
 import tempfile
@@ -291,7 +292,7 @@ class ChatCompletionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "snapshot-context")
 
-    async def test_self_snapshot_is_injected_into_system_context(self) -> None:
+    async def test_self_snapshot_is_injected_after_history_before_current_user(self) -> None:
         completion = _completion("我现在在设置页面。", tokens=8, cost=0.001)
         captured_messages: list[dict[str, object]] = []
         staged_agent = _agent_result("run-self-snapshot-test")
@@ -345,7 +346,10 @@ class ChatCompletionGuardTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(captured_messages)
-        self.assertIn("SELF-SNAPSHOT-CONTEXT", str(captured_messages[0]["content"]))
+        self.assertNotIn("SELF-SNAPSHOT-CONTEXT", str(captured_messages[0]["content"]))
+        self.assertEqual(captured_messages[-2]["role"], "user")
+        self.assertIn("SELF-SNAPSHOT-CONTEXT", str(captured_messages[-2]["content"]))
+        self.assertIn("你现在在哪个页面", str(captured_messages[-1]["content"]))
 
     async def test_final_reply_model_receives_verified_tool_observation(self) -> None:
         completion = _completion("今天的状态是平静。", tokens=8, cost=0.001)
@@ -420,13 +424,11 @@ class ChatCompletionGuardTests(unittest.IsolatedAsyncioTestCase):
                 persist=True,
             )
 
-        system_payload = "\n".join(
-            str(item.get("content") or "")
-            for item in captured_messages
-            if item.get("role") == "system"
-        )
-        self.assertIn('"tool":"get_today_state"', system_payload)
-        self.assertIn('"mood":"平静"', system_payload)
+        observed_payload = "\n".join(json.loads(captured_messages[-2]["content"])["应用运行资料"])
+        self.assertEqual(captured_messages[-2]["role"], "user")
+        self.assertIn('"tool":"get_today_state"', observed_payload)
+        self.assertIn('"mood":"平静"', observed_payload)
+        self.assertIn("读取今天的状态", captured_messages[-1]["content"])
         self.assertEqual(result.tool_receipts[0]["status"], "completed")
         finish_final.assert_called_once_with(agent_result, 9, reply="今天的状态是平静")
 

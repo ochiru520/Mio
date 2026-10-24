@@ -28,31 +28,8 @@ function ruleFor(source, selector) {
   return match ? match[1] : ''
 }
 
-test('chat composer stays attached to the bottom at desktop widths', () => {
-  // 意图：对话列是「消息区自适应 + 输入区自动高度」两行栅格，且自身不滚动
-  const chatColumn = ruleFor(css, '.integrated-chat-layout .chat-column')
-  assert.match(chatColumn, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto/)
-  assert.match(chatColumn, /overflow:\s*hidden/)
-
-  // 意图：消息区可滚动，且允许被压缩，否则输入框会被顶出视口
-  const messageScroll = ruleFor(css, '.integrated-chat-layout .message-scroll')
-  assert.match(messageScroll, /overflow:\s*auto/)
-  assert.match(messageScroll, /min-height:\s*0/)
-
-  // 意图：输入框固定在栅格第二行并贴底，不随消息多少漂移
-  const composerWrap = ruleFor(css, '.integrated-chat-layout .composer-wrap')
-  assert.match(composerWrap, /grid-row:\s*2/)
-  assert.match(composerWrap, /align-self:\s*end/)
-  assert.match(composerWrap, /padding:/)
-
-  // 意图：输入框内部纵向排列，操作按钮被推到下方
-  const composer = ruleFor(css, '.integrated-chat-layout .composer')
-  assert.match(composer, /display:\s*flex/)
-  assert.match(composer, /flex-direction:\s*column/)
-
-  const composerActions = ruleFor(css, '.integrated-chat-layout .composer-actions')
-  assert.match(composerActions, /margin-top:\s*auto/)
-})
+// Composer placement is verified against actual browser geometry, including the
+// optional Agent handoff notice, in scripts/test_chat_handoff_layout_ui.cjs.
 
 test('Agent home keeps actions and workflow status visible at narrow widths', () => {
   const agentCss = fs.readFileSync(new URL('./styles/agent-workspace.css', import.meta.url), 'utf8')

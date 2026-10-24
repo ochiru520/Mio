@@ -27,6 +27,8 @@ from .provider_compat import (
     client_headers,
     auth_scheme_candidates,
     completion_endpoint_candidates,
+    allows_empty_api_key,
+    is_local_api_url,
 )
 
 
@@ -44,6 +46,8 @@ class ModelRequestError(RuntimeError):
         http_status: int = 0,
         route: str = "",
         attempts: list[dict[str, object]] | None = None,
+        upstream_code: str = "",
+        upstream_message: str = "",
     ) -> None:
         super().__init__(message)
         self.profile_id = profile.id
@@ -54,6 +58,8 @@ class ModelRequestError(RuntimeError):
         self.http_status = int(http_status or 0)
         self.route = route
         self.attempts = tuple(attempts or ())
+        self.upstream_code = upstream_code
+        self.upstream_message = upstream_message
 
     def public_detail(self) -> dict[str, object]:
         return {
@@ -67,7 +73,16 @@ class ModelRequestError(RuntimeError):
             "http_status": self.http_status or None,
             "route": self.route,
             "attempts": [dict(item) for item in self.attempts],
+            "upstream_code": self.upstream_code,
+            "upstream_message": self.upstream_message,
         }
+
+    @property
+    def native_tools_unsupported(self) -> bool:
+        # A failed/partial generation is never evidence that tools are unsupported.
+        detail = f'{self} {self.upstream_message}'.lower()
+        return self.http_status in {400, 422} and ('tools' in detail or 'tool_choice' in detail) and any(
+            term in detail for term in ('unsupported', 'not supported', 'does not support', '不支持', 'unknown parameter', 'unrecognized'))
 
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -129,6 +144,35 @@ class CompletionResult:
 StreamDeltaCallback = Callable[[str, str], Awaitable[None] | None]
 
 
+def _stream_failure(event: dict, profile: ModelProfile, request_id: str, route: CompletionRoute, attempts: list) -> ModelRequestError:
+    response = event.get('response') if isinstance(event.get('response'), dict) else event
+    error = event.get('error') or response.get('error') or response.get('incomplete_details') or {}
+    if isinstance(error, dict):
+        code = str(error.get('code') or error.get('type') or error.get('reason') or '')[:120]
+        detail = str(error.get('message') or error.get('reason') or '')
+    else:
+        code, detail = '', str(error)
+    if profile.api_key:
+        detail = detail.replace(profile.api_key, '[已隐藏]')
+    detail = detail[:500]
+    message = '模型流式服务报告失败或未完成，已保留输出片段。'
+    if detail:
+        message += f' 服务端信息：{detail}'
+    return ModelRequestError(message, profile=profile, request_id=request_id,
+        route=_route_name(route), attempts=attempts, upstream_code=code, upstream_message=detail)
+
+
+def _validate_tool_calls(calls: list[ToolCall], profile: ModelProfile, request_id: str) -> None:
+    for call in calls:
+        try:
+            arguments = json.loads(call.arguments_json)
+        except (ValueError, TypeError):
+            arguments = None
+        if not call.name.strip() or not isinstance(arguments, dict):
+            raise ModelRequestError('模型返回的工具调用不完整或参数不是 JSON 对象，未执行工具。',
+                profile=profile, request_id=request_id, upstream_code='invalid_tool_call')
+
+
 def _chat_message_text(value: object) -> str:
     """Read user-facing text blocks without accepting provider reasoning blocks."""
     if isinstance(value, str):
@@ -188,10 +232,58 @@ def _provider_reported_cost_yuan(
     return None
 
 
+def _usage_token_count(*values: object) -> int:
+    """Read protocol aliases without treating an explicit zero as missing."""
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return 0
+
+
+def _normalize_usage(usage: dict[str, Any]) -> dict[str, Any]:
+    """Keep provider metadata and expose Chat/Responses usage consistently."""
+    normalized = dict(usage)
+    prompt_tokens = _usage_token_count(usage.get("prompt_tokens"), usage.get("input_tokens"))
+    completion_tokens = _usage_token_count(usage.get("completion_tokens"), usage.get("output_tokens"))
+    prompt_details = usage.get("prompt_tokens_details")
+    input_details = usage.get("input_tokens_details")
+    cached_tokens = min(prompt_tokens, max(
+        _usage_token_count(usage.get("prompt_cache_hit_tokens")),
+        _usage_token_count(prompt_details.get("cached_tokens")) if isinstance(prompt_details, dict) else 0,
+        _usage_token_count(input_details.get("cached_tokens")) if isinstance(input_details, dict) else 0,
+    ))
+    completion_details = usage.get("completion_tokens_details")
+    output_details = usage.get("output_tokens_details")
+    normalized["prompt_tokens"] = prompt_tokens
+    normalized["completion_tokens"] = completion_tokens
+    normalized["prompt_tokens_details"] = {
+        **(prompt_details if isinstance(prompt_details, dict) else {}),
+        "cached_tokens": cached_tokens,
+    }
+    normalized["prompt_cache_hit_tokens"] = cached_tokens
+    normalized["prompt_cache_miss_tokens"] = min(
+        prompt_tokens - cached_tokens,
+        _usage_token_count(usage.get("prompt_cache_miss_tokens"), prompt_tokens - cached_tokens),
+    )
+    normalized["completion_tokens_details"] = {
+        **(completion_details if isinstance(completion_details, dict) else {}),
+        "reasoning_tokens": _usage_token_count(
+            completion_details.get("reasoning_tokens") if isinstance(completion_details, dict) else None,
+            output_details.get("reasoning_tokens") if isinstance(output_details, dict) else None,
+        ),
+    }
+    return normalized
+
+
 def _usage_cost_yuan(
     usage: dict[str, Any],
     profile: ModelProfile,
 ) -> tuple[float | None, int, str]:
+    usage = _normalize_usage(usage)
     prompt_tokens = max(0, int(usage.get("prompt_tokens") or 0))
     prompt_details = usage.get("prompt_tokens_details")
     cached_tokens = max(0, int(usage.get("prompt_cache_hit_tokens") or 0))
@@ -336,7 +428,7 @@ def require_configured(model_id: str = "") -> None:
         raise LLMConfigError("缺少 OPENAI_BASE_URL。请在 backend/.env 中配置中转站地址。")
     if profile.api_key_error:
         raise LLMConfigError(profile.api_key_error)
-    if not profile.api_key:
+    if not profile.api_key and not allows_empty_api_key(profile.provider_kind, profile.base_urls):
         raise LLMConfigError("缺少 OPENAI_API_KEY。请在 backend/.env 中配置中转站密钥。")
     if not profile.model:
         raise LLMConfigError("缺少 OPENAI_MODEL。请在 backend/.env 中配置模型名。")
@@ -450,11 +542,35 @@ async def _completion_post(client, url, *, headers, json):
 async def _completion_stream(client, method, url, *, headers, json):
     async with client.stream(method,url,headers=headers,json=json) as response:
         fallback=await _rejected_summary_payload(response,json)
+        if fallback is None and response.status_code in {400, 422} and 'stream_options' in json:
+            await response.aread()
+            try:
+                error = response.json().get('error', {})
+            except ValueError:
+                error = {}
+            if isinstance(error, dict):
+                detail = str(error.get('message') or '').lower()
+                if str(error.get('param') or '') == 'stream_options' or (
+                    'stream_options' in detail and any(term in detail for term in ('unsupported', 'not supported', 'unknown', 'unrecognized', 'extra inputs'))
+                ):
+                    fallback = {key: value for key, value in json.items() if key != 'stream_options'}
         if fallback is None:
             yield response
         else:
             async with client.stream(method,url,headers=headers,json=fallback) as retried:
                 yield retried
+
+
+async def _completion_lines(response: httpx.Response):
+    if 'json' in response.headers.get('content-type', '').lower():
+        await response.aread()
+        try:
+            yield json.dumps(response.json(), ensure_ascii=False)
+        except ValueError:
+            yield ''
+        return
+    async for line in response.aiter_lines():
+        yield line
 
 
 def _responses_message(data: dict[str, Any]) -> tuple[str, list[ToolCall]]:
@@ -494,12 +610,13 @@ def _completion_routes(profile: ModelProfile) -> list[CompletionRoute]:
             if request_mode == "responses" and parsed.path.rstrip("/").lower().endswith("/v1"):
                 bases.append(f"{parsed.scheme}://{parsed.netloc}")
             for base_url in dict.fromkeys(bases):
-                for auth_scheme in auth_scheme_candidates(profile.auth_scheme):
+                local_route = profile.provider_kind == 'local' or is_local_api_url(base_url)
+                for auth_scheme in (auth_scheme_candidates(profile.auth_scheme) if profile.api_key else ['bearer']):
                     if profile.auth_scheme != "auto" and auth_scheme != profile.auth_scheme:
                         continue
-                    if mode != "proxy":
+                    if mode != "proxy" or local_route:
                         routes.append(CompletionRoute(base_url=base_url, proxy_url="", label="直连", auth_scheme=auth_scheme, api_mode=request_mode))
-                    if proxy_url and mode != "direct":
+                    if proxy_url and mode != "direct" and not local_route:
                         routes.append(CompletionRoute(base_url=base_url, proxy_url=proxy_url, label="代理", auth_scheme=auth_scheme, api_mode=request_mode))
 
     add_routes(profile.api_mode)
@@ -651,6 +768,10 @@ async def call_chat_completion_result(
             attempt_records.append({"route": _route_name(route), "http_status": response.status_code,
                                     "error": "成功响应不是有效 JSON"})
             continue
+        if not isinstance(data, dict):
+            raise ModelRequestError('供应商响应不是 JSON 对象。', profile=profile, request_id=request_id)
+        if data.get('error') or data.get('status') in {'failed', 'incomplete'}:
+            raise _stream_failure(data, profile, request_id, route, attempt_records)
         if route.api_mode == "responses":
             content, parsed_tool_calls = _responses_message(data)
             message = {"content": content, "tool_calls": []}
@@ -667,6 +788,8 @@ async def call_chat_completion_result(
                     attempts=attempt_records,
                 ) from exc
             parsed_tool_calls = []
+            if data['choices'][0].get('finish_reason') in {'length', 'content_filter'}:
+                raise ModelRequestError('模型正文未完整生成，未执行工具；请检查本地模型输出上限或服务端限制。', profile=profile, request_id=request_id)
 
         if not isinstance(message, dict):
             raise ModelRequestError(
@@ -701,6 +824,7 @@ async def call_chat_completion_result(
                         arguments_json=arguments_json,
                     )
                 )
+        _validate_tool_calls(parsed_tool_calls, profile, request_id)
         if not content and not parsed_tool_calls:
             raise ModelRequestError(
                 "供应商返回了空回复。",
@@ -710,10 +834,10 @@ async def call_chat_completion_result(
                 route=_route_name(route),
                 attempts=attempt_records,
             )
-        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-        prompt_tokens = max(0, int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0))
-        completion_tokens = max(0, int(usage.get("completion_tokens") or usage.get("output_tokens") or 0))
-        completion_details = usage.get("completion_tokens_details") or usage.get("output_tokens_details")
+        usage = _normalize_usage(data.get("usage") if isinstance(data.get("usage"), dict) else {})
+        prompt_tokens = usage["prompt_tokens"]
+        completion_tokens = usage["completion_tokens"]
+        completion_details = usage["completion_tokens_details"]
         reasoning_tokens = 0
         if isinstance(completion_details, dict):
             reasoning_tokens = max(0, int(completion_details.get("reasoning_tokens") or 0))
@@ -824,6 +948,8 @@ async def call_chat_completion_stream_result(
     max_attempts = max(1, min(3, int(retry_attempts)))
     deadline = _request_deadline()
     for route in routes:
+        if stream_unsupported:
+            break
         request_payload=({**_responses_request_payload(profile,messages,reasoning_level,tools),'stream':True}
                          if route.api_mode=='responses' else payload)
         provider_idempotency_key=_provider_idempotency_key(request_id,request_payload)
@@ -869,20 +995,23 @@ async def call_chat_completion_stream_result(
                             if response.status_code in {400,422}:
                                 try:
                                     error=response.json().get('error',{})
-                                    if isinstance(error,dict) and str(error.get('param','')) in {'stream','stream_options'}:
+                                    if (isinstance(error,dict) and str(error.get('param','')) == 'stream'
+                                            and any(term in str(error.get('message') or '').lower()
+                                                for term in ('unsupported', 'not supported', 'does not support', '不支持', 'unknown', 'unrecognized'))):
                                         stream_unsupported=True
                                 except ValueError: pass
                             errors.append(_route_error_text(route, response))
                             attempt_records.append(_attempt_record(route, response))
                             break
-                        async for line in response.aiter_lines():
+                        async for line in _completion_lines(response):
                             clean = line.strip()
                             if not clean or clean.startswith(":"):
                                 continue
                             if clean.startswith("data:"):
                                 clean = clean[5:].strip()
                             if clean == '[DONE]':
-                                completed=True
+                                if route.api_mode != 'responses':
+                                    completed=True
                                 continue
                             if not clean:
                                 continue
@@ -893,8 +1022,7 @@ async def call_chat_completion_stream_result(
                             if not isinstance(event, dict):
                                 continue
                             if event.get('error') or event.get('type') in {'error','response.failed','response.incomplete'}:
-                                raise ModelRequestError('模型流式服务报告失败或未完成，已保留输出片段。',profile=profile,
-                                    request_id=request_id,route=_route_name(route),attempts=attempt_records)
+                                raise _stream_failure(event, profile, request_id, route, attempt_records)
                             if route.api_mode=='responses':
                                 # Some compatible providers ignore stream=true
                                 # and return one explicit JSON response instead.
@@ -913,6 +1041,8 @@ async def call_chat_completion_stream_result(
                                     completed=True; completed_response=event.get('response') or {}
                                     if not isinstance(completed_response,dict):
                                         raise ModelRequestError('模型完成回执格式无效。',profile=profile,request_id=request_id)
+                                    if completed_response.get('error') or completed_response.get('status') in {'failed', 'incomplete'}:
+                                        raise _stream_failure(completed_response, profile, request_id, route, attempt_records)
                                     usage=completed_response.get('usage') or usage
                                     response_model=str(completed_response.get('model') or response_model)
                                     if not reasoning_parts:
@@ -944,21 +1074,29 @@ async def call_chat_completion_stream_result(
                                 raise ModelRequestError('模型正文未完整生成，已有片段保留，请核对后继续。',profile=profile,
                                     request_id=request_id,route=_route_name(route),attempts=attempt_records)
                             if choice.get('finish_reason'): completed=True
-                            delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+                            delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else choice.get('message')
+                            if not isinstance(delta, dict):
+                                delta = {}
                             reason_piece = _chat_message_text(delta.get('reasoning_content') or delta.get('reasoning_summary'))
                             if reason_piece:
                                 reasoning_parts.append(reason_piece)
                                 if on_reasoning:
                                     callback_result=on_reasoning(reason_piece,''.join(reasoning_parts))
                                     if inspect.isawaitable(callback_result): await callback_result
-                            for item in delta.get('tool_calls') or []:
-                                index=item.get('index',0)
+                            for item_number, item in enumerate(delta.get('tool_calls') or []):
+                                if not isinstance(item, dict):
+                                    continue
+                                index=item.get('index',item_number)
                                 if not isinstance(index,int) or index<0 or index>64: continue
                                 part=tool_parts.setdefault(index,{'id':'','type':'function','function':{'name':'','arguments':''}})
                                 if item.get('id'): part['id']=item['id']
                                 fn=item.get('function') or {}
+                                if not isinstance(fn, dict):
+                                    continue
                                 part['function']['name']+=str(fn.get('name') or '')
-                                part['function']['arguments']+=str(fn.get('arguments') or '')
+                                arguments = fn.get('arguments')
+                                part['function']['arguments'] += (json.dumps(arguments, ensure_ascii=False)
+                                    if isinstance(arguments, dict) else str(arguments or ''))
                             piece = _chat_message_text(delta.get("content"))
                             if not piece:
                                 continue
@@ -989,12 +1127,16 @@ async def call_chat_completion_stream_result(
                 break
 
             content = (_responses_message(completed_response)[0] or ''.join(content_parts)).strip()
+            for index, part in tool_parts.items():
+                if not part['id']:
+                    part['id'] = f'call_{index}'
             parsed_calls = (_responses_message(completed_response)[1] if route.api_mode=='responses' else [
                 ToolCall(call_id=p['id'] or f'call_{i}',name=p['function']['name'],arguments_json=p['function']['arguments'] or '{}')
                 for i,p in sorted(tool_parts.items())])
             if (content or parsed_calls or reasoning_parts) and not completed:
                 raise ModelRequestError('模型流式连接提前关闭，缺少完成回执；已有正文片段保留。',profile=profile,
                     request_id=request_id,route=_route_name(route),attempts=attempt_records)
+            _validate_tool_calls(parsed_calls, profile, request_id)
             if not content and not parsed_calls:
                 if response is not None and response.status_code >= 400:
                     break
@@ -1003,9 +1145,10 @@ async def call_chat_completion_stream_result(
                     continue
                 break
 
-            prompt_tokens = max(0, int(usage.get("prompt_tokens") or usage.get('input_tokens') or 0))
-            completion_tokens = max(0, int(usage.get("completion_tokens") or usage.get('output_tokens') or 0))
-            completion_details = usage.get("completion_tokens_details") or usage.get('output_tokens_details')
+            usage = _normalize_usage(usage if isinstance(usage, dict) else {})
+            prompt_tokens = usage["prompt_tokens"]
+            completion_tokens = usage["completion_tokens"]
+            completion_details = usage["completion_tokens_details"]
             reasoning_tokens = 0
             if isinstance(completion_details, dict):
                 reasoning_tokens = max(0, int(completion_details.get("reasoning_tokens") or 0))

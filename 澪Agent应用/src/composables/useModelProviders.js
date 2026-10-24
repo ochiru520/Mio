@@ -17,6 +17,7 @@ export function useModelProviders(deps) {
       base_url: '',
       api_key: '',
       supports_vision: false,
+      supports_tool_calls: true,
       cached_input_price_cny_per_million: 0,
       input_price_cny_per_million: 0,
       output_price_cny_per_million: 0,
@@ -30,8 +31,12 @@ export function useModelProviders(deps) {
     deps.providerForm.value.preset_id = ''
     deps.providerForm.value.provider_protocol = kind === 'official' ? 'openai' : 'openai'
     deps.providerForm.value.default_api_mode = 'auto'
-    deps.providerForm.value.base_url = kind === 'official' ? 'https://api.openai.com/v1' : ''
+    deps.providerForm.value.base_url = kind === 'official' ? 'https://api.openai.com/v1' : kind === 'local' ? 'http://127.0.0.1:1234/v1' : ''
     if (kind === 'official') deps.providerForm.value.provider_name = 'OpenAI 官方'
+    if (kind === 'local') {
+      deps.providerForm.value.provider_name = 'LM Studio'
+      deps.providerForm.value.default_api_mode = 'chat_completions'
+    }
     deps.discoveredModels.value = []
     deps.providerDiscoveryWarning.value = ''
   }
@@ -99,6 +104,10 @@ export function useModelProviders(deps) {
             variant_name: item.variant_name || '',
             model: item.model,
             supports_vision: Boolean(item.supports_vision ?? deps.providerForm.value.supports_vision),
+            supports_tool_calls: deps.providerForm.value.provider_kind === 'local'
+              ? deps.providerForm.value.supports_tool_calls !== false && item.supports_tool_calls !== false
+              : item.supports_tool_calls ?? null,
+            privacy_location: deps.providerForm.value.provider_kind === 'local' ? 'local_device' : 'external_provider',
             cached_input_price_cny_per_million: item.cached_input_price_cny_per_million || 0,
             input_price_cny_per_million: item.input_price_cny_per_million || 0,
             output_price_cny_per_million: item.output_price_cny_per_million || 0,
@@ -138,10 +147,13 @@ export function useModelProviders(deps) {
           preset_id: deps.providerForm.value.preset_id,
         }),
       })
-      deps.discoveredModels.value = (data.models || []).map((model) => ({
-        ...model,
-        selected: model.api_supported !== false && /[-_](flash|pro|sol|luna)$/i.test(model.model),
-      }))
+      let localModelSelected = false
+      deps.discoveredModels.value = (data.models || []).map((model) => {
+        const selected = model.api_supported !== false && (deps.providerForm.value.provider_kind === 'local'
+          ? !localModelSelected : /[-_](flash|pro|sol|luna)$/i.test(model.model))
+        if (selected) localModelSelected = true
+        return { ...model, selected }
+      })
       deps.providerDiscoveryWarning.value = data.warning || ''
       deps.providerDiscoveryMeta.value = {
         resolved_api_base_url: data.resolved_api_base_url || data.resolved_base_url || deps.providerForm.value.base_url,
@@ -153,7 +165,9 @@ export function useModelProviders(deps) {
       if (!deps.discoveredModels.value.length) throw new Error('这个供应商没有返回可用模型。')
     } catch (error) {
       deps.providerDiscoveryMeta.value = null
-      const manualHint = '仍可在下方手动填写模型 ID；实际聊天需要有效的 API Key。'
+      const manualHint = deps.providerForm.value.provider_kind === 'local'
+        ? '请确认本地服务器已启动，模型已加载；也可手动填写模型 ID。未启用鉴权时 Key 可留空。'
+        : '仍可在下方手动填写模型 ID；实际聊天需要有效的 API Key。'
       deps.providerDiscoveryWarning.value = `${error.message} ${manualHint}`
     } finally {
       deps.providerDiscoveryBusy.value = false

@@ -14,11 +14,25 @@
 
 .chat-column {
   position: relative;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   border-right: 1px solid var(--line);
+}
+
+.chat-reading-pane {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-reading-pane > .message-scroll {
+  flex: 1;
+  min-width: 0;
 }
 
 .file-drop-overlay {
@@ -399,6 +413,7 @@
 .thinking-indicator i:nth-child(3) { animation-delay: 0.4s; }
 
 .composer-wrap {
+  flex: 0 0 auto;
   padding: 8px 28px 10px;
   background: color-mix(in srgb, var(--surface-raised) 96%, transparent);
   border-top: 1px solid var(--surface-sunken);

@@ -18,6 +18,7 @@ from . import (
 )
 from .model_latency_service import get_latency_stats
 from .model_registry import ModelProfile, get_model_profile, list_model_profiles
+from .provider_compat import model_connection_configured
 from .runtime_identity import runtime_identity
 from .tool_registry import tool_registry
 from .config import settings
@@ -246,7 +247,7 @@ def _build_capabilities(
 ) -> list[dict[str, Any]]:
     private = _privacy_map(privacy)
     services = dict(service_health.get("services") or {})
-    configured_models = [profile for profile in profiles if profile.api_key and profile.base_urls]
+    configured_models = [profile for profile in profiles if model_connection_configured(profile)]
     model_ready = bool(configured_models)
     qq_enabled = bool((private.get("qq") or {}).get("enabled"))
     qq_health, qq_failure = _service_capability_state(services, "qq", enabled=qq_enabled)
@@ -340,9 +341,12 @@ def _build_capabilities(
             cost_mode="none", privacy_destination="渲染和窗口状态留在本机",
         ),
         _capability(
-            "tts", "使用 Mio 音色播放中文或日语语音", ["main_app", "desktop_pet", "qq"],
+            "tts", "使用所选语音引擎朗读回复", ["main_app", "desktop_pet", "qq"],
             enabled=tts_enabled, health=tts_health, failure_reason=tts_failure, risk_level="external_request",
-            cost_mode="local_service", privacy_destination="朗读文本发送给本机 GPT-SoVITS 服务",
+            cost_mode="external_service" if companion_config.get("voice_engine") == "cloud" else "local_service",
+            privacy_destination=("朗读文本与参考音频发送给所配置的 IndexTTS2 服务" if companion_config.get("voice_engine") == "indextts2"
+                                 else "朗读文本发送给所配置的云端语音服务" if companion_config.get("voice_engine") == "cloud"
+                                 else "朗读文本由所配置的 Genie/GPT-SoVITS 引擎合成"),
         ),
         _capability(
             "phone", "进行带 ASR、模型回复和语音播放的持续电话", ["desktop_pet"],
@@ -374,7 +378,7 @@ def _public_models(profiles: list[ModelProfile]) -> list[dict[str, Any]]:
             "display_name": profile.display_name,
             "provider_name": profile.provider_name,
             "provider_kind": profile.provider_kind,
-            "configured": bool(profile.api_key and profile.base_urls),
+            "configured": model_connection_configured(profile),
             "supports_vision": bool(profile.supports_vision),
             "pricing_configured": profile.pricing_source != "unconfigured",
             "input_price_cny_per_million": profile.input_price_cny_per_million,
@@ -437,7 +441,7 @@ def _overview(identity: dict[str, Any], service_health: dict[str, Any], profiles
         "runtime_warning_count": len(warnings),
         "runtime_warnings": [_sanitize_diagnostic(item) for item in warnings[:5]],
         "service_health": str(service_health.get("overall") or "unknown"),
-        "configured_model_count": sum(bool(profile.api_key and profile.base_urls) for profile in profiles),
+        "configured_model_count": sum(model_connection_configured(profile) for profile in profiles),
         "model_count": len(profiles),
         "active_model_id": active_model,
     }

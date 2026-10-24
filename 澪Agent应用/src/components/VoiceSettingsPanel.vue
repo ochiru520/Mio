@@ -42,7 +42,7 @@ const translationModelUnavailable = computed(() => Boolean(
 ))
 const runtime = computed(() => props.status?.voice_runtime || {})
 const cloudState = computed(() => runtime.value.cloud_tts || {})
-const engine = computed(() => (settings.value.voice_engine === 'cloud' ? 'cloud' : 'gpt_sovits'))
+const engine = computed(() => (['cloud', 'indextts2'].includes(settings.value.voice_engine) ? settings.value.voice_engine : 'gpt_sovits'))
 const profileEntries = computed(() => Object.entries(settings.value.voice_profiles || {}))
 const selectedProfile = computed(() => (
   settings.value.voice_profiles?.[selectedProfileId.value] || profileEntries.value[0]?.[1] || null
@@ -71,7 +71,9 @@ function selectEngine(value) {
 }
 
 function testCurrentEngine() {
-  if (engine.value === 'cloud') {
+  if (engine.value === 'indextts2') {
+    emit('test', '')
+  } else if (engine.value === 'cloud') {
     settings.value.cloud_tts_api_key = cloudApiKeyDraft.value.trim()
     emit('test', '')
   } else {
@@ -134,9 +136,32 @@ function makeSelectedDefault() {
         <span><strong>本地音色</strong><small>GPT-SoVITS V2 音色由 Genie ONNX 在 CPU 上合成</small></span>
         <Check v-if="engine === 'gpt_sovits'" :size="14" />
       </button>
+      <button type="button" :class="{ active: engine === 'indextts2' }" @click="selectEngine('indextts2')">
+        <Volume2 :size="17" />
+        <span><strong>IndexTTS2</strong><small>连接独立本地服务，用参考音频克隆声音</small></span>
+        <Check v-if="engine === 'indextts2'" :size="14" />
+      </button>
     </div>
 
-    <div v-if="engine === 'cloud'" class="voice-cloud-panel">
+    <div v-if="engine === 'indextts2'" class="voice-cloud-panel">
+      <p class="settings-note">先在 IndexTTS2 自己的 Python 环境启动 Mio 配套适配服务；这里填写适配服务地址。官方 WebUI 地址不能直接使用，Mio 不会自动安装或下载模型。</p>
+      <div class="settings-form-grid">
+        <label class="voice-profile-wide"><span>适配服务地址</span><input v-model.trim="settings.indextts2_url" placeholder="http://127.0.0.1:11996" /><small>文本与参考音频将发送到此地址；远程服务请使用受信任设备</small></label>
+        <label class="voice-profile-wide"><span>参考音频完整路径（Mio 所在电脑）</span><input v-model.trim="settings.indextts2_ref_audio" placeholder="可上传，或填写已有音频的完整路径" /></label>
+        <label class="voice-profile-wide"><span>上传参考音频</span><input type="file" accept="audio/*,.wav,.mp3,.flac,.m4a,.ogg,.aac,.wma" :disabled="busy" @change="emit('upload-reference', $event, '')" /><small>40 MB 以内；不需要填写参考原文或 GPT/SoVITS 权重</small></label>
+      </div>
+      <div class="settings-actions-row"><button type="button" :disabled="busy" @click="testCurrentEngine"><Play :size="14" />保存并试听</button></div>
+      <p class="settings-note">IndexTTS2 完整生成后播放；回复语言与音质以所用模型能力为准。</p>
+      <details class="settings-note">
+        <summary>启动独立服务与排障</summary>
+        <p>找到 Mio 安装目录的 _internal/agent_scripts/indextts2_adapter.py（源码版在 scripts 下）。在 PowerShell 中使用 IndexTTS2 的 Python 执行下面示例，并替换为你的实际路径：</p>
+        <pre style="white-space: pre-wrap; overflow-wrap: anywhere">&amp; 'D:/AI/index-tts/.venv/Scripts/python.exe' 'D:/Mio/_internal/agent_scripts/indextts2_adapter.py' --repo 'D:/AI/index-tts' --model-dir 'D:/AI/index-tts/checkpoints_2'</pre>
+        <p>看到“已就绪”后保存并试听。连接失败时检查终端与端口；协议不符时确认没有填 WebUI 地址；HTTP 500 时检查参考音频、权重完整性和显存。Ctrl+C 停止独立服务。完整说明与脚本同目录：indextts2_adapter.md。</p>
+      </details>
+      <p v-if="runtime.last_error" class="settings-note">{{ runtime.last_error }}</p>
+    </div>
+
+    <div v-else-if="engine === 'cloud'" class="voice-cloud-panel">
       <div class="cloud-tts-guide">
         <p>去哪里拿 Key：打开<a href="https://console.volcengine.com/speech/new/setting/apikeys" target="_blank" rel="noopener">火山引擎语音控制台</a>，登录后「新建 API Key」复制到这里即可。填完点「试听」，出声就说明成功。</p>
       </div>
@@ -249,11 +274,11 @@ function makeSelectedDefault() {
       <label v-if="engine === 'gpt_sovits'" class="settings-item"><span><strong>打开 Mio 时启动音色引擎</strong><small>启动后在后台预热本地音色；关闭时仍会在第一次试听或朗读时按需启动</small></span><span class="switch-control"><input v-model="settings.voice_startup_enabled" type="checkbox" /><i /></span></label>
       <label v-if="engine === 'gpt_sovits'" class="settings-item"><span><strong>空闲后释放音色内存</strong><small>释放后可回收约数 GB 内存；下一次说话需要重新加载一次</small></span><select v-model.number="settings.voice_idle_timeout_seconds"><option :value="60">1 分钟</option><option :value="180">3 分钟（推荐）</option><option :value="600">10 分钟</option><option :value="0">始终保留，优先速度</option></select></label>
       <label class="settings-item"><span><strong>主动消息也朗读</strong><small>屏幕观察和主动联系产生的消息可以直接出声</small></span><span class="switch-control"><input v-model="settings.speak_proactive" type="checkbox" /><i /></span></label>
-      <label class="settings-item"><span><strong>流式语音</strong><small>分段合成并尽快开始播放，降低等待时间（本地音色）</small></span><span class="switch-control"><input v-model="settings.voice_streaming_enabled" type="checkbox" /><i /></span></label>
+      <label v-if="engine !== 'indextts2'" class="settings-item"><span><strong>流式语音</strong><small>分段合成并尽快开始播放，降低等待时间（本地音色）</small></span><span class="switch-control"><input v-model="settings.voice_streaming_enabled" type="checkbox" /><i /></span></label>
       <label class="settings-item"><span><strong>QQ 语音</strong><small>群聊和私聊使用同一套判断规则</small></span><select v-model="settings.qq_voice_mode"><option value="explicit">仅明确要求</option><option value="adaptive">由 Agent 判断</option><option value="always">始终语音</option></select></label>
       <label class="settings-item"><span><strong>音量</strong><small>{{ settings.voice_volume }}%</small></span><input v-model.number="settings.voice_volume" type="range" min="0" max="100" :style="rangeInputStyle(settings.voice_volume, 0, 100)" /></label>
-      <label class="settings-item"><span><strong>桌宠开口语言</strong><small>控制朗读使用中文还是日语，气泡继续显示原回复</small></span><select v-model="settings.pet_speech_language"><option value="zh">中文</option><option value="ja">日语</option></select></label>
-      <label class="settings-item"><span><strong>语音翻译模型</strong><small>只负责中日语音翻译，不跟随主对话或桌宠模型</small></span><select v-model="settings.speech_translation_model_id" :disabled="!modelOptions.length"><option v-if="translationModelUnavailable" :value="settings.speech_translation_model_id" disabled>{{ modelOptions.length ? '当前模型未连接，请重新选择' : '没有已连接的模型' }}</option><option v-else-if="!settings.speech_translation_model_id" value="" disabled>{{ modelOptions.length ? '请选择已连接的模型' : '没有已连接的模型' }}</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></select></label>
+      <label v-if="engine !== 'indextts2'" class="settings-item"><span><strong>桌宠开口语言</strong><small>控制朗读使用中文还是日语，气泡继续显示原回复</small></span><select v-model="settings.pet_speech_language"><option value="zh">中文</option><option value="ja">日语</option></select></label>
+      <label v-if="engine !== 'indextts2'" class="settings-item"><span><strong>语音翻译模型</strong><small>只负责中日语音翻译，不跟随主对话或桌宠模型</small></span><select v-model="settings.speech_translation_model_id" :disabled="!modelOptions.length"><option v-if="translationModelUnavailable" :value="settings.speech_translation_model_id" disabled>{{ modelOptions.length ? '当前模型未连接，请重新选择' : '没有已连接的模型' }}</option><option v-else-if="!settings.speech_translation_model_id" value="" disabled>{{ modelOptions.length ? '请选择已连接的模型' : '没有已连接的模型' }}</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></select></label>
     </div>
 
     <template v-if="engine === 'gpt_sovits'">

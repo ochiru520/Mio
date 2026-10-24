@@ -157,7 +157,7 @@ class CompanionSettingsRequest(BaseModel):
     voice_enabled: bool = True
     voice_startup_enabled: bool = False
     voice_idle_timeout_seconds: int = Field(default=180, ge=0, le=1800)
-    voice_engine: str = Field(default="gpt_sovits", pattern="^(gpt_sovits|cloud)$")
+    voice_engine: str = Field(default="gpt_sovits", pattern="^(gpt_sovits|cloud|indextts2)$")
     local_voice_runtime: str = Field(default="genie", pattern="^(genie|gpt_sovits)$")
     cloud_tts_api_key: str = Field(default="", max_length=2000)
     cloud_tts_app_id: str = Field(default="", max_length=200)
@@ -186,6 +186,8 @@ class CompanionSettingsRequest(BaseModel):
     speak_screen_observations: bool = True
     speak_game_observations: bool = True
     qq_voice_mode: str = Field(default="adaptive", pattern="^(explicit|adaptive|always)$")
+    indextts2_url: str = Field(default="http://127.0.0.1:11996", max_length=2000)
+    indextts2_ref_audio: str = Field(default="", max_length=4000)
     gpt_sovits_url: str = "http://127.0.0.1:9880"
     gpt_sovits_ref_audio: str = ""
     gpt_sovits_prompt_text: str = Field(default="", max_length=1000)
@@ -1602,6 +1604,12 @@ async def companion_voice_test():
 @router.post("/voice/reference")
 async def companion_voice_reference(payload: VoiceReferenceRequest):
     try:
+        config = await asyncio.to_thread(companion_service.load_config)
+        if config.get("voice_engine") == "indextts2":
+            from .. import indextts2_service
+            target = await asyncio.to_thread(indextts2_service.save_reference, payload.data_url, payload.name, settings.companion_dir / "indextts2-references")
+            await asyncio.to_thread(companion_service.save_config, {"indextts2_ref_audio": str(target)})
+            return await asyncio.to_thread(_status_payload)
         await asyncio.to_thread(
             companion_service.save_voice_reference_data_url,
             payload.data_url,

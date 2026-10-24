@@ -184,7 +184,7 @@ async function saveAndTestProvider() {
     providerError.value = '请填写 API 地址。'
     return
   }
-  if (!provider.api_key.trim()) {
+  if (!provider.api_key.trim() && provider.provider_kind !== 'local') {
     providerError.value = '请填写 API Key。'
     return
   }
@@ -296,9 +296,10 @@ async function saveAndTestProvider() {
             <label><span>供应商名称</span><input v-model.trim="provider.provider_name" autocomplete="off" placeholder="例如：我的模型服务" /></label>
             <label><span>API 地址</span><input v-model.trim="provider.base_url" autocomplete="url" placeholder="https://example.com/v1" /></label>
             <label><span>接口模式</span><AppSelect v-model="provider.default_api_mode" label="接口模式" :options="[{ value: 'auto', label: '自动识别（推荐）' }, { value: 'responses', label: 'Responses API（Codex）' }, { value: 'chat_completions', label: 'Chat Completions' }]" /></label>
-            <label class="wide"><span>API Key</span><input v-model="provider.api_key" type="password" autocomplete="new-password" placeholder="只加密保存在当前 Windows 用户下" /></label>
+            <label class="wide"><span>{{ provider.provider_kind === 'local' ? 'API Key（未启用鉴权可留空）' : 'API Key' }}</span><input v-model="provider.api_key" type="password" autocomplete="new-password" placeholder="只加密保存在当前 Windows 用户下" /></label>
+            <p v-if="provider.provider_kind === 'local'" class="onboarding-note">先启动 LM Studio / Ollama 的本地服务并加载模型；连接测试仅验证聊天，Agent 需要模型和模板支持工具调用。</p>
           </div>
-          <div class="onboarding-provider-actions"><button type="button" :disabled="Boolean(providerBusy) || !provider.api_key.trim()" @click="discoverModels"><RefreshCw :class="{ spin: providerBusy === 'discover' }" :size="14" />{{ providerBusy === 'discover' ? '正在读取' : '读取模型' }}</button></div>
+          <div class="onboarding-provider-actions"><button type="button" :disabled="Boolean(providerBusy) || (provider.provider_kind !== 'local' && !provider.api_key.trim())" @click="discoverModels"><RefreshCw :class="{ spin: providerBusy === 'discover' }" :size="14" />{{ providerBusy === 'discover' ? '正在读取' : '读取模型' }}</button></div>
           <div v-if="discoveredModels.length" class="onboarding-model-list">
             <label v-for="item in discoveredModels" :key="item.model"><input v-model="item.selected" type="checkbox" :disabled="item.api_supported === false" /><span><strong>{{ item.display_name || item.model }}</strong><small>{{ item.model }}{{ item.api_supported === false ? ' · /messages 暂不支持' : '' }}</small></span></label>
           </div>

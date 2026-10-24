@@ -206,7 +206,7 @@ export function useCompanion(deps) {
       })
       deps.savedCompanionSettings.value.voice = deps.companionSettingsSnapshot('voice')
       deps.savedCompanionSettings.value.pet = deps.companionSettingsSnapshot('pet')
-      deps.showSettingsFeedback('pet', 'success', '参考音频已保存到当前音色')
+      deps.showSettingsFeedback('voice', 'success', deps.companionStatus.value.pet?.settings?.voice_engine === 'indextts2' ? 'IndexTTS2 参考音频已保存' : '参考音频已保存到当前音色')
     } catch (error) {
       deps.errorMessage.value = error.message
       deps.showSettingsFeedback('pet', 'error', `参考音频上传失败：${error.message}`)

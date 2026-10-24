@@ -5,6 +5,7 @@ All model calls and external transports are mocked. Persistent state is temporar
 from __future__ import annotations
 
 import tempfile
+import json
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -103,8 +104,23 @@ class WebLookupConsistencyTests(unittest.IsolatedAsyncioTestCase):
             result = await _chat_with_ai_unlocked(message, conversation_id="desktop_web_regression", source="desktop",
                 model_id="test-model", reasoning_level="off", persist=False, fast_path=fast_path,
                 agent_tools_enabled=agent_result is not None)
-        system_text = "\n".join(str(item.get("content", "")) for item in captured if item.get("role") == "system")
-        return result, system_text, transport, page, model
+        # Network observations are runtime data after history, rather than
+        # system instructions. Assert the actual model context still sees them.
+        context_parts = []
+        for item in captured[:-1]:
+            if item.get("role") == "system":
+                context_parts.append(str(item.get("content", "")))
+            elif item.get("role") == "user":
+                try:
+                    data = json.loads(item.get("content", ""))
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(data, dict) and isinstance(data.get("应用运行资料"), list):
+                    context_parts.extend(data["应用运行资料"])
+        if captured:
+            self.assertEqual(captured[-1]["role"], "user")
+            self.assertIn(message, str(captured[-1]["content"]))
+        return result, "\n".join(context_parts), transport, page, model
 
     async def test_fast_flag_cannot_suppress_required_search(self) -> None:
         for message in ("帮我查 Python 官方文档", "Python 现在的版本是多少？"):

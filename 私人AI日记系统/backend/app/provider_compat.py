@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from urllib.parse import urlsplit, urlunsplit
+import ipaddress
 
 import httpx
 
@@ -15,6 +16,28 @@ def client_headers(base_url: str) -> dict[str, str]:
 
 
 AUTH_SCHEMES = ("bearer", "x-api-key", "api-key")
+
+
+def is_local_api_url(base_url: str) -> bool:
+    """Recognize literal local endpoints without DNS or network probes."""
+    host = (urlsplit(base_url).hostname or "").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+        return address.is_loopback or address.is_private or address.is_link_local
+    except ValueError:
+        return False
+
+
+def allows_empty_api_key(provider_kind: str, base_urls) -> bool:
+    return provider_kind == "local" or bool(base_urls) and all(is_local_api_url(url) for url in base_urls)
+
+
+def model_connection_configured(profile) -> bool:
+    urls = getattr(profile, 'base_urls', ())
+    return bool(urls and not getattr(profile, 'api_key_error', '') and (
+        getattr(profile, 'api_key', '') or allows_empty_api_key(getattr(profile, 'provider_kind', 'relay'), urls)))
 _KNOWN_ENDPOINT_SUFFIXES = (
     "/chat/completions",
     "/images/generations",
@@ -78,6 +101,8 @@ def api_base_from_endpoint(endpoint: str) -> str:
 
 def auth_headers(api_key: str, auth_scheme: str = "bearer") -> dict[str, str]:
     clean_key = api_key.strip()
+    if not clean_key:
+        return {}
     scheme = auth_scheme.strip().lower() or "bearer"
     if scheme == "x-api-key":
         return {"x-api-key": clean_key}

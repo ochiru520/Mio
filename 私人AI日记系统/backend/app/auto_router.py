@@ -7,6 +7,7 @@ from typing import Mapping, Sequence
 from .model_latency_service import get_latency_stats
 from .model_registry import ModelProfile, list_model_profiles, model_reasoning_config
 from .route_observation_service import model_performance_snapshot
+from .provider_compat import model_connection_configured
 from .web_search_service import build_contextual_lookup_message, needs_web_lookup
 
 
@@ -212,7 +213,7 @@ def _estimated_cost(profile: ModelProfile, task: TaskProfile) -> float | None:
 
 
 def _available_profiles() -> list[ModelProfile]:
-    return [profile for profile in list_model_profiles() if profile.base_urls and profile.api_key]
+    return [profile for profile in list_model_profiles() if model_connection_configured(profile)]
 
 
 def _latency_budget_ms(difficulty: str) -> int:

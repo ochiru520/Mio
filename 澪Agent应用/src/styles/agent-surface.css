@@ -53,9 +53,6 @@
 .mio-agent-main .chat-layout { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .mio-agent-main .chat-column { display: flex; flex: 1; flex-direction: column; border: 0; min-height: 0; }
 .mio-agent-main .conversation-drawer-trigger { display: none; }
-.chat-reading-pane { display: flex; position: relative; min-width: 0; min-height: 0; overflow: hidden; }
-.chat-reading-pane > .message-scroll { flex: 1; min-width: 0; }
-.mio-agent-main .chat-reading-pane { flex: 1; }
 .mio-agent-main .empty-chat { min-height: 100%; padding: 54px 20px 30px; display: flex; flex-direction: row; align-items: flex-start; justify-content: center; }
 .agent-welcome, .agent-appearance-settings { --agent-hero-max-width: 160px; --agent-hero-max-height: 180px; --agent-hero-circle-size: 100px; }
 .agent-welcome { text-align: center; width: 100%; min-width: 0; max-width: 560px; }

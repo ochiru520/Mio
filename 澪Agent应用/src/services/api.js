@@ -29,6 +29,29 @@ function requestError(message, code, extra = {}) {
   return error
 }
 
+function errorDetailMessage(value, depth = 0) {
+  if (depth > 4 || value == null) return ''
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value)) {
+    return value.slice(0, 5).map(item => errorDetailMessage(item, depth + 1)).filter(Boolean).join('；')
+  }
+  if (typeof value !== 'object') return ''
+  const message = errorDetailMessage(value.message || value.msg || value.detail || value.error, depth + 1)
+  if (!message) return ''
+  const fields = {
+    backend_root: '后端源码目录', desktop_root: '桌面应用源码目录',
+    expected_revision: '设置版本', goal: '改造目标', acceptance: '验收要求',
+    base_url: '服务地址', api_key: 'API Key', model: '模型名称',
+  }
+  const location = Array.isArray(value.loc) ? value.loc.filter(part => !['body', 'query', 'path'].includes(part)) : []
+  const field = location.map(part => fields[part] || String(part)).join('.')
+  const validationMessages = {
+    missing: '请填写此项', string_too_short: '填写的内容太短',
+    greater_than_equal: '数值低于允许范围', list_too_short: '至少需要一项内容',
+  }
+  return field ? `${field}：${validationMessages[value.type] || message}` : message
+}
+
 function responseBody(response, responseType) {
   if (responseType === 'blob') return response.blob()
   if (responseType === 'text') return response.text()
@@ -74,12 +97,12 @@ export async function apiRequest(url, options = {}) {
       let structuredDetail = null
       try {
         const data = await response.json()
-        detail = data.detail || detail
+        detail = errorDetailMessage(data.detail || data.message || data.error) || detail
         structuredDetail = typeof data.detail === 'object' && data.detail ? data.detail : null
       } catch {
         // Keep the HTTP fallback when the response is not JSON.
       }
-      throw requestError(structuredDetail?.message || String(detail), 'http_error', {
+      throw requestError(detail, 'http_error', {
         status: response.status,
         detail: structuredDetail,
       })

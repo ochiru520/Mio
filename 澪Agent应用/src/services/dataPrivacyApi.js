@@ -47,3 +47,5 @@ export function setPrivacyPaused(paused) {
     body: '{}',
   })
 }
+
+export const loadStatus = (options = {}, transport = apiRequest) => transport("/api/privacy/status", Object.keys(options).length ? options : undefined)

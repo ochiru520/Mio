@@ -138,21 +138,27 @@ class PetEventServiceTests(unittest.TestCase):
     def test_start_pet_reuses_connected_external_renderer(self) -> None:
         original_process = companion_service._pet_process
         original_runtime = companion_service._pet_runtime_kind
+        original_startup = {key: getattr(companion_service, key) for key in (
+            "_pet_launch_id", "_pet_show_request_id", "_pet_started_at", "_pet_last_error")}
         companion_service._pet_process = None
         companion_service._pet_runtime_kind = ""
         try:
             with (
                 patch("app.companion_service.load_config", return_value={"pet_renderer": "live2d"}),
                 patch("app.companion_service._external_pet_renderer_connected", return_value=True),
-                patch("app.companion_service.pet_status", return_value={"running": True}) as status,
+                patch("app.companion_service.pet_status", return_value={"running": True, "startup": {"state": "ready"}}) as status,
+                patch("app.pet_event_service.publish") as publish,
                 patch("app.companion_service.subprocess.Popen") as popen,
             ):
                 result = companion_service.start_pet()
         finally:
             companion_service._pet_process = original_process
             companion_service._pet_runtime_kind = original_runtime
+            for key, value in original_startup.items():
+                setattr(companion_service, key, value)
 
-        self.assertEqual(result, {"running": True})
+        self.assertEqual(result, {"running": True, "startup": {"state": "ready"}})
+        publish.assert_called_once()
         status.assert_called_once_with()
         popen.assert_not_called()
 

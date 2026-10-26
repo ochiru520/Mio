@@ -24,7 +24,7 @@ from .. import (
     route_observation_service,
     screen_observation_service,
 )
-from .. import dependency_installer
+from .. import dependency_installer, qq_status_service
 from ..auto_router import AutoRoute, build_task_profile, select_auto_route
 from ..agent_tool_service import public_tool_catalog
 from ..chat_service import TextAttachment, chat_with_ai
@@ -63,19 +63,8 @@ from ..qq_group_service import (
 )
 from ..tool_registry import tool_registry
 from ..runtime_profiles import resolve_runtime_profile
-from .onebot import active_websocket_count, connected_self_ids, send_private_message_receipt
-from .conversations import (
-    ConversationUpdateRequest,
-    delete_conversation,
-    rename_conversation,
-)
-from .models import (
-    ModelProfileRequest,
-    _discovery_records,
-    _new_api_pricing_map,
-    create_model_profile,
-    remove_model_profile,
-)
+from ..onebot_transport_service import active_websocket_count, connected_self_ids, send_private_message_receipt
+from .. import daily_state_analysis_service
 from . import conversations as conversation_routes, models as model_routes, self_state as self_state_routes
 from . import agent_tasks
 
@@ -148,6 +137,9 @@ class AgentChatRequest(BaseModel):
     creation_workflow_id: str = Field(default="", max_length=128)
     agent_workspace: bool = False
     mode: str = ""
+    replay_message_id: int = Field(default=0, ge=0)
+    references: list[dict] = Field(default_factory=list, max_length=20)
+    element_reference: dict | None = None
     surface_mode: str = Field(default='work', pattern=r'^(chat|work|learn|image)$')
 
 
@@ -196,10 +188,8 @@ def _schedule_today_state_analysis() -> None:
             if not messages and not materials:
                 return
             _analyzed_state_days.add(today)
-            from .chat import analyze_today_state
-
             try:
-                await analyze_today_state()
+                await daily_state_analysis_service.analyze_today_state()
             except Exception:
                 _analyzed_state_days.discard(today)
                 raise
@@ -406,52 +396,6 @@ def _prepare_attachments(
         raise
 
 
-async def _qq_status() -> dict[str, object]:
-    count = active_websocket_count()
-    websocket_connected = count > 0
-    login_status = await get_napcat_login_status(websocket_connected=websocket_connected)
-    configured_account = str(settings.napcat_account or "").strip()
-    connected_accounts = connected_self_ids()
-    connected_account = connected_accounts[0] if len(connected_accounts) == 1 else ""
-    if not connected_account:
-        connected_account = str(login_status.get("webui_account") or "").strip()
-    logged_in = bool(login_status.get("logged_in") or connected_accounts)
-    account_matches = bool(
-        configured_account
-        and connected_account
-        and configured_account == connected_account
-    )
-    account_ready = logged_in and (not configured_account or account_matches)
-    diagnostic_code = str(login_status.get("diagnostic_code") or "")
-    diagnostic_message = str(login_status.get("diagnostic_message") or "")
-    if configured_account and connected_account and not account_matches:
-        diagnostic_code = "account_mismatch"
-        diagnostic_message = (
-            f"当前实际登录的是 QQ {connected_account}，但 Mio 配置的是 {configured_account}。"
-            "测试发送已被阻止；请彻底退出旧机器人 QQ 后重新启动。"
-        )
-    elif account_ready and connected_account:
-        diagnostic_code = "ready"
-        diagnostic_message = f"机器人 QQ {connected_account} 已登录并连接 OneBot。"
-    connected = websocket_connected and account_ready
-    return {
-        "enabled": settings.qq_bot_enabled,
-        "connected": connected,
-        "websocket_connected": websocket_connected,
-        "websocket_connections": count,
-        "configured_account": configured_account,
-        "connected_account": connected_account,
-        "connected_accounts": connected_accounts,
-        "account_matches": account_matches,
-        "account_ready": account_ready,
-        "logged_in": logged_in,
-        "login_source": "onebot" if connected_accounts else ("webui" if login_status.get("login_checked") else ""),
-        "diagnostic_code": diagnostic_code,
-        "diagnostic_message": diagnostic_message,
-        "group_chat": public_group_status(),
-        "proactive_runtime": proactive_service.get_proactive_status(),
-        **{key: value for key, value in login_status.items() if key not in {"logged_in", "diagnostic_code", "diagnostic_message"}},
-    }
 
 
 def _context_usage(conversation_id: str) -> dict[str, object]:
@@ -565,7 +509,7 @@ async def bootstrap():
                 max(512 * 1024, settings.agent_text_attachment_max_chars * 4),
             ),
         },
-        "qq": await _qq_status(),
+        "qq": await qq_status_service.status(),
         "context_usage": _context_usage(conversation_id),
         **dashboard,
     }
@@ -579,13 +523,13 @@ async def day_dashboard():
 @router.get("/qq/status")
 async def qq_status():
     proactive_service.note_desktop_app_active()
-    return await _qq_status()
+    return await qq_status_service.status()
 
 
 @router.post("/qq/setup")
 async def setup_qq_channel(payload: QQSetupRequest):
     """Configure the local OneBot client, then start NapCat for QR login."""
-    current = await _qq_status()
+    current = await qq_status_service.status()
     if not current.get("napcat_executable_exists"):
         try:
             install = await asyncio.to_thread(dependency_installer.install_dependency, "napcat")
@@ -624,7 +568,7 @@ async def setup_qq_channel(payload: QQSetupRequest):
     configured["stage"] = "login"
     configured["force_qr_login"] = switch_required
     configured["control"] = control
-    configured["qq"] = await _qq_status()
+    configured["qq"] = await qq_status_service.status()
     return configured
 
 
@@ -635,7 +579,7 @@ async def qq_test_delivery(payload: QQSetupRequest):
         target = str(settings.qq_allowed_user_ids[0] if settings.qq_allowed_user_ids else "").strip()
     if not target.isdigit():
         raise HTTPException(status_code=400, detail="请先填写一个用于接收测试消息的 QQ 号白名单。")
-    status = await _qq_status()
+    status = await qq_status_service.status()
     requested_account = str(payload.account or settings.napcat_account or "").strip()
     connected_account = str(status.get("connected_account") or "").strip()
     if connected_account and requested_account and connected_account != requested_account:
@@ -652,7 +596,7 @@ async def qq_test_delivery(payload: QQSetupRequest):
         "message_id": receipt.get("message_id"),
         "diagnostic": receipt.get("error") or "NapCat 已返回发送 ACK；这只代表接口确认，不等于真人已看到消息。",
         "receipt": receipt,
-        "qq": await _qq_status(),
+        "qq": await qq_status_service.status(),
     }
 
 
@@ -796,6 +740,9 @@ async def agent_chat(payload: AgentChatRequest):
                 "surface_mode": payload.surface_mode,
                 "mode": profile.mode,
                 "attachments": attachment_fingerprints,
+                "references": payload.references,
+                "element_reference": payload.element_reference,
+                "replay_message_id": payload.replay_message_id,
             }),
             conversation_id=selected_conversation,
             source="desktop",
@@ -810,7 +757,40 @@ async def agent_chat(payload: AgentChatRequest):
         raise HTTPException(status_code=409, detail=pending_error(claim))
 
     try:
+        if payload.replay_message_id and (payload.attachments or payload.references):
+            raise ValueError('重新回答会沿用原消息附件，请在新消息中添加新的资料。')
         images, text_files, attachment_metadata = _prepare_attachments(payload.attachments)
+        if payload.replay_message_id:
+            from ..conversation_state_service import read_replay_attachments
+            replay = await asyncio.to_thread(read_replay_attachments, selected_conversation, payload.replay_message_id)
+            message = replay['message']
+            images, text_files, attachment_metadata = replay['images'], replay['text_attachments'], replay['metadata']
+        if payload.references:
+            from .. import reference_service, workspace_service
+            project = workspace_service.project_for_conversation(selected_conversation)
+            references = reference_service.resolve(payload.references, project_id=project["id"] if project else "")
+            if references["blocked"]:
+                raise ValueError("引用不可用：" + "；".join(item["reason"] for item in references["blocked"]))
+            if references["context"]:
+                text_files.append(TextAttachment(name="显式引用", content=references["context"]))
+            attachment_metadata.extend({"kind":"reference", "name":item["name"], "reference_kind":item["kind"], "target":item["target"], "version":item["version"]} for item in references["resolved"])
+        element_references = ([payload.element_reference] if payload.element_reference else
+                              [item['reference'] for item in attachment_metadata if item.get('kind') == 'browser_element' and isinstance(item.get('reference'), dict)])
+        for selected_element in element_references:
+            from .. import browser_service, agent_task_service
+            task_id = str(selected_element.get('task_id') or '')
+            task = agent_task_service.get(task_id)
+            if not task or task['conversation_id'] != selected_conversation:
+                raise ValueError('网页点选不属于当前会话任务。')
+            if agent_workspace and profile.allow_agent_loop and payload.surface_mode != 'chat':
+                canonical = await browser_service.prepare_element_handoff(selected_element,
+                    conversation_id=selected_conversation, task_id=task_id, request_id=claim.client_request_id)
+            else:
+                canonical = await browser_service.validate_element_reference(selected_element,
+                    conversation_id=selected_conversation, task_id=task_id)
+            text_files.append(TextAttachment(name='网页点选', content=json.dumps(canonical, ensure_ascii=False)))
+            if payload.element_reference:
+                attachment_metadata.append({'kind': 'browser_element', 'name': '网页点选', 'reference': canonical})
         if not message and not images and not text_files:
             raise ValueError("消息或附件不能为空。")
         # 跨天后首次对话：确保今天有状态记录（未确认），避免把昨天的状态当成今天的。
@@ -823,7 +803,7 @@ async def agent_chat(payload: AgentChatRequest):
             db.get_recent_messages(limit=12, conversation_id=selected_conversation)
         )
         screen_follow_up = bool(
-            not agent_workspace
+            not agent_workspace and not payload.replay_message_id
             and
             not images
             and not text_files
@@ -899,6 +879,7 @@ async def agent_chat(payload: AgentChatRequest):
                 allowed_tool_names=profile.allowed_tool_names,
                 handoff_enabled=not agent_workspace,
                 creation_workflow_id=creation_workflow_id,
+                replay_message_id=payload.replay_message_id,
             )
     except ValueError as exc:
         detail = normalize_error_detail(
@@ -995,6 +976,9 @@ async def agent_chat(payload: AgentChatRequest):
         "reasoning_level": result.reasoning_level,
         "prompt_tokens": result.prompt_tokens,
         "cached_prompt_tokens": result.cached_prompt_tokens,
+        "cached_tokens_reporting": result.cached_tokens_reporting,
+        "input_tokens_reported": result.input_tokens_reported,
+        "cache_write_tokens": result.cache_write_tokens,
         "completion_tokens": result.completion_tokens,
         "reasoning_tokens": result.reasoning_tokens,
         "request_cost_yuan": result.request_cost_yuan,
@@ -1076,10 +1060,7 @@ async def chat_request_status(client_request_id: str, conversation_id: str = "")
         selected = _conversation_id(conversation_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    from contextlib import closing
-    with closing(db.get_conn()) as conn:
-        row = conn.execute("SELECT * FROM chat_requests WHERE client_request_id=? AND conversation_id=? AND source IN ('desktop', 'desktop_pet')",
-                           (client_request_id, selected)).fetchone()
+    row = db.get_desktop_chat_request(client_request_id,selected)
     if row is None:
         raise HTTPException(status_code=404, detail="该会话中没有这条请求。")
     return {"client_request_id": client_request_id, "conversation_id": selected, "status": row['status'],
@@ -1134,7 +1115,7 @@ async def control_qq(action: str):
             "forced_qr_login": True,
             "control": result,
             "qrcode_url": "/api/agent/qq/qrcode",
-            "qq": await _qq_status(),
+            "qq": await qq_status_service.status(),
         }
     try:
         result = await asyncio.to_thread(run_napcat_control, action)
@@ -1142,10 +1123,10 @@ async def control_qq(action: str):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     if not result["ok"]:
         raise HTTPException(status_code=500, detail=result["output"] or "QQ控制操作失败。")
-    result["qq"] = await _qq_status()
+    result["qq"] = await qq_status_service.status()
     proactive_service.note_manual_qq_control_result(
         action,
         connected=bool(result["qq"].get("websocket_connected")),
     )
-    result["qq"] = await _qq_status()
+    result["qq"] = await qq_status_service.status()
     return result

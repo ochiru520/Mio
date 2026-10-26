@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from app import db, external_notes_service as external, workspace_service as workspace
-from app.routes.diary import save_diary_markdown
+from app.diary_operations_service import save_diary_markdown
 from test_runtime_safety_v2 import isolated  # noqa: F401 - installs the shared isolated fixture
 
 

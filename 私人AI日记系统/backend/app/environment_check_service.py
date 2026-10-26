@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .config import settings
+from .repositories import environment_check_repository as repository
 from . import windows_compat
 from .model_registry import list_model_profiles
 from .provider_compat import model_connection_configured
@@ -702,8 +703,7 @@ def _data_directory_check() -> tuple[bool, str, int]:
 
 def _database_check() -> tuple[bool, str]:
     try:
-        with sqlite3.connect(settings.db_path) as connection:
-            result = str(connection.execute("PRAGMA quick_check").fetchone()[0])
+        result = repository.quick_check(settings.db_path)
         return result.lower() == "ok", result
     except (OSError, sqlite3.Error) as exc:
         return False, str(exc)

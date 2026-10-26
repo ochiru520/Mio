@@ -1,6 +1,6 @@
 """Owner-only local execution configuration and previews; not mounted on mobile."""
+from ..repositories import execution_history_repository as repository
 import asyncio
-from contextlib import closing
 from types import SimpleNamespace
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -51,6 +51,11 @@ def context(project_id, conversation_id, task_id=''):
     project = workspace.project_for_conversation(conversation_id)
     if not project or project['id'] != project_id or not conversation_id.startswith('desktop_agent_'):
         raise ValueError('对话不属于此 Agent 项目。')
+    if task_id:
+        from ..agent_task_service import get
+        task = get(task_id)
+        if not task or task['conversation_id'] != conversation_id:
+            raise ValueError('任务不属于当前会话。')
     return SimpleNamespace(conversation_id=conversation_id, task_id=task_id, source='desktop', run_id='owner-preview')
 
 
@@ -116,10 +121,11 @@ async def file(project_id: str, conversation_id: str, path: str, offset: int = Q
 async def execution_history(project_id: str, conversation_id: str):
     await call(context, project_id, conversation_id)
     code.initialize(); terminal.initialize(); desktop.initialize()
-    with closing(db.get_conn()) as conn:
-        changes = [dict(row) for row in conn.execute('SELECT id,status,created_at FROM code_changes WHERE project_id=? AND conversation_id=? ORDER BY created_at DESC LIMIT 50', (project_id, conversation_id))]
-        jobs = [dict(row) for row in conn.execute('SELECT id,task_id,command,status,exit_code,duration,created_at FROM terminal_jobs WHERE project_id=? AND conversation_id=? ORDER BY created_at DESC LIMIT 50', (project_id, conversation_id))]
-        images = [dict(row) for row in conn.execute('SELECT id,window_json,created_at FROM desktop_observations WHERE project_id=? AND conversation_id=? ORDER BY created_at DESC LIMIT 10', (project_id, conversation_id))]
+    with repository.read() as conn:
+        from ..execution_review_service import change_summary
+        changes = [change_summary(row) for row in conn.changes((project_id, conversation_id))]
+        jobs = [dict(row) for row in conn.jobs((project_id, conversation_id))]
+        images = [dict(row) for row in conn.observations((project_id, conversation_id))]
     return {'changes': changes, 'jobs': jobs, 'observations': images}
 
 
@@ -132,7 +138,7 @@ async def change(project_id: str, change_id: str, conversation_id: str):
 @router.get('/projects/{project_id}/jobs/{job_id}')
 async def job(project_id: str, job_id: str, conversation_id: str, task_id: str, offset: int = Query(0, ge=0)):
     ctx = await call(context, project_id, conversation_id, task_id)
-    return await call(terminal.read, ctx, job_id, offset, 12000)
+    return await call(terminal.read, ctx, job_id, offset, 12000, deliver=False)
 
 
 @router.post('/projects/{project_id}/jobs/{job_id}/stop')

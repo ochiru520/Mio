@@ -164,7 +164,7 @@ def test_raw_errors_are_not_persisted_or_exported(monkeypatch):
 
 
 def test_qq_connection_is_not_send_evidence(monkeypatch):
-    from app.routes import onebot
+    from app import onebot_transport_service as onebot
     object.__setattr__(settings, 'napcat_account', '123')
     monkeypatch.setattr(onebot,'runtime_health_status',lambda: {'enabled':True,'connected_accounts':['999']})
     assert not asyncio.run(checks._execute('qq'))['ok']
@@ -186,11 +186,11 @@ def test_audio_checks_reject_silent_or_invalid_output():
                                            ({'choices':[{'message':{'content':'OK'}}]}, True)])
 def test_chat_requires_actual_text(payload, success, monkeypatch):
     from app import model_registry
-    from app.routes import models
+    from app import model_provider_service as models
     monkeypatch.setattr(model_registry, 'get_model_profile', lambda: SimpleNamespace(api_key='test',
         api_key_error='',base_urls=['https://invalid.example'],model='test',auth_scheme='bearer',api_mode='chat_completions'))
     response = httpx.Response(200, json=payload, request=httpx.Request('POST','https://invalid.example'))
-    monkeypatch.setattr(models,'_request_chat_via_routes',AsyncMock(return_value=(response,)))
+    monkeypatch.setattr(models,'request_chat_probe',AsyncMock(return_value=(response,)))
     if success: assert asyncio.run(probes.chat())['ok']
     else:
         with pytest.raises(probes.ProbeFailure): asyncio.run(probes.chat())

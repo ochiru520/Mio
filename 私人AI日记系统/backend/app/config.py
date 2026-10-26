@@ -146,6 +146,8 @@ RUNTIME_SETTING_SPECS: dict[str, tuple[str, float | int | None, float | int | No
     "chat_raw_history_limit": ("int", 1, 1000),
     "chat_context_max_chars": ("int", 4000, 200000),  # Legacy diagnostic field only.
     "chat_context_max_tokens": ("int", MIN_CHAT_CONTEXT_MAX_TOKENS, MAX_CHAT_CONTEXT_MAX_TOKENS),
+    "chat_summary_strategy": ('str', 1, 32),
+    "agent_summary_strategy": ('str', 1, 32),
     "chat_recent_keep_messages": ("int", 4, 100),
     "memory_context_days": ("int", 1, 90),
     "memory_context_max_chars": ("int", 1000, 50000),
@@ -298,6 +300,8 @@ class Settings:
     chat_context_max_chars: int = _env_int("CHAT_CONTEXT_MAX_CHARS", 18000)
     # Mio 工作预算；模型真实窗口由服务端校验，旧字符字段仅兼容诊断。
     chat_context_max_tokens: int = _default_chat_context_max_tokens()
+    chat_summary_strategy: str = 'independent'
+    agent_summary_strategy: str = 'independent'
     chat_context_warning_ratio: float = _env_float("CHAT_CONTEXT_WARNING_RATIO", 0.75)
     chat_context_compress_ratio: float = _env_float("CHAT_CONTEXT_COMPRESS_RATIO", 0.82)
     chat_recent_keep_messages: int = _env_int("CHAT_RECENT_KEEP_MESSAGES", 24)
@@ -461,6 +465,8 @@ def _coerce_runtime_setting(key: str, value: object) -> Any:
         raise ValueError(f"{key} 必须以 http:// 或 https:// 开头。")
     if key == "qq_image_detail" and normalized not in {"low", "auto", "high"}:
         raise ValueError("qq_image_detail 只能是 low、auto 或 high。")
+    if key in {'chat_summary_strategy', 'agent_summary_strategy'} and normalized not in {'independent', 'same_prefix'}:
+        raise ValueError(f'{key} 只能是 independent 或 same_prefix。')
     if key == "timezone":
         try:
             ZoneInfo(normalized)

@@ -1,8 +1,10 @@
 <script setup>
+import SelectField from './SelectField.vue'
+import * as tasksApi from '../services/tasksApi.js'
+
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { CheckCircle2, Film, FolderOpen, ImagePlus, Play, RefreshCw, Save, Search, Trash2, Upload, X } from '@lucide/vue'
+import { CheckCircle2, Film, FolderOpen, ImagePlus, Play, RefreshCw, Save, Search, Trash2, Upload, X } from '../icons/index.js'
 import * as api from '../services/creationApi.js'
-import { apiRequest } from '../services/api.js'
 import { selectLocalPath } from '../services/localPicker.js'
 
 defineProps({ section: { type: String, default: 'creation' } })
@@ -74,8 +76,8 @@ async function addSearchFolder() {
   try {
     const result = await selectLocalPath('directory')
     if (!result) return
-    const current = await apiRequest('/api/agent/work/file-roots')
-    await apiRequest('/api/agent/work/file-roots', { method: 'PUT', body: JSON.stringify({ paths: [...new Set([...(current.roots || []).filter(p => p !== current.output_root), result.path])] }) })
+    const current = await tasksApi.loadWorkFileRoots({})
+    await tasksApi.saveWorkFileRoots({ paths: [...new Set([...(current.roots || []).filter(p => p !== current.output_root), result.path])] }, {})
     notice.value = '该目录已加入文件权限，澪可以搜索和读取其中的资料。'
     await findWorkflows()
   } catch (cause) { message(cause) }
@@ -212,8 +214,8 @@ onUnmounted(() => { disposed = true; clearTimeout(connectionTimer) })
       <p v-if="workflows.some(item => item.id === 'qwen-2.1-image' && item.pending_reason)" class="agent-setting-note">当前千问暂未启用，完成工作流调整后再接入。</p>
       <p class="agent-setting-note">支持先生成图片，再以生成结果制作视频。图片和视频共用本机显存，同一时刻运行一项生成任务。</p>
       <div class="agent-settings-group">
-        <label class="agent-setting-row"><span>图片生成</span><select v-model="defaults.image_workflow_id" aria-label="图片生成" :disabled="!ready || busy"><option v-for="workflow in workflows.filter(item => item.media_type === 'image')" :key="workflow.id" :value="workflow.id" :disabled="!!workflow.pending_reason">{{ workflow.label }}{{ workflow.pending_reason ? '（待定稿）' : '' }}</option></select></label>
-        <label class="agent-setting-row"><span>视频生成</span><select v-model="defaults.video_workflow_id" aria-label="视频生成" :disabled="!ready || busy"><option v-for="workflow in workflows.filter(item => item.media_type === 'video')" :key="workflow.id" :value="workflow.id" :disabled="!!workflow.pending_reason">{{ workflow.label }}</option></select></label>
+        <label class="agent-setting-row"><span>图片生成</span><SelectField v-model="defaults.image_workflow_id" aria-label="图片生成" :disabled="!ready || busy"><option v-for="workflow in workflows.filter(item => item.media_type === 'image')" :key="workflow.id" :value="workflow.id" :disabled="!!workflow.pending_reason">{{ workflow.label }}{{ workflow.pending_reason ? '（待定稿）' : '' }}</option></SelectField></label>
+        <label class="agent-setting-row"><span>视频生成</span><SelectField v-model="defaults.video_workflow_id" aria-label="视频生成" :disabled="!ready || busy"><option v-for="workflow in workflows.filter(item => item.media_type === 'video')" :key="workflow.id" :value="workflow.id" :disabled="!!workflow.pending_reason">{{ workflow.label }}</option></SelectField></label>
       </div>
       <header class="agent-section-heading"><h3>本机工作流</h3><div class="agent-inline-actions"><button type="button" :disabled="busy || !ready" @click="openWorkflowPicker"><FolderOpen :size="15" />选择文件导入</button><button type="button" :disabled="workflowScanning || !ready" @click="findWorkflows"><Search :size="15" />{{ workflowScanning ? '正在搜索' : '搜索本机工作流' }}</button></div></header>
       <form class="local-workflow-search" @submit.prevent="findWorkflows"><input v-model="workflowQuery" aria-label="搜索工作流名称" placeholder="按名称搜索，例如 人物、视频、BiRefNet" /><button type="submit" :disabled="workflowScanning">搜索</button><button type="button" @click="addSearchFolder"><FolderOpen :size="15" />选择并授权搜索文件夹</button></form>
@@ -226,10 +228,10 @@ onUnmounted(() => { disposed = true; clearTimeout(connectionTimer) })
       <form v-if="importing" ref="importForm" class="agent-workflow-import" @submit.prevent="importWorkflow">
         <header class="agent-section-heading"><h3>导入工作流</h3><button type="button" title="取消导入" :disabled="busy" @click="importing = false"><X :size="16" /></button></header>
         <label class="agent-setting-row"><span>名称</span><input v-model="imported.label" type="text" required maxlength="100" /></label>
-        <label class="agent-setting-row"><span>输出类型</span><select v-model="imported.media_type"><option value="image">图片</option><option value="video">视频</option></select></label>
+        <label class="agent-setting-row"><span>输出类型</span><SelectField v-model="imported.media_type"><option value="image">图片</option><option value="video">视频</option></SelectField></label>
         <p class="agent-setting-note">已识别可调参数，可以直接保存。展开高级设置可调整绑定；未绑定的输入保留文件原值。</p>
         <p v-for="note in importNotes" :key="note" class="agent-setting-note">{{ note }}</p>
-        <label v-for="source in importSources" :key="`${source.node_id}.${source.input}`" class="agent-setting-row"><span>{{ source.label }}</span><select v-model="imported.prompt[source.node_id].inputs[source.input]" required><option v-if="!source.options.includes(imported.prompt[source.node_id].inputs[source.input])" :value="imported.prompt[source.node_id].inputs[source.input]" disabled>原文件不可用，请选择视频</option><option v-for="value in source.options" :key="value" :value="value">{{ value }}</option></select></label>
+        <label v-for="source in importSources" :key="`${source.node_id}.${source.input}`" class="agent-setting-row"><span>{{ source.label }}</span><SelectField v-model="imported.prompt[source.node_id].inputs[source.input]" required><option v-if="!source.options.includes(imported.prompt[source.node_id].inputs[source.input])" :value="imported.prompt[source.node_id].inputs[source.input]" disabled>原文件不可用，请选择视频</option><option v-for="value in source.options" :key="value" :value="value">{{ value }}</option></SelectField></label>
         <details><summary>高级参数绑定</summary><div class="agent-binding-grid"><label v-for="[key, label] in fields" :key="key"><span>{{ label }}</span><select v-model="imported.bindings[key]" multiple :aria-label="`${label}节点绑定`"><option v-for="target in choices(key)" :key="target.id" :value="target.id">{{ target.label }}</option></select></label></div></details>
         <div class="agent-settings-actions"><button type="submit" class="primary" :disabled="busy"><Save :size="15" />保存工作流</button></div>
       </form>

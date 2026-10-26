@@ -88,3 +88,14 @@ test('new conversations clear current token usage while preserving the token bud
     assert.deepEqual(state.messages.value, [])
   }
 })
+
+
+test('context details separate text estimates, image unknowns and actual route reserve', () => {
+  const shown = contextUsagePresentation({ used_tokens: 1000, max_tokens: 28000, configured_max_tokens: 272000, model_window_tokens: 32000, output_reserved_tokens: 4000, before_compression_tokens: 2000, breakdown: { blocks: [
+    {category: 'history', estimated_tokens: 700}, {category: 'tool_schema', estimated_tokens: 300}], unestimated_image_count: 2 } })
+  assert.equal(shown.breakdown.length, 2)
+  assert.match(shown.title, /历史消息：700/)
+  assert.match(shown.title, /2 张图片，用量未知/)
+  assert.match(shown.title, /2,000 → 1,000/)
+  assert.match(shown.title, /模型窗口 32,000.*预留输出 4,000.*272,000/)
+})

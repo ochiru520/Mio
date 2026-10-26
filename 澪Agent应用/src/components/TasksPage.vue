@@ -1,4 +1,5 @@
 <script setup>
+import SelectField from './SelectField.vue'
 import { computed, inject } from 'vue'
 import { groupExecutionRecords } from '../executionRecordPresentation.js'
 import {
@@ -16,7 +17,7 @@ import {
   ShieldCheck,
   Target,
   X,
-} from '@lucide/vue'
+} from '../icons/index.js'
 
 const context = inject('mio-records-page')
 if (!context) throw new Error('任务页上下文未初始化')
@@ -138,9 +139,9 @@ const executionGroups = computed(() => groupExecutionRecords(context.filteredAge
             <div class="autonomy-capability-grid">
               <label v-for="capability in context.autonomyCapabilityOptions" :key="capability.id" class="autonomy-capability-row">
                 <span>{{ capability.label }}</span>
-                <select :value="context.autonomyData.policy.capability_overrides[capability.id] || ''" @change="context.setAutonomyCapabilityOverride(capability.id, $event.target.value)">
+                <SelectField :value="context.autonomyData.policy.capability_overrides[capability.id] || ''" @change="context.setAutonomyCapabilityOverride(capability.id, $event.target.value)">
                   <option v-for="option in context.autonomyOverrideOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
-                </select>
+                </SelectField>
               </label>
             </div>
           </div>
@@ -154,7 +155,7 @@ const executionGroups = computed(() => groupExecutionRecords(context.filteredAge
           <header><div><Target :size="18" /><div><strong>授权目标</strong><span>没有目标的事件只记录，不行动</span></div></div></header>
           <form class="autonomy-goal-form" @submit.prevent="context.createAutonomyGoal()">
             <input v-model="context.newAutonomyGoalTitle" type="text" maxlength="200" placeholder="添加一个希望 Mio 持续关注的目标" />
-            <select v-model="context.newAutonomyGoalCapability">
+            <SelectField v-model="context.newAutonomyGoalCapability">
               <option value="follow_up_reminder">到期跟进</option>
               <option value="daily_state">今日状态</option>
               <option value="service_health">服务健康</option>
@@ -163,7 +164,7 @@ const executionGroups = computed(() => groupExecutionRecords(context.filteredAge
               <option value="proactive_checkin">主动联系</option>
               <option value="night_close">夜间收尾</option>
               <option value="screen_event">重要屏幕变化</option>
-            </select>
+            </SelectField>
             <button class="primary" type="submit" :disabled="!context.newAutonomyGoalTitle.trim() || Boolean(context.autonomyBusy)"><Plus :size="15" />添加</button>
           </form>
           <div v-if="!context.autonomyData.goals.length" class="tasks-empty compact"><Target :size="25" /><strong>还没有授权目标</strong><span>Mio 不会仅因为观察到事件就主动行动</span></div>
@@ -230,5 +231,5 @@ const executionGroups = computed(() => groupExecutionRecords(context.filteredAge
 </template>
 
 <style scoped>
-.task-record-details{margin-top:9px;font-size:11px;color:var(--muted)}.task-record-details summary,.task-technical-records>summary{cursor:pointer}.task-record-details dl{display:grid;grid-template-columns:70px minmax(0,1fr);gap:8px;margin:10px 0}.task-record-details dt{color:var(--muted)}.task-record-details dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}.task-technical-records>summary{padding:14px 18px;color:var(--muted);font-size:12px}.task-row-main>p.task-summary-error{color:var(--danger)}.task-row-main>p{overflow-wrap:anywhere}@media(max-width:600px){.task-row-main>header{align-items:flex-start;flex-direction:column;gap:7px}.task-row-main>header>div{flex-wrap:wrap}.task-record-details dl{grid-template-columns:60px minmax(0,1fr)}}
+.task-record-details{margin-top:9px;font-size:12px;color:var(--muted)}.task-record-details summary,.task-technical-records>summary{cursor:pointer}.task-record-details dl{display:grid;grid-template-columns:70px minmax(0,1fr);gap:8px;margin:10px 0}.task-record-details dt{color:var(--muted)}.task-record-details dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}.task-technical-records>summary{padding:14px 18px;color:var(--muted);font-size:12px}.task-row-main>p.task-summary-error{color:var(--danger)}.task-row-main>p{overflow-wrap:anywhere}@media(max-width:600px){.task-row-main>header{align-items:flex-start;flex-direction:column;gap:7px}.task-row-main>header>div{flex-wrap:wrap}.task-record-details dl{grid-template-columns:60px minmax(0,1fr)}}
 </style>

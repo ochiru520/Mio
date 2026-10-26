@@ -38,7 +38,8 @@ def _service(
 def snapshot() -> dict[str, Any]:
     """Collect a passive, non-network health snapshot for isolated runtimes."""
     from . import companion_service, local_vision_service, screen_observation_service, system_audio_service
-    from .routes import companion, onebot
+    from . import companion_runtime_service as companion
+    from . import onebot_transport_service as onebot
 
     call = companion.call_runtime_status()
     audio = dict(call["asr"])
@@ -285,8 +286,8 @@ def recover_failed(health: dict[str, Any] | None = None) -> dict[str, Any]:
             if service_id == "asr_system_audio":
                 from . import call_session_service
                 if call_session_service.manager.status().get("active"):
-                    from .routes.companion import _ensure_call_asr_ready
-                    _ensure_call_asr_ready()
+                    from .companion_runtime_service import ensure_call_asr_ready
+                    ensure_call_asr_ready()
                 else:
                     system_audio_service.start(companion_service.load_config())
             elif service_id == "tts":

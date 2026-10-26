@@ -20,6 +20,11 @@ class SchemaRepository:
         with self._dep_get_conn() as conn:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("PRAGMA synchronous = NORMAL")
+            from . import agent_skills_repository, agent_tasks_repository, extensions_repository
+            from ..agent_skill_defaults import DEFAULTS
+            conn.executescript(agent_skills_repository.SCHEMA_SQL + agent_tasks_repository.SCHEMA_SQL + extensions_repository.SCHEMA_SQL)
+            agent_tasks_repository.ensure_notifications(conn)
+            agent_skills_repository.seed_defaults(conn, DEFAULTS)
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
@@ -690,6 +695,9 @@ class SchemaRepository:
             self._ensure_column(conn, "messages", "reasoning_level", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "messages", "prompt_tokens", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "messages", "cached_prompt_tokens", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "messages", "cached_tokens_reporting", "TEXT NOT NULL DEFAULT 'unknown'")
+            self._ensure_column(conn, "messages", "input_tokens_reported", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "messages", "cache_write_tokens", "INTEGER")
             self._ensure_column(conn, "messages", "completion_tokens", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "messages", "reasoning_tokens", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "messages", "request_cost_yuan", "REAL")

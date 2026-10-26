@@ -66,6 +66,9 @@
   let pointerDown = null
   let dragged = false
   let modelLoadGeneration = 0
+  let modelReady = false
+  let startupError = ''
+  let showRequestId = ''
   let sizeCommitTimer = null
   let passThroughFrame = null
   let interactiveState = null
@@ -268,10 +271,31 @@
     }
   }
 
-  function sendRendererReady() {
+  function startupIdentity() {
+    return {
+      runtime: runtimeMode || (electronRuntime ? 'electron' : (window.pywebview ? 'pywebview' : 'browser')),
+      launch_id: String(desktopState.launchId || ''),
+    }
+  }
+
+  function reportStartupError(error) {
+    startupError = String(error?.message || error || '桌宠初始化失败')
+    sendSocket('renderer_error', { ...startupIdentity(), stage: 'startup', message: startupError })
+  }
+
+  async function sendRendererReady() {
+    if (!model || !modelReady || startupError) return
+    const generation = modelLoadGeneration
+    // Draw before reporting readiness; socket connection alone proves no model is visible.
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    if (generation !== modelLoadGeneration || !modelReady) return
+    app.renderer.render(app.stage)
+    const result = electronRuntime ? await window.mioDesktop.ensureVisible() : { visible: !document.hidden }
+    if (generation !== modelLoadGeneration || !modelReady) return
+    if (!result?.visible) throw new Error('桌宠窗口未能显示，请点击重启并查看桌宠日志。')
     const definition = modelDefinition(currentModelId)
     sendSocket('renderer_ready', {
-      runtime: runtimeMode || (electronRuntime ? 'electron' : (window.pywebview ? 'pywebview' : 'browser')),
+      ...startupIdentity(), model_ready: true, visible: true, show_request_id: showRequestId,
       model_id: currentModelId,
       model_name: String(definition?.name || currentModelId),
       capabilities: currentCapabilityPayload(),
@@ -325,6 +349,9 @@
   async function loadModel(modelId) {
     const definition = modelDefinition(modelId)
     const generation = ++modelLoadGeneration
+    modelReady = false
+    startupError = ''
+    sendSocket('renderer_loading', startupIdentity())
     loading.hidden = false
     errorPanel.hidden = true
     let nextModel = null
@@ -355,7 +382,9 @@
       loading.hidden = true
       populateModelSelect()
       updateMousePassThrough(true)
-      sendRendererReady()
+      clampModelToViewport()
+      modelReady = true
+      await sendRendererReady()
     } catch (error) {
       if (generation !== modelLoadGeneration) {
         if (nextModel) nextModel.destroy({ children: true, texture: false, baseTexture: false })
@@ -364,8 +393,9 @@
       console.error('[MioLive2D] model load failed', error)
       loading.hidden = true
       errorPanel.hidden = false
-      errorMessage.textContent = String(error?.message || error || '未知错误')
-      sendSocket('renderer_error', { message: errorMessage.textContent, model_id: definition.id })
+      errorMessage.textContent = `桌宠模型加载失败：${String(error?.message || error || '未知错误')}`
+      modelReady = false
+      reportStartupError(errorMessage.textContent)
       setInteractive(true)
     }
   }
@@ -1475,7 +1505,9 @@
       activityIndicator.classList.remove('offline')
       activityIndicator.title = 'Mio 当前状态'
       if (speechBubbleResponseId === 'agent-offline') hideSpeechBubble()
-      sendRendererReady()
+      if (startupError) reportStartupError(startupError)
+      else if (modelReady) void sendRendererReady().catch(reportStartupError)
+      else sendSocket('renderer_loading', startupIdentity())
       window.clearInterval(socketPingTimer)
       socketPingTimer = window.setInterval(() => sendSocket('ping', {}), 15000)
     }
@@ -1484,8 +1516,20 @@
       try { message = JSON.parse(event.data) } catch (_) { return }
       const payload = message?.payload || {}
       if (message.type === 'ready') {
+        showRequestId = String(payload.show_request_id || '')
         await applySettings(payload.settings || {})
         applyActivity(payload.activity || {})
+        if (modelReady) {
+          try { await sendRendererReady() } catch (error) { reportStartupError(error) }
+        }
+      } else if (message.type === 'show_pet') {
+        showRequestId = String(payload.request_id || '')
+        if (modelReady) {
+          desktopState = await window.mioDesktop.getState()
+          fitModel()
+          clampModelToViewport()
+          try { await sendRendererReady() } catch (error) { reportStartupError(error) }
+        } else if (startupError) reportStartupError(startupError)
       } else if (message.type === 'settings_changed') {
         await applySettings(payload)
       } else if (message.type === 'activity') {
@@ -1895,7 +1939,6 @@
   })
 
   async function start() {
-    createApplication()
     await waitForBridge()
     if (electronRuntime) {
       desktopState = await window.mioDesktop.getState()
@@ -1909,6 +1952,7 @@
       })
       connectSocket()
     }
+    createApplication()
     await pollStatus()
     await pollFeed()
     setInterval(pollStatus, electronRuntime ? 5000 : 1800)
@@ -2049,7 +2093,7 @@
     loading.hidden = true
     errorPanel.hidden = false
     errorMessage.textContent = String(error?.message || error || '初始化失败')
-    sendSocket('renderer_error', { message: errorMessage.textContent })
+    reportStartupError(errorMessage.textContent)
     setInteractive(true)
   })
 })()

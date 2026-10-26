@@ -10,8 +10,9 @@ import shutil
 import subprocess
 import time
 import uuid
-from contextlib import closing
 from pathlib import Path
+
+from .repositories import terminal_repository as repository
 
 from . import db, workspace_service as workspace, code_workspace_service as code
 
@@ -62,16 +63,11 @@ class WindowsJob:
 
 def initialize():
     code.initialize()
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript('''CREATE TABLE IF NOT EXISTS terminal_jobs(
-          id TEXT PRIMARY KEY,project_id TEXT NOT NULL,task_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
-          command TEXT NOT NULL,shell TEXT NOT NULL,cwd TEXT NOT NULL,workspace_revision INTEGER NOT NULL,
-          status TEXT NOT NULL,pid INTEGER NOT NULL DEFAULT 0,exit_code INTEGER,duration REAL NOT NULL DEFAULT 0,
-          stdout_path TEXT NOT NULL,stderr_path TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',
-          evidence_json TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL,finished_at TEXT NOT NULL DEFAULT '');''')
+    with repository.unit_of_work() as conn:
+        conn.ensure_jobs_table()
         identity = str(db.settings.db_path)
         if identity not in _initialized:
-            conn.execute("UPDATE terminal_jobs SET status='unknown',error='上次运行中断，结果未知；请核对输出后决定，不自动重放命令。' WHERE status='running'")
+            conn.recover_running_jobs()
             _initialized.add(identity)
 
 
@@ -90,21 +86,21 @@ def shells():
 
 
 def _update(job_id, **values):
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('UPDATE terminal_jobs SET ' + ','.join(key + '=?' for key in values) + ' WHERE id=?', (*values.values(), job_id))
+    with repository.unit_of_work() as store:
+        store.update_job(job_id, values)
 
 
 def _require(context, job_id):
     initialize()
     config = code.project_context(context)
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM terminal_jobs WHERE id=?', (job_id,)).fetchone()
+    with repository.unit_of_work(write=False) as conn:
+        row = conn.job_for_context((job_id,))
     if not row or row['project_id'] != config['project_id'] or row['conversation_id'] != context.conversation_id or row['task_id'] != context.task_id:
         raise ValueError('命令不属于当前任务。')
     return dict(row)
 
 
-def read(context, job_id, offset=0, max_chars=12000):
+def read(context, job_id, offset=0, max_chars=12000, *, deliver=True):
     row = _require(context, job_id)
     result = {key: value for key, value in row.items() if key not in {'stdout_path', 'stderr_path', 'evidence_json'}}
     result['evidence'] = json.loads(row['evidence_json'])
@@ -125,14 +121,25 @@ def read(context, job_id, offset=0, max_chars=12000):
         result['evidence']['files_unchanged'] = all(current) and config['revision'] == row['workspace_revision']
     result['has_more'] = max(result['stdout_total_chars'], result['stderr_total_chars']) > offset + max_chars
     result['next_offset'] = offset + max_chars
+    running = _running.get(job_id)
+    quiet = False
+    if running:
+        newest = max(Path(row[key]).stat().st_mtime for key in ('stdout_path', 'stderr_path'))
+        quiet = time.time() - newest > 3
+    result['interaction_state'] = ('unknown' if row['status'] == 'unknown' else 'timeout' if row['status'] == 'timed_out' else 'exited' if row['status'] != 'running'
+        else 'waiting_input' if row['waiting_input'] else 'idle_inferred' if quiet else 'running')
+    result['idle_is_inference'] = result['interaction_state'] == 'idle_inferred'
+    if deliver and row['status'] != 'running':
+        with repository.unit_of_work() as conn:
+            conn.deliver(job_id, str(getattr(context, 'run_id', '') or 'owner-read'))
     return result
 
 
 async def _watch(job_id, process, owner, context, revision, timeout_seconds, started):
     status, error = '', ''
     try:
-        with closing(db.get_conn()) as conn:
-            row=dict(conn.execute('SELECT * FROM terminal_jobs WHERE id=?',(job_id,)).fetchone())
+        with repository.unit_of_work(write=False) as conn:
+            row=dict(conn.job_for_watch((job_id,)))
         proof=json.loads(row['evidence_json'])
         saved_policy=proof.get('execution_policy_revision')
         while process.poll() is None:
@@ -156,8 +163,8 @@ async def _watch(job_id, process, owner, context, revision, timeout_seconds, sta
             _terminate(process, owner)
         await asyncio.to_thread(process.wait)
         if not status:
-            with closing(db.get_conn()) as conn:
-                saved = conn.execute('SELECT status FROM terminal_jobs WHERE id=?', (job_id,)).fetchone()
+            with repository.unit_of_work(write=False) as conn:
+                saved = conn.job_status((job_id,))
             status = 'cancelled' if saved and saved[0] == 'cancelled' else 'completed' if process.returncode == 0 else 'failed'
         if status=='completed':
             from .execution_policy_service import configuration
@@ -201,11 +208,13 @@ def _terminate(process, owner):
             except ProcessLookupError: pass
 
 
-async def start(context, command, shell='powershell', workspace_revision=0, timeout_seconds=120, evidence=None):
+async def start(context, command, shell='powershell', workspace_revision=0, timeout_seconds=120, evidence=None, interactive=False):
     initialize()
     config = code.project_context(context, 'execute', workspace_revision)
     from . import execution_policy_service as policy, terminal_sandbox as sandbox
     execution_policy=policy.configuration()
+    if interactive and execution_policy['terminal_mode'] == 'sandbox':
+        raise ValueError('当前隔离终端不支持持续 stdin；请选择本机授权终端或一次命令。')
     if shell not in {'powershell','cmd','bash'}:
         raise ValueError('终端类型无效。')
     available = shells()
@@ -215,6 +224,8 @@ async def start(context, command, shell='powershell', workspace_revision=0, time
         raise ValueError('请输入有效命令。')
     args = {'powershell': ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
             'cmd': ['/d', '/s', '/c', command], 'bash': ['--noprofile', '--norc', '-c', command]}[shell]
+    if interactive and shell == 'powershell':
+        args.remove('-NonInteractive')
     job_id = 'terminal_' + uuid.uuid4().hex
     folder = db.settings.db_path.parent / '终端回执' / job_id
     folder.mkdir(parents=True, exist_ok=True)
@@ -245,19 +256,17 @@ async def start(context, command, shell='powershell', workspace_revision=0, time
                 folder.rmdir()
             raise
     try:
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute('''INSERT INTO terminal_jobs(id,project_id,task_id,conversation_id,command,shell,cwd,workspace_revision,
-              status,stdout_path,stderr_path,evidence_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-              (job_id, config['project_id'], context.task_id, context.conversation_id, command, shell, config['root'],
+        with repository.unit_of_work() as conn:
+            conn.insert_job((job_id, config['project_id'], context.task_id, context.conversation_id, command, shell, config['root'],
                config['revision'], 'running', str(out), str(err), workspace.encode(proof), db.now_iso()))
         environment = sandbox.environment()
         with out.open('wb') as stdout, err.open('wb') as stderr:
-            process = subprocess.Popen(invocation, cwd=config['root'], stdin=subprocess.DEVNULL,
+            process = subprocess.Popen(invocation, cwd=config['root'], stdin=subprocess.PIPE if interactive else subprocess.DEVNULL,
                         stdout=stdout, stderr=stderr, env=environment,
                         creationflags=(0x08000000 | 0x00000004) if os.name == 'nt' else 0,
                         start_new_session=os.name != 'nt')
         if os.name == 'nt': owner = WindowsJob(process._handle)
-        _update(job_id, pid=process.pid)
+        _update(job_id, pid=process.pid, interactive=int(interactive))
         _running[job_id] = (process, owner, context.task_id, context.conversation_id)
         worker = asyncio.create_task(_watch(job_id, process, owner, context, config['revision'], timeout_seconds, started))
         _workers.add(worker); worker.add_done_callback(_workers.discard)
@@ -281,8 +290,36 @@ async def start(context, command, shell='powershell', workspace_revision=0, time
                 error=(cleanup_error or str(exc) or '启动已停止。')[:500], finished_at=db.now_iso())
         raise
     return {'job_id': job_id, 'status': 'running', 'pid': process.pid, 'command': command,
+            'interactive': bool(interactive), 'interaction_state': 'running',
             'cwd': config['root'], 'execution_environment': 'Docker 隔离项目副本' if execution_policy['terminal_mode']=='sandbox'
                 else '本机执行（无 OS 沙箱）', 'workspace_revision': config['revision']}
+
+
+def send_input(context, job_id, text='', *, close=False, waiting_input=False):
+    row = _require(context, job_id)
+    code.project_context(context, 'execute', row['workspace_revision'])
+    if context.task_id:
+        from . import agent_task_service as tasks
+        if (tasks.get(context.task_id) or {}).get('status') in {'cancelled', 'paused'}:
+            raise ValueError('任务已停止，不能继续写入终端。')
+    from .execution_policy_service import configuration
+    if json.loads(row['evidence_json']).get('execution_policy_revision') != configuration()['revision']:
+        raise ValueError('终端权限已改变，请重新启动。')
+    running = _running.get(job_id)
+    if not row['interactive'] or not running or running[0].poll() is not None:
+        raise ValueError('此命令没有可写入的交互 stdin。')
+    if len(text) > 12000 or '\x00' in text:
+        raise ValueError('输入最多 12000 字符，不能包含空字符。')
+    stream = running[0].stdin
+    if not stream or stream.closed:
+        raise ValueError('命令输入已关闭。')
+    if text:
+        stream.write(text.encode('utf-8')); stream.flush()
+    if close:
+        stream.close()
+    _update(job_id, waiting_input=int(waiting_input and not close))
+    return {'job_id': job_id, 'input_sent': bool(text), 'stdin_closed': close,
+            'interaction_state': 'waiting_input' if waiting_input and not close else 'running'}
 
 
 def stop(context, job_id):
@@ -315,8 +352,8 @@ def stop_task(task_id):
 
 def task_jobs(task_id):
     initialize()
-    with closing(db.get_conn()) as conn:
-        return [dict(row) for row in conn.execute('SELECT id,status,command,exit_code,error,workspace_revision,evidence_json FROM terminal_jobs WHERE task_id=? ORDER BY created_at', (task_id,))]
+    with repository.unit_of_work(write=False) as conn:
+        return [dict(row) for row in conn.task_jobs((task_id,))]
 
 
 async def verify(context, kind, workspace_revision, change_id='', timeout_seconds=300):

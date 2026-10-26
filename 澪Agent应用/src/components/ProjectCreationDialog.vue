@@ -1,6 +1,6 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { X } from '@lucide/vue'
+import { X } from '../icons/index.js'
 import ProjectDirectoryForm from './ProjectDirectoryForm.vue'
 const props = defineProps({ busy: Boolean })
 const emit = defineEmits(['submit', 'close'])

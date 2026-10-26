@@ -291,6 +291,7 @@ def test_real_browser_read_fill_confirmation_and_download(tmp_path,monkeypatch):
             try:
                 page=await browser.open_page(f'http://127.0.0.1:{server.server_port}',context)
                 assert page['title']=='Fixture'
+                await browser.set_control(page['page_id'], context, expected_revision=1, visible=True, active=True, owner='agent')
                 await browser.action(page['page_id'],'fill',context,selector='input',value='Mio')
                 pending=await browser.action(page['page_id'],'click',context,selector='button',commit=True,purpose='Submit fixture')
                 assert not posts
@@ -337,6 +338,7 @@ def test_browser_handoff_promotes_headless_and_preserves_session_cookies(tmp_pat
         with patch.object(browser, 'check_url', side_effect=allow_fixture):
             try:
                 first = await browser.open_page(url, ctx)
+                await browser.set_control(first['page_id'], ctx, expected_revision=1, visible=True, active=True, owner='agent')
                 old = browser.require_page(first['page_id'])['page'].context
                 assert browser._context_visibility[project['id']] is False
                 await old.add_cookies([{'name': 'synthetic-session', 'value': 'owner', 'url': url}])

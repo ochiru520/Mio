@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from contextlib import closing
 import logging
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from .repositories import autonomy_service_repository as repository
 from . import db
 from .model_runtime import operation, OperationStopped
 from .config import settings
@@ -264,11 +264,8 @@ def collect_scheduled_proactive_events(now: datetime | None = None) -> int:
             last_prompt_at = str(state["last_prompt_at"] or "")
         if current < next_prompt_at:
             continue
-        with closing(db.get_conn()) as conn, conn:
-            outstanding = conn.execute(
-                "SELECT 1 FROM agent_events WHERE event_type='proactive_checkin_due' AND conversation_id=? AND status IN ('pending','claimed') LIMIT 1",
-                (conversation_id,),
-            ).fetchone()
+        with repository.transaction() as conn:
+            outstanding = conn.collect_scheduled_proactive_events_find_agent_events((conversation_id,))
         if outstanding:
             continue
         idle_minutes = max(0, int((current - last_message_at).total_seconds() // 60))
@@ -687,7 +684,7 @@ async def _deliver_behavior(behavior_row: object, event: dict[str, object]) -> d
     user_id = conversation_id.removeprefix("qq_private_") if conversation_id.startswith("qq_private_") else ""
     destination = str(behavior.get("destination") or "app")
     if "qq" in destination and user_id:
-        from .routes.onebot import active_websocket_count, send_private_message
+        from .onebot_transport_service import active_websocket_count, send_private_message
 
         if not settings.qq_bot_enabled:
             qq_status = "disabled"
@@ -828,11 +825,8 @@ async def process_claimed_event(row: object, now: datetime | None = None) -> dic
         if failures < 3:
             payload["generation_failures"] = failures
             retry_at = (current + timedelta(minutes=5 * failures)).isoformat(timespec="seconds")
-            with closing(db.get_conn()) as conn, conn:
-                changed = conn.execute(
-                    "UPDATE agent_events SET status='pending',available_at=?,payload_json=?,error=?,decision_reason=?,claim_token='',claimed_at='',updated_at=? WHERE id=? AND status='claimed'",
-                    (retry_at, json.dumps(payload, ensure_ascii=False), str(exc)[:1000], reason[:2000], db.now_iso(), int(event["id"])),
-                ).rowcount
+            with repository.transaction() as conn:
+                changed = conn.process_claimed_event_update_agent_events((retry_at, json.dumps(payload, ensure_ascii=False), str(exc)[:1000], reason[:2000], db.now_iso(), int(event["id"])))
             if changed:
                 logger.warning("主动消息生成失败，已安排有限重试：event_id=%s retry_at=%s", event["id"], retry_at)
                 return {"event_id": event["id"], "decision": "retry", "reason": reason, "available_at": retry_at}

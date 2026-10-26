@@ -1,8 +1,9 @@
 <script setup>
+import * as tasksApi from '../services/tasksApi.js'
+
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Film, ImagePlus, MessageSquareText, Pin, PinOff, Play, RefreshCw, Settings, Sparkles } from '@lucide/vue'
+import { Film, ImagePlus, MessageSquareText, Pin, PinOff, Play, RefreshCw, Settings, Sparkles } from '../icons/index.js'
 import * as creationApi from '../services/creationApi.js'
-import { apiRequest } from '../services/api.js'
 import { taskStatusLabel } from '../agentTaskState.js'
 
 const props = defineProps({ pinned: Boolean })
@@ -31,7 +32,7 @@ async function load({ quiet = false } = {}) {
   if (!quiet) loading.value = true
   try {
     data.value = await creationApi.loadCreationBootstrap()
-    taskData.value = (await apiRequest('/api/agent/work?limit=20')).tasks || []
+    taskData.value = (await tasksApi.loadWorkByLimit20({})).tasks || []
     error.value = ''
   } catch (cause) {
     if (!quiet) error.value = cause.message

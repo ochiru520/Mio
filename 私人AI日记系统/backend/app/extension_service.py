@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import closing
 import hashlib
 import json
 import os
@@ -18,6 +17,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from . import db, maintenance_service
+from .repositories import extensions_repository as repository
 from .config import settings
 from .extension_worker import validate_source
 
@@ -97,30 +97,19 @@ def root():
 
 
 def initialize():
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript('''CREATE TABLE IF NOT EXISTS extensions(
-          id TEXT PRIMARY KEY,revision INTEGER NOT NULL,enabled INTEGER NOT NULL,
-          latest_version TEXT NOT NULL,active_version TEXT NOT NULL,updated_at TEXT NOT NULL);
-          CREATE TABLE IF NOT EXISTS extension_versions(
-          extension_id TEXT NOT NULL,version TEXT NOT NULL,bundle_path TEXT NOT NULL,
-          bundle_hash TEXT NOT NULL,validation_json TEXT NOT NULL,created_at TEXT NOT NULL,
-          PRIMARY KEY(extension_id,version));
-          CREATE TABLE IF NOT EXISTS extension_activations(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,extension_id TEXT NOT NULL,version TEXT NOT NULL,created_at TEXT NOT NULL);''')
+    """Explicit compatibility bootstrap; ordinary calls never migrate."""
+    db.init_db()
 
 
-def _row(identifier):
-    initialize()
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM extensions WHERE id=?', (identifier,)).fetchone()
+def _row(identifier, conn=None):
+    row = repository.get(identifier, conn)
     if not row:
         raise ValueError('扩展不存在。')
     return dict(row)
 
 
-def _bundle(identifier, version):
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM extension_versions WHERE extension_id=? AND version=?', (identifier, version)).fetchone()
+def _bundle(identifier, version, conn=None):
+    row = repository.version(identifier, version, conn)
     if not row:
         raise ValueError('扩展版本不存在。')
     path = root() / row['bundle_path']
@@ -138,8 +127,7 @@ def read(identifier, version=''):
     with _lock:
         item = _row(identifier)
         bundle, selected = _bundle(identifier, version or item['latest_version'])
-        with closing(db.get_conn()) as conn:
-            versions = conn.execute('SELECT version,validation_json,created_at FROM extension_versions WHERE extension_id=? ORDER BY rowid DESC', (identifier,)).fetchall()
+        versions = repository.versions(identifier)
         return {**bundle['manifest'], **item, 'version': selected['version'], 'manifest': bundle['manifest'],
                 'source': bundle['source'], 'tests': bundle['tests'], 'enabled': bool(item['enabled']),
                 'validation': json.loads(selected['validation_json']),
@@ -148,9 +136,7 @@ def read(identifier, version=''):
 
 
 def listing():
-    initialize()
-    with closing(db.get_conn()) as conn:
-        ids = [row[0] for row in conn.execute('SELECT id FROM extensions ORDER BY updated_at DESC,id')]
+    ids = repository.ids()
     result = []
     for identifier in ids:
         try:
@@ -164,9 +150,7 @@ def listing():
 def freeze_round(run_id, round_index):
     """Called once before a model request, never between calls in that request."""
     with _lock:
-        initialize()
-        with closing(db.get_conn()) as conn:
-            rows=conn.execute('SELECT id,active_version FROM extensions WHERE enabled=1').fetchall()
+        rows=repository.active()
         snapshot={}
         for row in rows:
             try:
@@ -268,7 +252,6 @@ def _check_bundle(bundle):
 
 @maintenance_service.mutation_scope()
 def save(manifest, source='', tests=None, expected_revision=0):
-    initialize()
     request = SaveRequest.model_validate({'manifest': manifest, 'source': source, 'tests': tests or [], 'expected_revision': expected_revision})
     bundle = {'manifest': request.manifest.model_dump(), 'source': source, 'tests': [t.model_dump() for t in request.tests]}
     identifier = request.manifest.id or 'ext_' + uuid.uuid4().hex[:24]
@@ -280,16 +263,15 @@ def save(manifest, source='', tests=None, expected_revision=0):
     except (ValueError, SyntaxError) as exc:
         validation = {'valid': False, 'errors': [str(exc)], 'status': 'invalid'}
     version = request.manifest.version
-    with _lock, closing(db.get_conn()) as conn, conn:
-        conn.execute('BEGIN IMMEDIATE')
-        current = conn.execute('SELECT * FROM extensions WHERE id=?', (identifier,)).fetchone()
+    with _lock, repository.transaction() as conn:
+        current = repository.get(identifier, conn)
         if (current['revision'] if current else 0) != expected_revision:
             raise ConflictError('扩展已变化，请刷新；你的草稿未覆盖新版本。')
-        if conn.execute('SELECT 1 FROM extension_versions WHERE extension_id=? AND version=?', (identifier, version)).fetchone():
+        if repository.version(identifier, version, conn):
             raise ValueError('同一版本不能覆盖，请使用新的版本号。')
         if current:
             try:
-                old,_=_bundle(identifier,current['latest_version'])
+                old,_=_bundle(identifier,current['latest_version'],conn)
             except (ValueError,OSError):
                 old=None
             if old and old['manifest']['kind']!=bundle['manifest']['kind']:
@@ -305,10 +287,7 @@ def save(manifest, source='', tests=None, expected_revision=0):
         else:
             with path.open('xb') as stream:
                 stream.write(raw)
-        stamp = db.now_iso()
-        conn.execute('INSERT INTO extensions VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,latest_version=excluded.latest_version,updated_at=excluded.updated_at',
-                     (identifier, expected_revision + 1, 0, version, '', stamp))
-        conn.execute('INSERT INTO extension_versions VALUES(?,?,?,?,?,?)', (identifier, version, path.name, digest, json.dumps(validation), stamp))
+        repository.save(conn,identifier,expected_revision+1,version,path.name,digest,validation)
     return read(identifier)
 
 
@@ -436,33 +415,26 @@ async def validate(identifier, version='', expected_revision=0):
         validation.update(valid=True, status='validated', checked_at=db.now_iso())
     except (ValueError, SyntaxError, OSError, json.JSONDecodeError) as exc:
         validation['errors'].append(str(exc))
-    with _lock, closing(db.get_conn()) as conn, conn:
-        conn.execute('BEGIN IMMEDIATE')
-        if _row(identifier)['revision'] != expected_revision:
+    with _lock, repository.transaction() as conn:
+        if _row(identifier,conn)['revision'] != expected_revision:
             raise ConflictError('验证期间扩展版本已变化，请重新验证。')
-        conn.execute('UPDATE extension_versions SET validation_json=? WHERE extension_id=? AND version=?', (json.dumps(validation), identifier, row['version']))
-        conn.execute('UPDATE extensions SET revision=revision+1,updated_at=? WHERE id=?', (db.now_iso(), identifier))
+        repository.set_validation(conn,identifier,row['version'],validation)
     return read(identifier, row['version'])
 
 
 @maintenance_service.mutation_scope()
 def enabled(identifier, enabled, expected_revision, version=''):
-    with _lock, closing(db.get_conn()) as conn, conn:
-        conn.execute('BEGIN IMMEDIATE')
-        item = _row(identifier)
+    with _lock, repository.transaction() as conn:
+        item = _row(identifier,conn)
         if item['revision'] != expected_revision:
             raise ConflictError('扩展版本已变化，请刷新。')
         target = version or item['latest_version']
         if enabled:
-            bundle, row = _bundle(identifier, target)
+            bundle, row = _bundle(identifier, target,conn)
             _check_bundle(bundle)
             if not json.loads(row['validation_json']).get('valid'):
                 raise ValueError('扩展尚未通过验证，不能启用。')
-        conn.execute('UPDATE extensions SET enabled=?,active_version=?,revision=revision+1,updated_at=? WHERE id=?',
-                     (bool(enabled), target if enabled else item['active_version'], db.now_iso(), identifier))
-        if enabled and target != item['active_version']:
-            conn.execute('INSERT INTO extension_activations(extension_id,version,created_at) VALUES(?,?,?)',
-                         (identifier,target,db.now_iso()))
+        repository.set_enabled(conn,identifier,enabled,target,item['active_version'])
         entries = [entry for entry in _running.values() if entry[3] == identifier]
     for entry in entries:
         _stop_process(entry)
@@ -476,9 +448,8 @@ def enabled(identifier, enabled, expected_revision, version=''):
 
 def rollback(identifier, expected_revision):
     item = _row(identifier)
-    with closing(db.get_conn()) as conn:
-        history = [row[0] for row in conn.execute('SELECT version FROM extension_activations WHERE extension_id=? ORDER BY id DESC',(identifier,))]
-        versions=conn.execute('SELECT version,validation_json FROM extension_versions WHERE extension_id=?',(identifier,)).fetchall()
+    history = repository.activation_history(identifier)
+    versions = repository.versions(identifier)
     valid = {v['version'] for v in versions if json.loads(v['validation_json']).get('valid')}
     candidates = []
     for version in history:

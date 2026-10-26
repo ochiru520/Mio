@@ -1,11 +1,11 @@
 """Local WeChat transcript, including transport receipts and old conversations."""
 from __future__ import annotations
 
-from contextlib import closing
 import hashlib
 import json
 import re
 
+from .repositories import wechat_history_repository as repository
 from . import db
 
 
@@ -14,8 +14,8 @@ ID_PATTERN = re.compile(r'wechat_private_[a-f0-9]{24}')
 
 def conversations() -> list[dict]:
     from . import wechat_service, mobile_task_service
-    with closing(db.get_conn()) as conn:
-        ids = [row[0] for row in conn.execute("SELECT DISTINCT conversation_id FROM messages WHERE conversation_id LIKE 'wechat_private_%'")
+    with repository.read() as conn:
+        ids = [row[0] for row in conn.conversations_find_messages()
                if ID_PATTERN.fullmatch(row[0])]
     current = ''
     try:
@@ -40,6 +40,7 @@ def conversations() -> list[dict]:
 
 def archive_outbox(conn, row) -> None:
     from .mobile_task_service import conversation_id
+    conn = repository.bind(conn)
     if not str(row['self_id']).startswith('wechat:'):
         return
     payload = json.loads(row['payload_json'])
@@ -49,9 +50,9 @@ def archive_outbox(conn, row) -> None:
     attachments = []
     content = str(payload.get('text') or '')
     if payload.get('artifact_id'):
-        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='artifacts'").fetchone():
+        if not conn.archive_outbox_find_sqlite_master():
             return
-        artifact = conn.execute('SELECT * FROM artifacts WHERE id=?', (payload['artifact_id'],)).fetchone()
+        artifact = conn.archive_outbox_find_artifacts((payload['artifact_id'],))
         if not artifact:
             return
         kind = 'image' if artifact['mime_type'].startswith('image/') else 'video' if artifact['mime_type'].startswith('video/') else 'file'
@@ -61,32 +62,27 @@ def archive_outbox(conn, row) -> None:
     if not content:
         return
     key = f'wechat-outbox:{row["id"]}'
-    conn.execute('''INSERT OR IGNORE INTO messages
-        (role,content,source,conversation_id,created_at,request_id,delivery_key,attachments_json)
-        VALUES('assistant',?,'wechat',?,?,?,?,?)''',
-        (content, conversation_id(dict(row)), row['created_at'], key, key, json.dumps(attachments, ensure_ascii=False)))
+    conn.archive_outbox_insert_messages((content, conversation_id(dict(row)), row['created_at'], key, key, json.dumps(attachments, ensure_ascii=False)))
 
 
 def archive_document(conn, row) -> None:
     from .mobile_task_service import conversation_id
+    conn = repository.bind(conn)
     if not str(row['self_id']).startswith('wechat:'):
         return
     attachment = {'kind': 'document', 'name': row['name'], 'size': row['size'],
                   'url': f"/api/wechat/attachments/{row['id']}"}
     key = 'wechat-file:' + row['id']
-    conn.execute('''INSERT OR IGNORE INTO messages
-        (role,content,source,conversation_id,created_at,request_id,delivery_key,attachments_json)
-        VALUES('user',?,'wechat',?,?,?,?,?)''',
-        ('微信文件：' + row['name'], conversation_id(dict(row)), row['created_at'], key, key,
+    conn.archive_document_insert_messages(('微信文件：' + row['name'], conversation_id(dict(row)), row['created_at'], key, key,
          json.dumps([attachment], ensure_ascii=False)))
 
 
 def backfill() -> None:
     """Recover display entries from durable records; never resend messages."""
-    with closing(db.get_conn()) as conn, conn:
+    with repository.transaction() as conn:
         for table, callback in [('mobile_task_outbox', archive_outbox), ('mobile_task_attachments', archive_document)]:
-            if conn.execute('SELECT 1 FROM sqlite_master WHERE name=?', (table,)).fetchone():
-                for row in conn.execute(f"SELECT * FROM {table} WHERE self_id LIKE 'wechat:%' ORDER BY created_at").fetchall():
+            if conn.backfill_find_sqlite_master((table,)):
+                for row in conn.backfill_f_schema(table):
                     callback(conn, row)
 
 
@@ -103,12 +99,10 @@ def add_delivery_states(messages: list[dict]) -> None:
     entries = {int(x['id']): x for x in messages if str(x.get('id') or '').isdigit()}
     if not entries:
         return
-    with closing(db.get_conn()) as conn:
-        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='mobile_task_outbox'").fetchone():
+    with repository.read() as conn:
+        if not conn.add_delivery_states_find_sqlite_master():
             return
-        for row in conn.execute('''SELECT m.id,o.status,o.error FROM messages m
-            JOIN mobile_task_outbox o ON m.delivery_key = 'wechat-outbox:' || o.id
-            WHERE m.id IN (''' + ','.join('?' for _ in entries) + ')', list(entries)):
+        for row in conn.add_delivery_states_find_messages(entries, list(entries)):
             message = entries[int(row['id'])]
             message['delivery_status'] = row['status']
             message['delivery_error'] = row['error']

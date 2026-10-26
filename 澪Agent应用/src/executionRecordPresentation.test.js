@@ -103,7 +103,7 @@ async function compileComponent(file) {
   const { descriptor } = parse(await readFile(new URL(file, import.meta.url), 'utf8'))
   const compiled = compileScript(descriptor, { id: 'execution-record-test', inlineTemplate: true })
   // Resolve imports for a data-URL module; no generated files or running API needed.
-  const withStubIcons = compiled.content.replace(/import\s*\{([^}]+)\}\s*from\s*['"]@lucide\/vue['"]/g, (match, names) => {
+  const withStubIcons = compiled.content.replace(/import SelectField from ['"][^'"]+['"]/g, `const SelectField = 'select'`).replace(/import\s*\{([^}]+)\}\s*from\s*['"]@lucide\/vue['"]/g, (match, names) => {
     const icons = names.split(',').map(name => name.trim()).filter(Boolean)
     return icons.map(name => `const ${name} = () => null`).join('\n')
   })

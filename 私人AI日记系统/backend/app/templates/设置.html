@@ -183,10 +183,15 @@
                 <div>
                   <dt>{{ manual.name }}</dt>
                   <dd>
-                    {{ manual.path }} ·
-                    {{ '已读取' if manual.exists and not manual.error else manual.error or '不存在' }} ·
-                    {{ manual.used_chars }} / {{ manual.total_chars }} 字
+                    {% if manual.status == 'unconfigured' %}
+                      未配置（可选）
+                    {% else %}
+                      {{ manual.path }} ·
+                      {{ '已读取' if manual.exists and not manual.error else manual.error or '不存在' }} ·
+                      {{ manual.used_chars }} / {{ manual.total_chars }} 字
+                    {% endif %}
                     {% if manual.truncated %} · 已截断{% endif %}
+                    {% if manual.description %}<br>{{ manual.description }}{% endif %}
                   </dd>
                 </div>
               {% endfor %}

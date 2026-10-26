@@ -116,6 +116,7 @@ claim_chat_request = _messages_service.claim_chat_request
 complete_chat_request = _messages_service.complete_chat_request
 fail_chat_request = _messages_service.fail_chat_request
 chat_request_payload = _messages_service.chat_request_payload
+get_desktop_chat_request = _messages_service.get_desktop_chat_request
 get_recent_messages = _messages_service.get_recent_messages
 get_total_message_token_usage = _messages_service.get_total_message_token_usage
 get_token_usage_summary = _messages_service.get_token_usage_summary

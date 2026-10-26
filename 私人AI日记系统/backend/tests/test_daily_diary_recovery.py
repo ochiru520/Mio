@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from app import db, daily_diary_service as daily, llm
 from app.config import settings
 from app.model_registry import ModelProfile
-from app.routes import diary
+from app import diary_operations_service as diary
 
 
 @pytest.fixture(autouse=True)

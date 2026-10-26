@@ -4,7 +4,6 @@ import ctypes
 import ctypes.wintypes
 import json
 import logging
-import math
 from logging.handlers import RotatingFileHandler
 import os
 import shutil
@@ -18,7 +17,6 @@ import urllib.error
 import urllib.request
 import uuid
 import winreg
-from collections import deque
 from pathlib import Path
 
 try:
@@ -30,6 +28,30 @@ try:
     from desktop.updates.integration import UpdateBridgeMixin, create_service as create_update_service, run_update_mode, startup_recovery
 except ModuleNotFoundError:
     from updates.integration import UpdateBridgeMixin, create_service as create_update_service, run_update_mode, startup_recovery
+
+
+try:
+    from desktop.window_bridge import WindowBridgeMixin, WorkspaceWindowController, _WindowPlacement, _WM_BEGIN_WINDOW_DRAG
+    from desktop.local_path_picker import select_agent_path
+except ModuleNotFoundError:
+    from window_bridge import WindowBridgeMixin, WorkspaceWindowController, _WindowPlacement, _WM_BEGIN_WINDOW_DRAG
+    from local_path_picker import select_agent_path
+
+
+try:
+    from desktop.backend_runtime import (
+        BackendRuntime as EmbeddedBackendRuntime, HealthDependencies, ServerDependencies,
+        bind_backend_listener, close_backend_listener, start_backend, watch_backend_health,
+        local_backend_diagnostics as _local_backend_diagnostics,
+        recover_local_subservices as _recover_local_subservices,
+    )
+except ModuleNotFoundError:
+    from backend_runtime import (
+        BackendRuntime as EmbeddedBackendRuntime, HealthDependencies, ServerDependencies,
+        bind_backend_listener, close_backend_listener, start_backend, watch_backend_health,
+        local_backend_diagnostics as _local_backend_diagnostics,
+        recover_local_subservices as _recover_local_subservices,
+    )
 
 
 APP_NAME = "Mio"
@@ -299,18 +321,6 @@ _NATIVE_WNDPROC_CALLBACKS: dict[int, object] = {}
 _NATIVE_WNDPROC_ORIGINALS: dict[int, int] = {}
 _NATIVE_NORMAL_BOUNDS: dict[int, tuple[int, int, int, int]] = {}
 _NATIVE_MINIMIZE_BOUNDS: dict[int, tuple[int, int, int, int]] = {}
-_WM_BEGIN_WINDOW_DRAG = 0x8000 + 0x4D1
-
-
-class _WindowPlacement(ctypes.Structure):
-    _fields_ = [
-        ("length", ctypes.wintypes.UINT),
-        ("flags", ctypes.wintypes.UINT),
-        ("showCmd", ctypes.wintypes.UINT),
-        ("ptMinPosition", ctypes.wintypes.POINT),
-        ("ptMaxPosition", ctypes.wintypes.POINT),
-        ("rcNormalPosition", ctypes.wintypes.RECT),
-    ]
 
 
 def _resize_hit_code(window_handle: int, lparam: int, border: int = 8) -> int | None:
@@ -1256,43 +1266,6 @@ def _run_voice_package_import_worker(job_path: Path) -> int:
         return 1
 
 
-def _local_backend_diagnostics() -> dict[str, object]:
-    try:
-        from app.runtime_diagnostics import snapshot
-
-        result = snapshot()
-        try:
-            from app.subservice_health import snapshot as subservice_snapshot
-
-            result["subservices"] = subservice_snapshot()
-        except Exception:
-            logging.exception("Unable to collect local subservice diagnostics")
-        return result if isinstance(result, dict) else {}
-    except ModuleNotFoundError:
-        return {}
-    except Exception:
-        logging.exception("Unable to collect local backend diagnostics")
-        return {}
-
-
-def _recover_local_subservices(diagnostics: dict[str, object]) -> dict[str, object]:
-    try:
-        from app.subservice_health import recover_failed
-
-        health = diagnostics.get("subservices")
-        return recover_failed(health if isinstance(health, dict) else None)
-    except ModuleNotFoundError:
-        return {"attempted": False, "recovered": [], "failed": [], "fused": []}
-    except Exception as exc:
-        logging.exception("Unable to recover failed backend subservices")
-        return {
-            "attempted": True,
-            "recovered": [],
-            "failed": [{"service_id": "unknown", "error": str(exc)[:500]}],
-            "fused": [],
-        }
-
-
 def _record_backend_recovery_state(
     status: str,
     reason: str,
@@ -1366,126 +1339,24 @@ def _watch_backend_health(
     recovery_window_seconds: float = BACKEND_RECOVERY_WINDOW_SECONDS,
     recovery_max_attempts: int = BACKEND_RECOVERY_MAX_ATTEMPTS,
 ) -> None:
-    consecutive_failures = 0
-    recovery_attempts: deque[float] = deque()
-    while not stop_event.wait(max(0.01, interval_seconds)):
-        if _backend_health_matches_runtime(runtime_root):
-            consecutive_failures = 0
-            continue
-        consecutive_failures += 1
-        logging.warning(
-            "Mio backend health check failed (%s/%s): %s",
-            consecutive_failures,
-            failure_threshold,
-            _LAST_BACKEND_HEALTH_ERROR or "健康接口不可用",
-        )
-        if consecutive_failures >= max(1, failure_threshold):
-            detail = _LAST_BACKEND_HEALTH_ERROR or "健康接口不可用"
-            backend_thread = backend_runtime.current_thread() if backend_runtime is not None else None
-            thread_alive = bool(backend_thread is not None and backend_thread.is_alive())
-            port_open = _port_is_open()
-            diagnostics = diagnostics_provider()
-            port_text = f"{PORT}端口" + ("仍在监听" if port_open else "未监听")
-            reason = (
-                f"后端连续 {consecutive_failures} 次健康检查失败；最近错误：{detail}；"
-                f"{'后端线程存活' if thread_alive else '后端线程已退出或不可管理'}；"
-                f"{port_text}"
-            )
-            if thread_alive and port_open:
-                subservice_recovery = subservice_recovery_provider(diagnostics)
-                diagnostics = dict(diagnostics)
-                diagnostics["subservice_recovery"] = subservice_recovery
-                recovered_services = list(subservice_recovery.get("recovered") or [])
-                logging.error(
-                    "Backend health timed out while thread and port stayed alive; "
-                    "full application recovery suppressed. recovered_subservices=%s "
-                    "reason=%s diagnostics=%s",
-                    recovered_services,
-                    reason,
-                    json.dumps(diagnostics, ensure_ascii=False, sort_keys=True),
-                )
-                _record_backend_recovery_state(
-                    "subservice_recovered" if recovered_services else "degraded_no_restart",
-                    reason,
-                    thread_alive=True,
-                    port_open=True,
-                    diagnostics=diagnostics,
-                    attempts_in_window=len(recovery_attempts),
-                )
-                consecutive_failures = 0
-                continue
-
-            current = time.monotonic()
-            cutoff = current - max(1.0, recovery_window_seconds)
-            while recovery_attempts and recovery_attempts[0] < cutoff:
-                recovery_attempts.popleft()
-            if len(recovery_attempts) >= max(1, recovery_max_attempts):
-                logging.critical("Backend recovery circuit opened: %s", reason)
-                _record_backend_recovery_state(
-                    "fused",
-                    reason,
-                    thread_alive=thread_alive,
-                    port_open=port_open,
-                    diagnostics=diagnostics,
-                    attempts_in_window=len(recovery_attempts),
-                )
-                return
-            if backend_runtime is None:
-                logging.error("Backend cannot be recovered independently: %s", reason)
-                _record_backend_recovery_state(
-                    "unmanaged",
-                    reason,
-                    thread_alive=thread_alive,
-                    port_open=port_open,
-                    diagnostics=diagnostics,
-                    attempts_in_window=len(recovery_attempts),
-                )
-                return
-
-            recovery_attempts.append(current)
-            if backend_runtime.recover(reason):
-                logging.warning("Backend recovered without restarting the WebView: %s", reason)
-                _record_backend_recovery_state(
-                    "recovered",
-                    reason,
-                    thread_alive=thread_alive,
-                    port_open=port_open,
-                    diagnostics=diagnostics,
-                    attempts_in_window=len(recovery_attempts),
-                )
-                consecutive_failures = 0
-                continue
-            logging.critical("Independent backend recovery failed: %s", reason)
-            _record_backend_recovery_state(
-                "recovery_failed",
-                reason,
-                thread_alive=thread_alive,
-                port_open=port_open,
-                diagnostics=diagnostics,
-                attempts_in_window=len(recovery_attempts),
-            )
-            return
+    dependencies = HealthDependencies(
+        health_matches_runtime=lambda root: _backend_health_matches_runtime(root),
+        health_error=lambda: _LAST_BACKEND_HEALTH_ERROR,
+        port_is_open=lambda: _port_is_open(),
+        port=lambda: PORT,
+        record_recovery_state=lambda *args, **kwargs: _record_backend_recovery_state(*args, **kwargs),
+    )
+    watch_backend_health(
+        stop_event, runtime_root, dependencies=dependencies,
+        interval_seconds=interval_seconds, failure_threshold=failure_threshold,
+        backend_runtime=backend_runtime, diagnostics_provider=diagnostics_provider,
+        subservice_recovery_provider=subservice_recovery_provider,
+        recovery_window_seconds=recovery_window_seconds, recovery_max_attempts=recovery_max_attempts,
+    )
 
 
 def _bind_backend_listener(port: int, *, allow_fallback: bool) -> socket.socket:
-    """Reserve the actual listener, including Windows excluded-port checks."""
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        if os.name == "nt":
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        try:
-            listener.bind((HOST, port))
-        except OSError as exc:
-            if not allow_fallback or (exc.errno not in {13, 48, 98, 10013, 10048}
-                                      and getattr(exc, "winerror", None) not in {10013, 10048}):
-                raise
-            listener.bind((HOST, 0))
-            logging.warning("后端端口 %s 无法绑定，自动使用可用端口 %s", port, listener.getsockname()[1])
-        listener.setblocking(False)
-        return listener
-    except BaseException:
-        listener.close()
-        raise
+    return bind_backend_listener(port, host=HOST, allow_fallback=allow_fallback)
 
 
 def _prepare_backend_endpoint() -> None:
@@ -1503,89 +1374,33 @@ def _prepare_backend_endpoint() -> None:
                       "pid": os.getpid(), "base_url": f"http://{HOST}:{PORT}"})
 
 
-def _start_backend(runtime_root: Path):
+def _set_backend_listener(listener: socket.socket | None) -> None:
     global _BACKEND_SOCKET
-    existing = _health()
-    if existing is not None:
-        if not _same_path(existing.get("project_root"), runtime_root):
-            raise RuntimeError(f"{PORT}端口上正在运行另一份 Mio 后端。请先关闭旧后端，再启动桌面应用。")
-        return None, None
-    if _port_is_open():
-        raise RuntimeError(f"{PORT}端口已被其他程序占用，Mio 无法启动。")
+    _BACKEND_SOCKET = listener
 
-    if _BACKEND_SOCKET is None:
-        _BACKEND_SOCKET = _bind_backend_listener(PORT, allow_fallback=False)
 
-    import uvicorn
-    from app.main import app
-
-    config = uvicorn.Config(
-        app,
-        host=HOST,
-        port=PORT,
-        log_config=None,
-        access_log=False,
+def _backend_server_dependencies() -> ServerDependencies:
+    return ServerDependencies(
+        host=HOST, port=PORT, health=lambda: _health(), same_path=_same_path,
+        port_is_open=lambda: _port_is_open(), get_listener=lambda: _BACKEND_SOCKET,
+        set_listener=_set_backend_listener,
+        bind_listener=lambda *args, **kwargs: _bind_backend_listener(*args, **kwargs),
+        log_path=LOG_PATH,
     )
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, kwargs={"sockets": [_BACKEND_SOCKET]}, name="mio-backend", daemon=True)
-    thread.start()
-
-    deadline = time.monotonic() + 25
-    while time.monotonic() < deadline:
-        health = _health()
-        if health is not None and _same_path(health.get("project_root"), runtime_root):
-            return server, thread
-        if not thread.is_alive():
-            break
-        time.sleep(0.25)
-    server.should_exit = True
-    raise RuntimeError(f"Mio 的后端没有正常启动。日志位置：{LOG_PATH}")
 
 
-class BackendRuntime:
+def _start_backend(runtime_root: Path):
+    return start_backend(runtime_root, _backend_server_dependencies())
+
+
+class BackendRuntime(EmbeddedBackendRuntime):
+    """Bind desktop endpoint state without snapshotting launcher test hooks."""
     def __init__(self, runtime_root: Path):
-        self.runtime_root = runtime_root
-        self.server = None
-        self.thread: threading.Thread | None = None
-        self._lock = threading.RLock()
-
-    def start(self) -> None:
-        with self._lock:
-            self.server, self.thread = _start_backend(self.runtime_root)
-
-    def current_thread(self) -> threading.Thread | None:
-        with self._lock:
-            return self.thread
-
-    def stop(self, *, timeout: float = 8) -> bool:
-        global _BACKEND_SOCKET
-        with self._lock:
-            server = self.server
-            thread = self.thread
-            if server is not None:
-                server.should_exit = True
-            if thread is not None:
-                thread.join(timeout=max(0.0, timeout))
-            stopped = thread is None or not thread.is_alive()
-            if stopped:
-                self.server = None
-                self.thread = None
-                if _BACKEND_SOCKET is not None:
-                    _BACKEND_SOCKET.close()
-                    _BACKEND_SOCKET = None
-            return stopped
-
-    def recover(self, reason: str) -> bool:
-        logging.error("Attempting independent backend recovery: %s", reason)
-        if not self.stop(timeout=8):
-            logging.error("Backend thread did not stop; recovery aborted")
-            return False
-        try:
-            self.start()
-        except Exception:
-            logging.exception("Failed to restart embedded backend")
-            return False
-        return self.thread is not None and self.thread.is_alive() and _port_is_open()
+        super().__init__(
+            runtime_root, start_backend=lambda root: _start_backend(root),
+            port_is_open=lambda: _port_is_open(),
+            close_listener=lambda: close_backend_listener(_backend_server_dependencies()),
+        )
 
 
 def _tray_image():
@@ -1918,56 +1733,7 @@ def _focus_process_window(process_id: int) -> bool:
     return True
 
 
-class WorkspaceWindowController:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._windows: dict[str, object] = {}
-        self._active = "main"
-        self._destroying = False
-
-    def attach(self, role: str, window) -> None:
-        if role not in {"main", "agent"}:
-            raise ValueError("不支持的工作区窗口")
-        with self._lock:
-            self._windows[role] = window
-
-    def switch(self, target: str) -> dict[str, object]:
-        if target not in {"main", "agent"}:
-            return {"ok": False, "error": "不支持的工作区"}
-        with self._lock:
-            if self._destroying:
-                return {"ok": False, "error": "应用正在退出"}
-            target_window = self._windows.get(target)
-            other_window = self._windows.get("agent" if target == "main" else "main")
-        if target_window is None:
-            return {"ok": False, "error": "目标窗口尚未就绪"}
-        try:
-            if other_window is not None:
-                other_window.hide()
-            target_window.show()
-            target_window.restore()
-        except Exception as exc:
-            logging.exception("Failed to switch Mio workspace window")
-            return {"ok": False, "error": str(exc)}
-        with self._lock:
-            self._active = target
-        return {"ok": True, "workspace": target}
-
-    def destroy_all(self) -> None:
-        with self._lock:
-            if self._destroying:
-                return
-            self._destroying = True
-            windows = tuple(self._windows.values())
-            self._windows.clear()
-        for window in windows:
-            try:
-                window.destroy()
-            except Exception:
-                logging.exception("Failed to close a Mio workspace window")
-
-
-class DesktopBridge(UpdateBridgeMixin):
+class DesktopBridge(WindowBridgeMixin, UpdateBridgeMixin):
     def __init__(
         self,
         workspace: str = "main",
@@ -1977,23 +1743,29 @@ class DesktopBridge(UpdateBridgeMixin):
         self._preview_process: subprocess.Popen[bytes] | None = None
         self._pet_chat_process: subprocess.Popen[bytes] | None = None
         self._voice_import_jobs: dict[str, dict[str, object]] = {}
-        self._window = None
-        self._hide_window = None
-        self._window_maximized = False
-        self._resize_gesture = None
-        self._move_gesture = None
-        self._restore_bounds = None
+        self._initialize_window_bridge()
         self._workspace = workspace
         self._workspace_controller = workspace_controller
 
-    def attach_window(self, window, hide_window) -> None:
-        self._window = window
-        self._hide_window = hide_window
+    def _prepare_native_window_drag(self, handle: int) -> bool:
+        return _install_native_hit_test(handle)
+
+    def _minimum_window_size(self) -> tuple[int, int]:
+        return MAIN_WINDOW_MIN_SIZE
 
     def switch_workspace(self, target: str) -> dict[str, object]:
+        target = str(target or "")
+        if target not in {"main", "agent"}:
+            return {"ok": False, "error": "不支持的工作区"}
         if self._workspace_controller is None:
             return {"ok": False, "error": "工作区窗口控制器尚未就绪"}
-        return self._workspace_controller.switch(str(target or ""))
+        if target == self._workspace:
+            # A frontend fallback can load the other workspace in this physical
+            # window. Merely showing this window again cannot restore its route.
+            # Tell the caller to navigate locally rather than reporting a no-op
+            # native switch as a completed workspace transition.
+            return {"ok": True, "workspace": target, "navigation_required": True}
+        return self._workspace_controller.switch(target)
 
     def hide_pet_chat_window(self) -> dict[str, object]:
         with self._lock:
@@ -2020,203 +1792,6 @@ class DesktopBridge(UpdateBridgeMixin):
             return {**result, "visible": False}
         result = self.open_pet_chat_window()
         return {**result, "visible": bool(result.get("ok"))}
-
-    def window_control(self, action: str) -> dict[str, object]:
-        window = self._window
-        if window is None:
-            return {"ok": False, "error": "主窗口尚未就绪"}
-        if action == "minimize":
-            window.minimize()
-        elif action == "maximize":
-            native = getattr(window, "native", None)
-            handle = int(native.Handle.ToInt64()) if native is not None and os.name == "nt" else 0
-            live = bool(handle and ctypes.windll.user32.IsWindow(handle))
-            if live:
-                self._window_maximized = bool(ctypes.windll.user32.IsZoomed(handle))
-            if self._window_maximized:
-                if live:
-                    ctypes.windll.user32.ShowWindow(handle, 9)  # SW_RESTORE
-                else:
-                    window.restore()
-                if live and self._restore_bounds:
-                    ctypes.windll.user32.SetWindowPos(handle, 0, *self._restore_bounds, 0x0004 | 0x0010)
-                self._restore_bounds = None
-            else:
-                if live:
-                    rect = ctypes.wintypes.RECT()
-                    if ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(rect)):
-                        self._restore_bounds = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
-                if live:
-                    ctypes.windll.user32.ShowWindow(handle, 3)  # SW_MAXIMIZE
-                else:
-                    window.maximize()
-            self._window_maximized = not self._window_maximized
-        elif action == "close":
-            if self._hide_window is not None:
-                should_close = self._hide_window()
-                if should_close:
-                    window.destroy()
-            else:
-                window.hide()
-        else:
-            return {"ok": False, "error": "不支持的窗口操作"}
-        return {"ok": True, "maximized": self._window_maximized}
-
-    def window_drag(self) -> dict[str, object]:
-        """Queue a native move on the window's UI thread."""
-        window = self._window
-        native = getattr(window, "native", None) if window is not None else None
-        if native is None or os.name != "nt":
-            return {"ok": False, "error": "主窗口尚未就绪"}
-        handle = int(native.Handle.ToInt64())
-        # Keep the legacy non-client command for test doubles and unusual
-        # hosts that expose a handle which is not a live Win32 window.
-        if not ctypes.windll.user32.IsWindow(handle):
-            ctypes.windll.user32.ReleaseCapture()
-            ctypes.windll.user32.SendMessageW(handle, 0x00A1, 2, 0)
-            return {"ok": True}
-        if not _install_native_hit_test(handle):
-            return {"ok": False, "error": "无法初始化窗口拖动"}
-        point = ctypes.wintypes.POINT()
-        # GetCursorPos can be denied when the WebView and host run at
-        # different integrity levels. The owning window thread still has the
-        # active left-button gesture, so DefWindowProc can start the move with
-        # a zero lParam; do not turn a recoverable coordinate read into a UI
-        # error.
-        position = 0
-        if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
-            position = (point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)
-        if not ctypes.windll.user32.PostMessageW(handle, _WM_BEGIN_WINDOW_DRAG, 0, position):
-            return {"ok": False, "error": "无法启动窗口拖动"}
-        return {"ok": True}
-
-    def window_resize(self, direction: str) -> dict[str, object]:
-        window = self._window
-        native = getattr(window, "native", None) if window is not None else None
-        if native is None or os.name != "nt":
-            return {"ok": False, "error": "主窗口尚未就绪"}
-        hit_code = {
-            "left": 10,
-            "right": 11,
-            "top": 12,
-            "top-left": 13,
-            "top-right": 14,
-            "bottom": 15,
-            "bottom-left": 16,
-            "bottom-right": 17,
-        }.get(str(direction or "").lower())
-        if hit_code is None:
-            return {"ok": False, "error": "不支持的缩放方向"}
-        handle = int(native.Handle.ToInt64())
-        ctypes.windll.user32.ReleaseCapture()
-        ctypes.windll.user32.SendMessageW(handle, 0x00A1, hit_code, 0)
-        return {"ok": True}
-
-    def window_move_by(self, offset_x: float, offset_y: float,
-                       gesture_id: str, finished: bool = False) -> dict[str, object]:
-        """Move from screen-coordinate deltas without client-frame offsets."""
-        if not isinstance(gesture_id, str) or not gesture_id or len(gesture_id) > 80:
-            return {"ok": False, "error": "无效的拖动操作"}
-        try:
-            dx, dy = float(offset_x), float(offset_y)
-        except (TypeError, ValueError):
-            return {"ok": False, "error": "无效的拖动距离"}
-        if not all(math.isfinite(n) and abs(n) <= 100000 for n in (dx, dy)):
-            return {"ok": False, "error": "无效的拖动距离"}
-        native = getattr(self._window, "native", None)
-        if native is None or os.name != "nt":
-            return {"ok": False, "error": "主窗口尚未就绪"}
-        handle = int(native.Handle.ToInt64())
-        with self._lock:
-            if ctypes.windll.user32.IsZoomed(handle):
-                # BorderStyle.None cannot restore through the normal caption
-                # move loop. Restore only after real pointer motion, anchoring
-                # the normal-size window beneath the same cursor position.
-                if max(abs(dx), abs(dy)) < 4:
-                    return {"ok": True, "maximized": True}
-                rect = ctypes.wintypes.RECT()
-                point = ctypes.wintypes.POINT()
-                placement = _WindowPlacement()
-                placement.length = ctypes.sizeof(placement)
-                if not (ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(rect))
-                        and ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
-                        and ctypes.windll.user32.GetWindowPlacement(handle, ctypes.byref(placement))):
-                    return {"ok": False, "error": "无法读取窗口还原位置"}
-                normal = placement.rcNormalPosition
-                width, height = normal.right - normal.left, normal.bottom - normal.top
-                if self._restore_bounds:
-                    width, height = self._restore_bounds[2:]
-                if width <= 0 or height <= 0:
-                    return {"ok": False, "error": "窗口还原尺寸无效"}
-                scale = (ctypes.windll.user32.GetDpiForWindow(handle) or 96) / 96
-                start_x, start_y = point.x - round(dx * scale), point.y - round(dy * scale)
-                ratio = min(1.0, max(0.0, (start_x - rect.left) / max(1, rect.right - rect.left)))
-                left = start_x - round(width * ratio)
-                top = start_y - min(round(46 * scale), max(0, start_y - rect.top))
-                ctypes.windll.user32.ShowWindow(handle, 9)  # SW_RESTORE
-                ok = bool(ctypes.windll.user32.SetWindowPos(
-                    handle, 0, left + round(dx * scale), top + round(dy * scale),
-                    width, height, 0x0004 | 0x0010,
-                ))
-                self._move_gesture = None if finished else (gesture_id, left, top, scale)
-                self._window_maximized = False
-                self._restore_bounds = None
-                return {"ok": ok, **({} if ok else {"error": "窗口还原拖动失败"})}
-            if self._move_gesture is None or self._move_gesture[0] != gesture_id:
-                rect = ctypes.wintypes.RECT()
-                if not ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(rect)):
-                    return {"ok": False, "error": "无法读取窗口位置"}
-                scale = (ctypes.windll.user32.GetDpiForWindow(handle) or 96) / 96
-                self._move_gesture = (gesture_id, rect.left, rect.top, scale)
-            _, left, top, scale = self._move_gesture
-            ok = bool(ctypes.windll.user32.SetWindowPos(handle, 0, left + round(dx * scale), top + round(dy * scale), 0, 0, 0x0001 | 0x0004 | 0x0010))
-            if finished:
-                self._move_gesture = None
-        return {"ok": ok, **({} if ok else {"error": "窗口拖动失败"})}
-
-    def window_resize_by(self, direction: str, offset_x: float, offset_y: float,
-                         gesture_id: str, finished: bool = False) -> dict[str, object]:
-        """Resize from cumulative pointer offsets, independent of WebView capture."""
-        if direction not in {"left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"}:
-            return {"ok": False, "error": "不支持的缩放方向"}
-        if not isinstance(gesture_id, str) or not gesture_id or len(gesture_id) > 80:
-            return {"ok": False, "error": "无效的缩放操作"}
-        try:
-            dx, dy = float(offset_x), float(offset_y)
-        except (TypeError, ValueError):
-            return {"ok": False, "error": "无效的缩放距离"}
-        if not all(math.isfinite(n) and abs(n) <= 100000 for n in (dx, dy)):
-            return {"ok": False, "error": "无效的缩放距离"}
-        native = getattr(self._window, "native", None)
-        if native is None or os.name != "nt":
-            return {"ok": False, "error": "主窗口尚未就绪"}
-        handle = int(native.Handle.ToInt64())
-        if ctypes.windll.user32.IsZoomed(handle):
-            return {"ok": True, "ignored": True, "reason": "maximized"}
-        with self._lock:
-            if self._resize_gesture is None or self._resize_gesture[0] != gesture_id:
-                rect = ctypes.wintypes.RECT()
-                if not ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(rect)):
-                    return {"ok": False, "error": "无法读取窗口大小"}
-                scale = (ctypes.windll.user32.GetDpiForWindow(handle) or 96) / 96
-                self._resize_gesture = (gesture_id, direction, rect.left, rect.top, rect.right, rect.bottom, scale)
-            _, saved_direction, left, top, right, bottom, scale = self._resize_gesture
-            if saved_direction != direction:
-                return {"ok": False, "error": "缩放方向已改变"}
-            dx, dy = round(dx * scale), round(dy * scale)
-            min_width, min_height = (round(n * scale) for n in MAIN_WINDOW_MIN_SIZE)
-            if "left" in direction:
-                left = min(left + dx, right - min_width)
-            if "right" in direction:
-                right = max(right + dx, left + min_width)
-            if "top" in direction:
-                top = min(top + dy, bottom - min_height)
-            if "bottom" in direction:
-                bottom = max(bottom + dy, top + min_height)
-            ok = bool(ctypes.windll.user32.SetWindowPos(handle, 0, left, top, right - left, bottom - top, 0x0004 | 0x0010))
-            if finished:
-                self._resize_gesture = None
-        return {"ok": ok, **({} if ok else {"error": "调整窗口大小失败"})}
 
     def get_desktop_preferences(self) -> dict[str, object]:
         return {
@@ -2275,36 +1850,7 @@ class DesktopBridge(UpdateBridgeMixin):
 
     def select_agent_path(self, kind: str = "directory") -> dict[str, object]:
         """Only return a path/content the user selected in the native dialog."""
-        if self._window is None:
-            return {"ok": False, "error": "窗口尚未就绪。"}
-        if kind not in {"directory", "comfyui", "workflow"}:
-            return {"ok": False, "error": "不支持的选择类型。"}
-        try:
-            import webview
-            options = {"directory": str(Path.home()), "allow_multiple": False}
-            if kind == "workflow":
-                options["file_types"] = ("ComfyUI JSON (*.json)",)
-            selected = self._window.create_file_dialog(
-                webview.OPEN_DIALOG if kind == "workflow" else webview.FOLDER_DIALOG, **options)
-            if not selected:
-                return {"ok": False, "canceled": True}
-            path = Path(selected[0] if isinstance(selected, (tuple, list)) else selected).resolve(strict=True)
-            if kind == "workflow":
-                if not path.is_file() or path.suffix.lower() != ".json":
-                    raise ValueError("请选择工作流 JSON 文件。")
-                with path.open("rb") as handle:
-                    content = handle.read(2_000_001)
-                if len(content) > 2_000_000:
-                    raise ValueError("工作流不能超过 2 MB。")
-                return {"ok": True, "path": str(path), "name": path.name, "prompt": json.loads(content.decode("utf-8-sig"))}
-            if not path.is_dir():
-                raise ValueError("请选择文件夹。")
-            if kind == "comfyui":
-                from app.creation_custom import normalize_root
-                path = normalize_root(path)
-            return {"ok": True, "path": str(path)}
-        except (OSError, ValueError) as exc:
-            return {"ok": False, "error": str(exc)}
+        return select_agent_path(self._window, kind)
 
     def open_agent_conversation(self, conversation_id: str) -> dict[str, object]:
         from app.conversation_state_service import require

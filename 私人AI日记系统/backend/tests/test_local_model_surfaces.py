@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app import screen_observation_service, self_snapshot_service
-from app.routes import diary
+from app import diary_operations_service as diary
 from app.model_registry import ModelProfile
 
 

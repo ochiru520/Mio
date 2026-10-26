@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app import companion_runtime_service as companion_runtime
 
 import tempfile
 import unittest
@@ -133,17 +134,17 @@ class CallAsrSelectionTests(unittest.TestCase):
         self.assertEqual(Path(launch["vad_model"]), vad)
 
     def test_stale_resource_release_does_not_touch_new_call_owner(self) -> None:
-        previous_owner = companion_route._pet_call_resource_owner
-        companion_route._pet_call_resource_owner = "new-session"
+        previous_owner = companion_runtime._pet_call_resource_owner
+        companion_runtime._pet_call_resource_owner = "new-session"
         try:
             with (
                 patch("app.routes.companion.companion_service.window_observer.stop") as stop_observer,
                 patch("app.routes.companion.system_audio_service.stop") as stop_audio,
                 patch("app.routes.companion.system_audio_service.start") as start_audio,
             ):
-                companion_route._release_call_resources_sync("old-session")
+                companion_runtime.release_call_resources_sync("old-session")
         finally:
-            companion_route._pet_call_resource_owner = previous_owner
+            companion_runtime._pet_call_resource_owner = previous_owner
 
         stop_observer.assert_not_called()
         stop_audio.assert_not_called()

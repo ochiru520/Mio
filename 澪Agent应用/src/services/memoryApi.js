@@ -1,3 +1,4 @@
+import { selectOperation } from './apiOperations.js'
 import { apiRequest } from './api.js'
 
 export const loadMemory = () => apiRequest('/api/memory')
@@ -7,3 +8,25 @@ export const updateMemory = (id, payload) => apiRequest(`/api/memory/items/${id}
 export const deleteMemory = (id) => apiRequest(`/api/memory/items/${id}`, { method: 'DELETE' })
 export const restoreMemory = (id) => apiRequest(`/api/memory/items/${id}/restore`, { method: 'POST', body: '{}' })
 export const recordFollowUpResult = (id, payload) => apiRequest(`/api/threads/${id}/result`, { method: 'POST', body: JSON.stringify(payload) })
+
+export const submitApiThreadResolve = (threadId, options = {}, transport = apiRequest) => transport(`/api/threads/${threadId}/resolve`, { ...options, method: 'POST', body: "{}" })
+export const submitApiThreadResult = (id, payload, options = {}, transport = apiRequest) => transport(`/api/threads/${id}/result`, { ...options, method: 'POST', body: JSON.stringify(payload) })
+export const saveRuntimeSummaryByPayload = (payload, options = {}, transport = apiRequest) => transport("/api/memory/runtime-summary", { ...options, method: 'PUT', body: JSON.stringify(payload) })
+export const submitItems = (payload, options = {}, transport = apiRequest) => transport("/api/memory/items", { ...options, method: 'POST', body: JSON.stringify(payload) })
+export const deleteItem = (id, options = {}, transport = apiRequest) => transport(`/api/memory/items/${id}`, { ...options, method: 'DELETE' })
+export const submitItemRestore = (id, options = {}, transport = apiRequest) => transport(`/api/memory/items/${id}/restore`, { ...options, method: 'POST', body: "{}" })
+export const submitItemConfirm = (id, options = {}, transport = apiRequest) => transport(`/api/memory/items/${id}/confirm`, { ...options, method: 'POST', body: "{}" })
+export const submitItem = (id, action, options = {}, transport = apiRequest) => transport(`/api/memory/items/${id}/${selectOperation(action, ['sleep', 'wake'])}`, { ...options, method: 'POST', body: "{}" })
+export const submitItemReject = (id, options = {}, transport = apiRequest) => transport(`/api/memory/items/${id}/reject`, { ...options, method: 'POST', body: "{}" })
+export const saveItem = (id, payload, options = {}, transport = apiRequest) => transport(`/api/memory/items/${id}`, { ...options, method: 'PUT', body: JSON.stringify(payload) })
+export const submitApiThreads = (payload, options = {}, transport = apiRequest) => transport("/api/threads", { ...options, method: 'POST', body: JSON.stringify(payload) })
+export const saveApiThread = (id, payload, options = {}, transport = apiRequest) => transport(`/api/threads/${id}`, { ...options, method: 'PUT', body: JSON.stringify(payload) })
+export const deleteApiThread = (threadId, options = {}, transport = apiRequest) => transport(`/api/threads/${threadId}`, { ...options, method: 'DELETE' })
+export const saveConversationSummary = (payload, options = {}, transport = apiRequest) => transport("/api/memory/conversation-summary", { ...options, method: 'PUT', body: JSON.stringify(payload) })
+export const deleteConversationSummary = (conversation_id, options = {}, transport = apiRequest) => transport(`/api/memory/conversation-summary/${encodeURIComponent(conversation_id)}`, { ...options, method: 'DELETE' })
+export const submitProfileNotes = (payload, options = {}, transport = apiRequest) => transport("/api/memory/profile-notes", { ...options, method: 'POST', body: JSON.stringify(payload) })
+export const saveProfileNotes = (index, payload, options = {}, transport = apiRequest) => transport(`/api/memory/profile-notes/${index}`, { ...options, method: 'PUT', body: JSON.stringify(payload) })
+export const deleteProfileNotes = (index, options = {}, transport = apiRequest) => transport(`/api/memory/profile-notes/${index}`, { ...options, method: 'DELETE' })
+
+export const loadItemEvidence = (id, options = {}, transport = apiRequest) => transport(`/api/memory/items/${id}/evidence`, Object.keys(options).length ? options : undefined)
+export const loadMemoryResponse = (options = {}, transport = apiRequest) => transport("/api/memory", Object.keys(options).length ? options : undefined)

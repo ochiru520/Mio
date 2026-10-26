@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import db
+from .repositories import migration_repository as repository
 from .config import settings
 
 
@@ -24,28 +25,11 @@ MIGRATIONS: tuple[Migration, ...] = (
 )
 
 
-def _ensure_ledger(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            applied_at TEXT NOT NULL
-        )
-        """
-    )
-
-
 def run_migrations() -> list[dict[str, object]]:
     """Apply pending migrations transactionally and return what changed."""
     applied: list[dict[str, object]] = []
-    with db.get_conn() as conn:
-        _ensure_ledger(conn)
-        conn.commit()
-        existing = {
-            int(row["version"])
-            for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
-        }
+    with repository.ledger() as ledger:
+        existing = {int(row["version"]) for row in ledger.applied()}
         pending = [migration for migration in MIGRATIONS if migration.version not in existing]
         database_is_managed = False
         try:
@@ -59,13 +43,7 @@ def run_migrations() -> list[dict[str, object]]:
 
             create_complete_backup(kind="migration", reason="数据库迁移前自动创建")
         for migration in pending:
-            with conn:
-                migration.apply(conn)
-                applied_at = db.now_iso()
-                conn.execute(
-                    "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
-                    (migration.version, migration.name, applied_at),
-                )
+            applied_at = ledger.apply(migration, db.now_iso)
             applied.append(
                 {
                     "version": migration.version,
@@ -77,11 +55,8 @@ def run_migrations() -> list[dict[str, object]]:
 
 
 def migration_status() -> dict[str, object]:
-    with db.get_conn() as conn:
-        _ensure_ledger(conn)
-        rows = conn.execute(
-            "SELECT version, name, applied_at FROM schema_migrations ORDER BY version"
-        ).fetchall()
+    with repository.ledger() as ledger:
+        rows = ledger.applied()
     applied = [dict(row) for row in rows]
     applied_versions = {int(item["version"]) for item in applied}
     pending = [

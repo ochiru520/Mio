@@ -5,9 +5,9 @@ from pathlib import Path
 import shutil
 import tempfile
 import uuid
-from contextlib import closing
 from typing import Any
 
+from .repositories import conversation_service_repository as repository
 from . import db
 from .config import settings
 
@@ -170,11 +170,10 @@ def public_messages(rows: list[object]) -> list[dict[str, object]]:
     runs = db.get_agent_runs_by_requests(request_ids)
     runs_by_request = {str(run["request_id"] or ""): run for run in runs}
     task_ids = {}
-    with closing(db.get_conn()) as conn:
-        if runs and conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_task_runs'").fetchone():
+    with repository.read() as conn:
+        if runs and conn.public_messages_find_sqlite_master():
             run_ids=[str(r['run_id']) for r in runs]
-            task_ids={r['run_id']:r['task_id'] for r in conn.execute(
-                'SELECT run_id,task_id FROM agent_task_runs WHERE run_id IN ('+','.join('?' for _ in run_ids)+')',run_ids)}
+            task_ids={r['run_id']:r['task_id'] for r in conn.public_messages_find_agent_task_runs(run_ids, run_ids)}
     steps_by_run: dict[str, list[object]] = {}
     for step in db.list_agent_run_steps_many([str(run["run_id"] or "") for run in runs]):
         steps_by_run.setdefault(str(step["run_id"] or ""), []).append(step)

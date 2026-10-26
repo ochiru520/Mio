@@ -1,3 +1,4 @@
+from ..repositories import wechat_attachment_repository as repository
 """Local settings endpoints; protected by the application's existing API guard."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -52,15 +53,13 @@ async def forget():
 
 @router.get('/attachments/{attachment_id}')
 def attachment(attachment_id: str):
-    from contextlib import closing
     from pathlib import Path
     import hashlib
     import re
     from .. import db, mobile_file_service
     if not re.fullmatch(r'phonefile_[a-f0-9]{32}', attachment_id):
         raise HTTPException(404, '没有找到微信附件。')
-    with closing(db.get_conn()) as conn:
-        row = conn.execute("SELECT * FROM mobile_task_attachments WHERE id=? AND self_id LIKE 'wechat:%'", (attachment_id,)).fetchone()
+    row = repository.attachment(attachment_id)
     if row is None:
         raise HTTPException(404, '没有找到微信附件。')
     path = Path(row['path']).resolve()

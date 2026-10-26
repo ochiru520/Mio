@@ -1,49 +1,30 @@
 from __future__ import annotations
+from ..repositories import diary_export_repository as repository
 
 import html
 import io
-import re
 import zipfile
 import difflib
-from datetime import date as date_cls
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from .. import db
-from ..model_runtime import operation
 from ..config import settings
-from ..llm import LLMConfigError, call_chat_completion
 from ..life_loop_service import diary_lifecycle
 from ..markdown_rendering import render_safe_markdown
-from ..model_registry import list_model_profiles
-from ..provider_compat import model_connection_configured
-from ..prompts import build_diary_edit_messages, build_diary_messages
 from ..web import templates
+from ..diary_dates import normalize_diary_date
+from ..diary_operations_service import (
+    DAILY_THIRTY_STATUS_OPTIONS, generate_today_diary_payload, save_diary_markdown,
+)
+from ..http_service_errors import service_errors_to_http, validated_diary_date
 
 
 router = APIRouter()
 
-DAILY_THIRTY_STATUS_OPTIONS = {"done", "partial", "missed", "unknown"}
-DIARY_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MAX_DIARY_EXPORT_BYTES = 100 * 1024 * 1024
-
-
-def normalize_diary_date(value: str) -> str:
-    if not DIARY_DATE_RE.fullmatch(str(value or "")):
-        raise ValueError("日记日期格式应为 YYYY-MM-DD。")
-    try:
-        return date_cls.fromisoformat(value).isoformat()
-    except ValueError as exc:
-        raise ValueError("日记日期无效。") from exc
-
-
-def _validated_diary_date(value: str) -> str:
-    try:
-        return normalize_diary_date(value)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _diary_export_entries(rows) -> list[tuple[str, str]]:
@@ -62,24 +43,6 @@ def _diary_export_entries(rows) -> list[tuple[str, str]]:
     return entries
 
 
-def _diary_model_id() -> str:
-    """Resolve the configured default profile instead of sending an empty ID."""
-    profiles = [profile for profile in list_model_profiles() if model_connection_configured(profile)]
-    from ..model_runtime import model_selection
-    requested, _ = model_selection("record")
-    if requested and requested != "auto":
-        selected = next((profile for profile in profiles if profile.id == requested), None)
-        if selected is None:
-            raise LLMConfigError("日记专用模型不可用，请在日记设置中重新选择模型并检查服务地址、启动状态或鉴权。")
-        return selected.id
-    selected = next((profile for profile in profiles if profile.is_default), None)
-    if selected is None and profiles:
-        selected = profiles[0]
-    if selected is None:
-        raise LLMConfigError("没有可用的默认模型，请先在模型设置中配置一个模型。")
-    return selected.id
-
-
 class DiaryUpdateRequest(BaseModel):
     markdown_content: str
     mood_tags: str = ""
@@ -94,152 +57,6 @@ class DiaryConfirmRequest(BaseModel):
 
 class DiaryRestoreRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=1)
-
-
-def _chat_log_for_rows(rows) -> str:
-    parts: list[str] = []
-    for row in rows:
-        speaker = "用户" if row["role"] == "user" else "AI"
-        parts.append(f"[{row['created_at']}] {speaker}：{row['content']}")
-    return "\n\n".join(parts)
-
-
-def _material_log_for_rows(rows) -> str:
-    return "\n".join(f"- {row['content']}" for row in rows)
-
-
-TAGS_LINE_RE = re.compile(r"^\s*标签[：:]\s*(.+?)\s*$", re.M)
-
-
-def _extract_tags(markdown_content: str) -> tuple[str, str]:
-    """把日记末尾的“标签：xxx、yyy”行提取成 mood_tags，并从正文中移除。"""
-    match = TAGS_LINE_RE.search(markdown_content)
-    if not match:
-        return markdown_content, ""
-    raw = match.group(1)
-    normalized = raw.replace("，", "、").replace(",", "、").replace(" ", "")
-    tags = [tag for tag in normalized.split("、") if tag][:4]
-    cleaned = TAGS_LINE_RE.sub("", markdown_content).strip()
-    return cleaned, "、".join(tags)
-
-
-def _extract_title(date: str, markdown_content: str) -> str:
-    for line in markdown_content.splitlines():
-        match = re.match(r"^#\s+(.+)$", line.strip())
-        if match:
-            return match.group(1).strip()
-    return f"{date} 日记"
-
-
-def _extract_daily_thirty_status(markdown_content: str) -> str:
-    text = markdown_content.strip()
-    patterns = [
-        r"(?:每日三十|今日成长)[\s\S]{0,160}?状态[：:]\s*([^\n\r。；;，,]+)",
-        r"状态[：:]\s*(完成|已完成|部分完成|部分|未完成|没完成|未确认|未判定|done|partial|missed|unknown)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.I)
-        if not match:
-            continue
-        raw_value = match.group(1).strip().lower()
-        if any(label in raw_value for label in ("未完成", "没完成", "missed")):
-            return "missed"
-        if any(label in raw_value for label in ("部分完成", "部分", "partial")):
-            return "partial"
-        if any(label in raw_value for label in ("未确认", "未判定", "unknown")):
-            return "unknown"
-        if any(label in raw_value for label in ("已完成", "完成", "done")):
-            return "done"
-    return "unknown"
-
-
-def _resolve_daily_thirty_status(date: str, markdown_content: str) -> str:
-    state = db.get_daily_state(date)
-    if state and state["daily_thirty_status"] in DAILY_THIRTY_STATUS_OPTIONS - {"unknown"}:
-        return state["daily_thirty_status"]
-
-    markdown_status = _extract_daily_thirty_status(markdown_content)
-    if markdown_status != "unknown":
-        return markdown_status
-
-    if state and state["daily_thirty_status"] in DAILY_THIRTY_STATUS_OPTIONS:
-        return state["daily_thirty_status"]
-    return "unknown"
-
-
-def save_diary_markdown(
-    date: str,
-    markdown_content: str,
-    mood_tags: str = "",
-    daily_thirty_status: str | None = None,
-    confirmed_at: str | None = None,
-    expected_revision: int | None = None,
-    change_reason: str = "",
-    restored_title: str | None = None,
-) -> dict[str, str]:
-    date = normalize_diary_date(date)
-    markdown_content = markdown_content.strip()
-    if not markdown_content:
-        raise HTTPException(status_code=400, detail="日记内容不能为空。")
-
-    effective_status = daily_thirty_status or _resolve_daily_thirty_status(date, markdown_content)
-    if effective_status not in DAILY_THIRTY_STATUS_OPTIONS:
-        raise HTTPException(status_code=400, detail="每日三十状态无效。")
-
-    title = restored_title if restored_title is not None else _extract_title(date, markdown_content)
-    try:
-        revision = db.upsert_diary(
-            date, title, markdown_content, mood_tags.strip(), effective_status,
-            confirmed_at, expected_revision=expected_revision, change_reason=change_reason,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    # A diary revision changes the evidence behind reminders and facts. Mark
-    # linked follow-ups stale so the next interaction must re-check the text.
-    try:
-        db.mark_pending_thread_source_stale("diary", date, revision)
-    except Exception:
-        pass
-    diary_path = settings.diary_dir / f"{date}.md"
-    try:
-        diary_path.write_text(markdown_content, encoding="utf-8")
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"日记文件保存失败：{exc}") from exc
-    return {
-        "date": date,
-        "title": title,
-        "path": str(diary_path),
-        "daily_thirty_status": effective_status,
-        "revision": revision,
-    }
-
-
-@operation("record", automatic=True)
-async def edit_diary_with_instruction(date: str, instruction: str) -> dict[str, str]:
-    date = normalize_diary_date(date)
-    diary = db.get_diary(date)
-    if diary is None:
-        raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
-
-    messages = build_diary_edit_messages(date, diary["markdown_content"], instruction.strip())
-    try:
-        markdown_content = await call_chat_completion(messages, temperature=0.25)
-    except LLMConfigError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    markdown_content, edited_tags = _extract_tags(markdown_content)
-    result = save_diary_markdown(
-        date,
-        markdown_content,
-        edited_tags or diary["mood_tags"],
-        _resolve_daily_thirty_status(date, markdown_content),
-        diary["confirmed_at"],
-        change_reason="AI 按指令编辑",
-    )
-    result["markdown"] = markdown_content
-    return result
 
 
 @router.get("/diaries", response_class=HTMLResponse)
@@ -284,7 +101,7 @@ def _photos_for_date(date: str) -> list[str]:
 
 @router.get("/diaries/{date}", response_class=HTMLResponse)
 async def diary_detail_page(request: Request, date: str):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     diary = db.get_diary(date)
     if diary is None:
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
@@ -305,7 +122,7 @@ async def diary_detail_page(request: Request, date: str):
 
 @router.get("/diaries/{date}/download")
 async def download_diary(date: str):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     diary = db.get_diary(date)
     if diary is None:
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
@@ -319,7 +136,7 @@ async def download_diary(date: str):
 
 @router.get("/diaries/{date}/edit", response_class=HTMLResponse)
 async def diary_edit_page(request: Request, date: str):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     diary = db.get_diary(date)
     if diary is None:
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
@@ -341,77 +158,9 @@ async def diary_edit_page(request: Request, date: str):
 
 
 @router.post("/api/diary/generate-today")
+@service_errors_to_http
 async def generate_today_diary():
     return await generate_today_diary_payload()
-
-
-async def generate_today_diary_payload() -> dict[str, str]:
-    return await generate_diary_for_date_payload(db.today_string(), overwrite=True)
-
-
-@operation("record", automatic=True)
-async def generate_diary_for_date_payload(date: str, overwrite: bool = True) -> dict[str, str]:
-    from ..agent_task_service import automatic_work_paused
-    if automatic_work_paused():
-        raise HTTPException(status_code=409, detail="隐私暂停中，日记生成已停止。")
-    date = normalize_diary_date(date)
-    existing = db.get_diary(date)
-    if existing is not None and not overwrite:
-        return {
-            "date": date,
-            "title": existing["title"],
-            "path": str(settings.diary_dir / f"{date}.md"),
-            "daily_thirty_status": existing["daily_thirty_status"],
-            "overwritten": False,
-            "skipped": True,
-        }
-
-    rows = db.get_today_messages(date)
-    materials = db.list_diary_materials(date)
-    if not rows and not materials:
-        raise HTTPException(status_code=400, detail=f"{date} 还没有聊天记录或日记素材。")
-
-    chat_log = _chat_log_for_rows(rows)
-    material_log = _material_log_for_rows(materials)
-    if material_log:
-        chat_log = f"{chat_log}\n\n[日记素材暂存箱]\n{material_log}" if chat_log else f"[日记素材暂存箱]\n{material_log}"
-    state_row = db.get_daily_state(date)
-    daily_state = dict(state_row) if state_row is not None else None
-    messages = build_diary_messages(date, chat_log, daily_state)
-
-    try:
-        markdown_content = await call_chat_completion(
-            messages,
-            temperature=0.4,
-            model_id=_diary_model_id(),
-            reasoning_level="medium",
-        )
-    except LLMConfigError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    if automatic_work_paused():
-        raise HTTPException(status_code=409, detail="隐私暂停中，日记生成已停止。")
-    # A manual save may have completed while the model request was awaiting.
-    # No await is allowed between this check and the synchronous save below.
-    if not overwrite and db.get_diary(date) is not None:
-        return {"date": date, "skipped": True, "overwritten": False}
-    markdown_content, auto_tags = _extract_tags(markdown_content)
-    result = save_diary_markdown(
-        date,
-        markdown_content,
-        auto_tags,
-        _resolve_daily_thirty_status(date, markdown_content),
-        "",
-        change_reason="AI 自动生成",
-    )
-    db.mark_materials_used(date)
-    result["overwritten"] = existing is not None
-    result["skipped"] = False
-    result["markdown"] = markdown_content
-
-    return result
 
 
 @router.get("/api/diaries")
@@ -432,8 +181,9 @@ async def retry_automatic_diary():
 
 
 @router.put("/api/diaries/{date}")
+@service_errors_to_http
 async def api_update_diary(date: str, payload: DiaryUpdateRequest):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     diary = db.get_diary(date)
     if diary is None:
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
@@ -456,7 +206,7 @@ async def api_update_diary(date: str, payload: DiaryUpdateRequest):
 
 @router.get("/api/diaries/{date}")
 async def api_get_diary(date: str):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     diary = db.get_diary(date)
     if diary is None:
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
@@ -471,7 +221,7 @@ async def api_get_diary(date: str):
 
 @router.get("/api/diaries/{date}/versions")
 async def api_list_diary_versions(date: str):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     if db.get_diary(date) is None:
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
     return {"date": date, "versions": [dict(item) for item in db.list_diary_versions(date)]}
@@ -479,7 +229,7 @@ async def api_list_diary_versions(date: str):
 
 @router.get("/api/diaries/{date}/versions/{revision}/diff")
 async def api_diff_diary_version(date: str, revision: int):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     version = db.get_diary_version(date, revision)
     current = db.get_diary(date)
     if version is None or current is None:
@@ -493,8 +243,9 @@ async def api_diff_diary_version(date: str, revision: int):
 
 
 @router.post("/api/diaries/{date}/versions/{revision}/restore")
+@service_errors_to_http
 async def api_restore_diary_version(date: str, revision: int, payload: DiaryRestoreRequest = DiaryRestoreRequest()):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     if revision < 1:
         raise HTTPException(status_code=400, detail="日记版本无效。")
     version = db.get_diary_version(date, revision)
@@ -511,7 +262,7 @@ async def api_restore_diary_version(date: str, revision: int, payload: DiaryRest
 
 @router.post("/api/diaries/{date}/confirm")
 async def api_confirm_diary(date: str, payload: DiaryConfirmRequest):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     confirmed_at = db.set_diary_confirmed(date, payload.confirmed)
     if confirmed_at is None:
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
@@ -524,7 +275,7 @@ async def api_confirm_diary(date: str, payload: DiaryConfirmRequest):
 
 @router.delete("/api/diaries/{date}")
 async def api_delete_diary(date: str):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     diary = db.get_diary(date)
     if diary is None:
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
@@ -571,16 +322,8 @@ async def export_month_diaries(year: int, month: int):
     date_pattern = f"{year:04d}-{month:02d}-%"
 
     # 查询该月所有日记
-    with db.get_conn() as conn:
-        diaries = conn.execute(
-            """
-            SELECT date, markdown_content
-            FROM diaries
-            WHERE date LIKE ?
-            ORDER BY date
-            """,
-            (date_pattern,),
-        ).fetchall()
+    with repository.transaction() as conn:
+        diaries = conn.month_diaries((date_pattern,)).fetchall()
 
     if not diaries:
         raise HTTPException(status_code=404, detail="该月没有找到任何日记。")

@@ -1,3 +1,5 @@
+
+import * as modelProvidersApi from '../services/modelProvidersApi.js'
 /** ModelProviders operations. Reactive values and cross-domain callbacks are explicitly injected.
  * This module owns behavior, not application-global mutable state.
  * Dependencies are accessors so async callbacks see the latest state.
@@ -16,7 +18,7 @@ export function useModelProviders(deps) {
       model: '',
       base_url: '',
       api_key: '',
-      supports_vision: false,
+      supports_vision: true,
       supports_tool_calls: true,
       cached_input_price_cny_per_million: 0,
       input_price_cny_per_million: 0,
@@ -87,9 +89,7 @@ export function useModelProviders(deps) {
         input_price_cny_per_million: deps.providerForm.value.input_price_cny_per_million,
         output_price_cny_per_million: deps.providerForm.value.output_price_cny_per_million,
       }]
-      const created = await deps.request('/api/agent/providers', {
-        method: 'POST',
-        body: JSON.stringify({
+      const created = await modelProvidersApi.submitProviders({
           provider_name: deps.providerForm.value.provider_name,
           provider_kind: deps.providerForm.value.provider_kind,
           provider_protocol: deps.providerForm.value.provider_protocol,
@@ -103,7 +103,7 @@ export function useModelProviders(deps) {
             family_name: item.family_name || item.model,
             variant_name: item.variant_name || '',
             model: item.model,
-            supports_vision: Boolean(item.supports_vision ?? deps.providerForm.value.supports_vision),
+            supports_vision: true,
             supports_tool_calls: deps.providerForm.value.provider_kind === 'local'
               ? deps.providerForm.value.supports_tool_calls !== false && item.supports_tool_calls !== false
               : item.supports_tool_calls ?? null,
@@ -114,8 +114,7 @@ export function useModelProviders(deps) {
             pricing_source: item.pricing_source || '',
             api_mode: item.api_mode || '',
           })),
-        }),
-      })
+        }, {}, deps.request)
       const lastModel = created.models?.at(-1)
       if (!lastModel) throw new Error('供应商没有保存任何模型。')
       notifyModelCatalogChanged()
@@ -136,17 +135,14 @@ export function useModelProviders(deps) {
     deps.providerDiscoveryWarning.value = ''
     deps.providerDiscoveryMeta.value = null
     try {
-      const data = await deps.request('/api/agent/models/discover', {
-        method: 'POST',
-        body: JSON.stringify({
+      const data = await modelProvidersApi.submitModelsDiscover({
           base_url: deps.providerForm.value.base_url,
           api_key: deps.providerForm.value.api_key,
           provider_kind: deps.providerForm.value.provider_kind,
           provider_protocol: deps.providerForm.value.provider_protocol,
           default_api_mode: deps.providerForm.value.default_api_mode,
           preset_id: deps.providerForm.value.preset_id,
-        }),
-      })
+        }, {}, deps.request)
       let localModelSelected = false
       deps.discoveredModels.value = (data.models || []).map((model) => {
         const selected = model.api_supported !== false && (deps.providerForm.value.provider_kind === 'local'
@@ -197,7 +193,7 @@ export function useModelProviders(deps) {
     deps.providerBusy.value = true
     deps.errorMessage.value = ''
     try {
-      await deps.request(`/api/agent/models/${encodeURIComponent(model.id)}`, { method: 'DELETE' })
+      await modelProvidersApi.deleteModel(model.id, {}, deps.request)
       if (deps.selectedModel.value === model.id) deps.selectedModel.value = 'auto'
       deps.persistSelectedModel()
       notifyModelCatalogChanged()
@@ -223,7 +219,7 @@ export function useModelProviders(deps) {
     deps.providerBusy.value = true
     deps.errorMessage.value = ''
     try {
-      const result = await deps.request(`/api/agent/providers/${encodeURIComponent(group.provider_id)}`, { method: 'DELETE' })
+      const result = await modelProvidersApi.deleteProvider(group.provider_id, {}, deps.request)
       const deletedIds = new Set(result.deleted_model_ids || group.models.map((model) => model.id))
       if (deletedIds.has(deps.selectedModel.value)) deps.selectedModel.value = 'auto'
       deps.persistSelectedModel()
@@ -242,10 +238,7 @@ export function useModelProviders(deps) {
     deps.providerBusy.value = true
     deps.errorMessage.value = ''
     try {
-      await deps.request(`/api/agent/providers/${encodeURIComponent(provider.provider_id)}/restore`, {
-        method: 'POST',
-        body: '{}',
-      })
+      await modelProvidersApi.submitProviderRestore(provider.provider_id, {}, deps.request)
       notifyModelCatalogChanged()
       await deps.loadBootstrap({ quiet: true })
       deps.showSettingsFeedback('models', 'success', `已恢复内置供应商“${provider.display_name}”`)
@@ -260,10 +253,7 @@ export function useModelProviders(deps) {
     deps.modelTestBusy.value = model.id
     deps.modelTestStatus.value = { ...deps.modelTestStatus.value, [model.id]: { state: 'testing', text: '测试中' } }
     try {
-      const result = await deps.request(`/api/agent/models/${encodeURIComponent(model.id)}/test`, {
-        method: 'POST',
-        body: '{}',
-      })
+      const result = await modelProvidersApi.submitModelTest(model.id, {}, deps.request)
       deps.modelTestStatus.value = { ...deps.modelTestStatus.value, [model.id]: { state: 'success', text: result.message } }
     } catch (error) {
       deps.modelTestStatus.value = { ...deps.modelTestStatus.value, [model.id]: { state: 'error', text: deps.modelRequestError(error) } }

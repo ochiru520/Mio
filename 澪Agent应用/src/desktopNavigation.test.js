@@ -2,79 +2,78 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { useDesktopNavigation } from './composables/useDesktopNavigation.js'
 
-function createHarness({ url = 'http://localhost/?workspace=agent&conversation_id=agent-1', switcher } = {}) {
-  const values = new Map()
-  const assigned = []
-  const windowMock = {
-    location: {
-      href: url,
-      get search() { return new URL(this.href).search },
-      get pathname() { return new URL(this.href).pathname },
-      get hash() { return new URL(this.href).hash },
-    },
-    pywebview: switcher ? { api: { switch_workspace: switcher } } : undefined,
-    setTimeout,
-    clearTimeout,
-    history: { replaceState() {} },
-  }
-  Object.defineProperty(windowMock.location, 'href', {
-    get() { return this._href ?? url },
-    set(value) { this._href = value; assigned.push(value) },
-    configurable: true,
-  })
-  const previousWindow = globalThis.window
-  const previousStorage = globalThis.localStorage
-  globalThis.window = windowMock
-  globalThis.localStorage = {
-    getItem: key => values.has(key) ? values.get(key) : null,
-    setItem: (key, value) => values.set(key, String(value)),
-    removeItem: key => values.delete(key),
-  }
-  const deps = {
-    errorMessage: { value: '' },
-    workspaceSwitchTimeoutMs: 10,
-  }
-  return {
-    navigation: useDesktopNavigation(deps),
-    assigned,
-    values,
-    cleanup() {
-      if (previousWindow === undefined) delete globalThis.window
-      else globalThis.window = previousWindow
-      if (previousStorage === undefined) delete globalThis.localStorage
-      else globalThis.localStorage = previousStorage
-    },
-  }
+function navigation(switcher, timeoutMs = 1800) {
+  const location = { href: 'http://127.0.0.1:1420/?workspace=agent&conversation_id=agent-thread&view=projects&settings-section=budget' }
+  const timers = new Map()
+  let nextTimer = 0
+  const stored = new Map()
+  globalThis.localStorage = { setItem(key, value) { stored.set(key, String(value)) }, getItem(key) { return stored.get(key) ?? null } }
+  globalThis.window = { location, setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id }, clearTimeout(id) { timers.delete(id) }, pywebview: switcher === undefined ? undefined : { api: { switch_workspace: switcher } } }
+  const api = useDesktopNavigation({ errorMessage: { value: '' }, workspaceSwitchTimeoutMs: timeoutMs })
+  return { api, location, stored, fireTimers: () => { for (const callback of timers.values()) callback() } }
 }
 
-test('returning from Agent requests the main chat before focusing the main window', async () => {
-  let calledWith
-  const harness = createHarness({ switcher: async target => { calledWith = target; return { ok: true } } })
-  try {
-    await harness.navigation.switchDesktopWorkspace('main')
-    assert.equal(calledWith, 'main')
-    assert.ok(harness.values.get('mio_return_to_chat'))
-    assert.equal(harness.assigned.length, 0)
-  } finally { harness.cleanup() }
+test('returning to Mio falls back to the main chat when the desktop bridge rejects', async () => {
+  const { api, location, stored } = navigation(async () => { throw new Error('bridge unavailable') })
+  await api.switchDesktopWorkspace('main')
+  const target = new URL(location.href)
+  assert.equal(target.searchParams.has('workspace'), false)
+  assert.equal(target.searchParams.has('conversation_id'), false)
+  assert.equal(target.searchParams.has('view'), false)
+  assert.equal(target.searchParams.has('settings-section'), false)
+  assert.equal(target.searchParams.get('mio_return'), 'chat')
+  assert.ok(stored.get('mio_return_to_chat'))
 })
 
-test('bridge failure falls back to the Mio chat route and drops Agent conversation identity', async () => {
-  const harness = createHarness({ switcher: async () => ({ ok: false, error: 'unavailable' }) })
-  try {
-    await harness.navigation.switchDesktopWorkspace('main')
-    const next = new URL(harness.assigned[0])
-    assert.equal(next.searchParams.get('mio_return'), 'chat')
-    assert.equal(next.searchParams.has('workspace'), false)
-    assert.equal(next.searchParams.has('conversation_id'), false)
-    assert.ok(harness.values.get('mio_return_to_chat'))
-  } finally { harness.cleanup() }
+test('returning to Mio falls back when the desktop bridge reports a failed switch', async () => {
+  const { api, location } = navigation(async () => ({ ok: false, error: 'main window unavailable' }))
+  await api.switchDesktopWorkspace('main')
+  assert.equal(new URL(location.href).searchParams.get('mio_return'), 'chat')
 })
 
-test('hung workspace bridge falls back after its timeout', async () => {
-  const harness = createHarness({ switcher: () => new Promise(() => {}) })
-  try {
-    await harness.navigation.switchDesktopWorkspace('main')
-    assert.equal(harness.assigned.length, 1)
-    assert.equal(new URL(harness.assigned[0]).searchParams.get('mio_return'), 'chat')
-  } finally { harness.cleanup() }
+test('returning to Mio falls back when the desktop bridge never responds', async () => {
+  const { api, location, fireTimers } = navigation(() => new Promise(() => {}))
+  const switching = api.switchDesktopWorkspace('main')
+  await new Promise(resolve => setImmediate(resolve))
+  fireTimers()
+  await switching
+  const target = new URL(location.href)
+  assert.equal(target.searchParams.has('workspace'), false)
+  assert.equal(target.searchParams.get('mio_return'), 'chat')
+})
+
+test('successful desktop switches keep the existing main window and URL unchanged', async () => {
+  let target = ''
+  const original = 'http://127.0.0.1:1420/?workspace=agent&conversation_id=agent-thread'
+  const { api, location } = navigation(async value => { target = value; return { ok: true, workspace: value } })
+  location.href = original
+  await api.switchDesktopWorkspace('main')
+  assert.equal(target, 'main')
+  assert.equal(location.href, original)
+})
+
+test('returning from Agent displayed in the physical Mio window navigates to chat', async () => {
+  const { api, location } = navigation(async target => ({ ok: true, workspace: target, navigation_required: true }))
+  await api.switchDesktopWorkspace('main')
+  const next = new URL(location.href)
+  assert.equal(next.searchParams.has('workspace'), false)
+  assert.equal(next.searchParams.has('conversation_id'), false)
+  assert.equal(next.searchParams.get('mio_return'), 'chat')
+})
+
+test('returning to Agent in its physical window reopens its own conversation selection', async () => {
+  const { api, location } = navigation(async target => ({ ok: true, workspace: target, navigation_required: true }))
+  location.href = 'http://127.0.0.1:1420/?conversation_id=desktop_pet&mio_return=chat'
+  await api.switchDesktopWorkspace('agent')
+  const next = new URL(location.href)
+  assert.equal(next.searchParams.get('workspace'), 'agent')
+  assert.equal(next.searchParams.has('conversation_id'), false)
+})
+
+test('missing or mismatched host acknowledgements cannot silently strand the user', async () => {
+  for (const result of [undefined, {}, { ok: true }, { ok: true, workspace: 'agent' }]) {
+    const { api, location } = navigation(async () => result)
+    await api.switchDesktopWorkspace('main')
+    assert.equal(new URL(location.href).searchParams.get('mio_return'), 'chat')
+  }
 })

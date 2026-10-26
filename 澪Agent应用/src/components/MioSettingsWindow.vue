@@ -1,7 +1,9 @@
 <script setup>
+import * as chatApi from '../services/chatApi.js'
+
 import appMetadata from '../../package.json' with { type: 'json' }
 import { computed, inject, ref, watch, onBeforeUnmount, nextTick } from 'vue'
-import { ArrowLeft, Search, Code2, Gauge, FolderKey, Workflow, Wrench, Image, ShieldCheck, BarChart3, BookOpen, Globe, Sparkles, Brain, ListChecks } from '@lucide/vue'
+import { ArrowLeft, Search, Code2, Gauge, FolderKey, Workflow, Wrench, Image, ShieldCheck, BarChart3, BookOpen, Globe, Sparkles, Brain, ListChecks } from '../icons/index.js'
 import SettingsPage from './SettingsPage.vue'
 import AgentTaskSettings from './AgentTaskSettings.vue'
 import AgentCreationSettings from './AgentCreationSettings.vue'
@@ -25,8 +27,7 @@ const developmentConversationId = computed(() => {
 async function openDevelopmentConversation(id) {
   if (!id || !chat) return
   if (!chat.conversations?.some(item => item.id === id && item.kind === 'agent')) {
-    const { apiRequest } = await import('../services/api.js')
-    chat.conversations = (await apiRequest('/api/agent/conversations')).filter(item => item.kind === 'agent')
+    chat.conversations = (await chatApi.loadConversations({})).filter(item => item.kind === 'agent')
   }
   if (!chat.conversations?.some(item => item.id === id && item.kind === 'agent')) throw new Error('开发对话不存在，请重新读取任务。')
   await chat.selectConversation(id)

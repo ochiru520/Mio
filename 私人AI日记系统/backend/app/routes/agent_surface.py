@@ -1,11 +1,11 @@
 """Shared persisted presentation images; no conversation or model credentials."""
+from ..repositories import agent_surface_repository as repository
 import base64
 import io
 import json
 import threading
 import uuid
 from functools import wraps
-from contextlib import closing
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -26,14 +26,14 @@ router = APIRouter(prefix='/api/agent/surface', tags=['agent-surface'])
 
 
 def _initialize():
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS agent_surface_preferences(id INTEGER PRIMARY KEY CHECK(id=1), preferences_json TEXT NOT NULL DEFAULT '{}')")
+    with repository.transaction() as conn:
+        conn.create_preferences()
 
 
 def preferences():
     _initialize()
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT preferences_json FROM agent_surface_preferences WHERE id=1').fetchone()
+    with repository.read() as conn:
+        row = conn.preferences().fetchone()
     result = json.loads(row[0]) if row else {}
     return {'hero_shape': 'original', **result, 'hero_url': '/api/agent/surface/images/hero' if result.get('hero_custom') else '',
             'personal_url': '/api/agent/surface/images/personal' if result.get('personal_custom') else ''}
@@ -53,8 +53,8 @@ def _save(values):
     result = preferences()
     result.pop('hero_url', None); result.pop('personal_url', None)
     result.update(values)
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('INSERT OR REPLACE INTO agent_surface_preferences VALUES(1,?)', (json.dumps(result, ensure_ascii=False),))
+    with repository.transaction() as conn:
+        conn.save_preferences((json.dumps(result, ensure_ascii=False),))
     return preferences()
 
 

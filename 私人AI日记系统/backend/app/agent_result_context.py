@@ -1,7 +1,8 @@
 """Bounded model views of durable tool results; the full result remains readable."""
-from contextlib import closing
 import hashlib
 import json
+
+from .repositories import agent_result_context_repository as repository
 
 from . import db
 
@@ -100,16 +101,13 @@ def read(task_id, *, step_id=0, offset=0, max_chars=12000, after_id=0, limit=30)
         raise ValueError('回读需要当前来源任务。')
     offset, max_chars = max(0, int(offset)), max(100, min(int(max_chars), 16000))
     limit = max(1, min(int(limit), 50))
-    with closing(db.get_conn()) as conn:
+    with repository.unit_of_work(write=False) as conn:
         if step_id:
-            row = conn.execute('''SELECT s.* FROM agent_run_steps s JOIN agent_task_runs r ON r.run_id=s.run_id
-                WHERE r.task_id=? AND s.id=? AND s.step_kind='tool_call' ''', (task_id, step_id)).fetchone()
+            row = conn.tool_result_step((task_id, step_id))
             if row is None:
                 raise ValueError('工具结果不存在或不属于当前任务。')
         else:
-            rows = conn.execute('''SELECT s.id,s.run_id,s.tool_name,s.status,s.error FROM agent_run_steps s
-                JOIN agent_task_runs r ON r.run_id=s.run_id WHERE r.task_id=? AND s.step_kind='tool_call' AND s.id>?
-                ORDER BY s.id LIMIT ?''', (task_id, max(0,int(after_id)), limit+1)).fetchall()
+            rows = conn.tool_result_index((task_id, max(0,int(after_id)), limit+1))
             return {'results': [dict(row) for row in rows[:limit]], 'has_more': len(rows)>limit,
                     'next_id': rows[min(limit,len(rows))-1]['id'] if rows else after_id}
     payload = json.loads(row['result_json'] or '{}')

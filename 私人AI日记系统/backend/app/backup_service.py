@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import shutil
-import sqlite3
 import tempfile
 import threading
 import zipfile
@@ -14,6 +13,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from . import db
+from .repositories import backup_repository as repository
 from .config import settings
 
 
@@ -83,26 +83,12 @@ def _backup_dir() -> Path:
 
 def _snapshot_database(target: Path) -> None:
     _checkpoint_database()
-    source = db.get_conn()
-    dest = sqlite3.connect(target)
-    try:
-        source.backup(dest)
-    finally:
-        dest.close()
-        source.close()
+    repository.snapshot(target)
 
 
 def _checkpoint_database() -> None:
     """Flush SQLite WAL pages before a backup or restore touches the DB files."""
-    connection = db.get_conn()
-    try:
-        result = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        # A busy checkpoint is not fatal when sqlite's online backup can still
-        # obtain a consistent snapshot, but make a passive retry explicit.
-        if result and int(result[0] or 0) != 0:
-            connection.execute("PRAGMA wal_checkpoint(PASSIVE)")
-    finally:
-        connection.close()
+    repository.checkpoint()
 
 
 def _sha256(path: Path) -> str:
@@ -545,13 +531,7 @@ def _replace_from_staging(staging: Path, manifest: dict[str, object]) -> None:
             raise ValueError(f"恢复路径越界：{name}")
         target.parent.mkdir(parents=True, exist_ok=True)
         if name == DATABASE_ARCHIVE_PATH:
-            source_conn = sqlite3.connect(source)
-            target_conn = db.get_conn()
-            try:
-                source_conn.backup(target_conn)
-            finally:
-                target_conn.close()
-                source_conn.close()
+            repository.restore(source)
             _checkpoint_database()
             continue
         temporary = target.with_name(f".{target.name}.restore.tmp")

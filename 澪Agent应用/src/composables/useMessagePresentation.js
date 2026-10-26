@@ -228,6 +228,7 @@ export function useMessagePresentation(deps) {
   function modelRequestError(error) {
     const message = String(error?.message || error)
     const detail = error?.detail || {}
+    if (detail.code === 'model_image_input_unsupported') return detail.message || message
     if (detail.http_status === 401 || /HTTP 401|Invalid token|API Key/i.test(message)) {
       const provider = detail.provider_name || deps.activeModel.value?.provider_name || '当前供应商'
       const model = detail.provider_model || deps.activeModel.value?.display_name || deps.selectedModel.value

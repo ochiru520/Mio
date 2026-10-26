@@ -38,7 +38,7 @@ export function useMemory(deps) {
     if (deps.memoryBusy.value) return
     deps.memoryBusy.value = `thread-${threadId}`
     try {
-      await deps.request(`/api/threads/${threadId}/resolve`, { method: 'POST', body: '{}' })
+      await memoryApi.submitApiThreadResolve(threadId, {}, deps.request)
       deps.memoryData.value.threads = deps.memoryData.value.threads.filter((item) => item.id !== threadId)
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -50,10 +50,7 @@ export function useMemory(deps) {
     if (!thread?.id || deps.memoryBusy.value) return false
     deps.memoryBusy.value = `thread-result-${thread.id}`
     try {
-      await deps.request(`/api/threads/${thread.id}/result`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      })
+      await memoryApi.submitApiThreadResult(thread.id, payload, {}, deps.request)
       await loadMemoryHub({ quiet: true })
       return true
     } catch (error) {
@@ -67,10 +64,7 @@ export function useMemory(deps) {
     if (!deps.runtimeSummaryDraft.value.trim() || deps.memoryBusy.value) return
     deps.memoryBusy.value = 'runtime'
     try {
-      await deps.request('/api/memory/runtime-summary', {
-        method: 'PUT',
-        body: JSON.stringify({ content: deps.runtimeSummaryDraft.value }),
-      })
+      await memoryApi.saveRuntimeSummaryByPayload({ content: deps.runtimeSummaryDraft.value }, {}, deps.request)
       await loadMemoryHub({ quiet: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -102,14 +96,11 @@ export function useMemory(deps) {
     if (!deps.newStructuredMemory.value.content.trim() || deps.memoryBusy.value) return
     deps.memoryBusy.value = 'structured-new'
     try {
-      await deps.request('/api/memory/items', {
-        method: 'POST',
-        body: JSON.stringify({
+      await memoryApi.submitItems({
           ...deps.newStructuredMemory.value,
           confidence: 1,
           conversation_id: deps.selectedConversationId.value || 'default',
-        }),
-      })
+        }, {}, deps.request)
       deps.newStructuredMemory.value = { layer: 'L0', category: 'preference', memory_key: '', content: '' }
       await loadMemoryHub({ quiet: true })
     } catch (error) {
@@ -124,7 +115,7 @@ export function useMemory(deps) {
     if (!confirmed) return
     deps.memoryBusy.value = `structured-${memory.id}`
     try {
-      await deps.request(`/api/memory/items/${memory.id}`, { method: 'DELETE' })
+      await memoryApi.deleteItem(memory.id, {}, deps.request)
       await loadMemoryHub({ quiet: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -142,7 +133,7 @@ export function useMemory(deps) {
     if (!confirmed) return false
     deps.memoryBusy.value = `restore-${memory.id}`
     try {
-      await deps.request(`/api/memory/items/${memory.id}/restore`, { method: 'POST', body: '{}' })
+      await memoryApi.submitItemRestore(memory.id, {}, deps.request)
       await loadMemoryHub({ quiet: true })
       return true
     } catch (error) {
@@ -156,7 +147,7 @@ export function useMemory(deps) {
     if (deps.memoryBusy.value) return
     deps.memoryBusy.value = `candidate-${memory.id}`
     try {
-      await deps.request(`/api/memory/items/${memory.id}/confirm`, { method: 'POST', body: '{}' })
+      await memoryApi.submitItemConfirm(memory.id, {}, deps.request)
       await loadMemoryHub({ quiet: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -168,7 +159,7 @@ export function useMemory(deps) {
     if (deps.memoryBusy.value) return
     deps.memoryBusy.value = `${action}-${memory.id}`
     try {
-      await deps.request(`/api/memory/items/${memory.id}/${action}`, { method: 'POST', body: '{}' })
+      await memoryApi.submitItem(memory.id, action, {}, deps.request)
       await loadMemoryHub({ quiet: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -182,7 +173,7 @@ export function useMemory(deps) {
     if (deps.memoryBusy.value) return
     deps.memoryBusy.value = `candidate-${memory.id}`
     try {
-      await deps.request(`/api/memory/items/${memory.id}/reject`, { method: 'POST', body: '{}' })
+      await memoryApi.submitItemReject(memory.id, {}, deps.request)
       await loadMemoryHub({ quiet: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -200,10 +191,7 @@ export function useMemory(deps) {
     if (content === null || !content.trim() || content.trim() === memory.content || deps.memoryBusy.value) return
     deps.memoryBusy.value = `structured-${memory.id}`
     try {
-      await deps.request(`/api/memory/items/${memory.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ content: content.trim(), expected_content: memory.content }),
-      })
+      await memoryApi.saveItem(memory.id, { content: content.trim(), expected_content: memory.content }, {}, deps.request)
       await loadMemoryHub({ quiet: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -215,14 +203,11 @@ export function useMemory(deps) {
     if (!deps.newThreadContent.value.trim() || deps.memoryBusy.value) return
     deps.memoryBusy.value = 'thread-new'
     try {
-      await deps.request('/api/threads', {
-        method: 'POST',
-        body: JSON.stringify({
+      await memoryApi.submitApiThreads({
           content: deps.newThreadContent.value,
           conversation_id: deps.selectedConversationId.value || 'default',
           follow_up_after: deps.newThreadFollowUp.value,
-        }),
-      })
+        }, {}, deps.request)
       deps.newThreadContent.value = ''
       deps.newThreadFollowUp.value = ''
       await loadMemoryHub({ quiet: true })
@@ -238,14 +223,11 @@ export function useMemory(deps) {
     if (!thread.content?.trim() || deps.memoryBusy.value) return
     deps.memoryBusy.value = `thread-${thread.id}`
     try {
-      await deps.request(`/api/threads/${thread.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({
+      await memoryApi.saveApiThread(thread.id, {
           content: thread.content,
           conversation_id: thread.conversation_id,
           follow_up_after: thread.follow_up_after || '',
-        }),
-      })
+        }, {}, deps.request)
       await loadMemoryHub({ quiet: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -259,7 +241,7 @@ export function useMemory(deps) {
     if (!confirmed) return
     deps.memoryBusy.value = `thread-${threadId}`
     try {
-      await deps.request(`/api/threads/${threadId}`, { method: 'DELETE' })
+      await memoryApi.deleteApiThread(threadId, {}, deps.request)
       deps.memoryData.value.threads = deps.memoryData.value.threads.filter((item) => item.id !== threadId)
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -271,10 +253,7 @@ export function useMemory(deps) {
     if (!summary.content?.trim() || deps.memoryBusy.value) return
     deps.memoryBusy.value = `summary-${summary.conversation_id}`
     try {
-      await deps.request('/api/memory/conversation-summary', {
-        method: 'PUT',
-        body: JSON.stringify({ conversation_id: summary.conversation_id, content: summary.content }),
-      })
+      await memoryApi.saveConversationSummary({ conversation_id: summary.conversation_id, content: summary.content }, {}, deps.request)
       await loadMemoryHub({ quiet: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -287,10 +266,7 @@ export function useMemory(deps) {
     const conversationId = deps.selectedConversationId.value || 'default'
     deps.memoryBusy.value = 'summary-new'
     try {
-      await deps.request('/api/memory/conversation-summary', {
-        method: 'PUT',
-        body: JSON.stringify({ conversation_id: conversationId, content: deps.newConversationSummary.value }),
-      })
+      await memoryApi.saveConversationSummary({ conversation_id: conversationId, content: deps.newConversationSummary.value }, {}, deps.request)
       deps.newConversationSummary.value = ''
       await loadMemoryHub({ quiet: true })
     } catch (error) {
@@ -305,7 +281,7 @@ export function useMemory(deps) {
     if (!confirmed) return
     deps.memoryBusy.value = `summary-${summary.conversation_id}`
     try {
-      await deps.request(`/api/memory/conversation-summary/${encodeURIComponent(summary.conversation_id)}`, { method: 'DELETE' })
+      await memoryApi.deleteConversationSummary(summary.conversation_id, {}, deps.request)
       deps.memoryData.value.summaries = deps.memoryData.value.summaries.filter((item) => item.conversation_id !== summary.conversation_id)
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -317,10 +293,7 @@ export function useMemory(deps) {
     if (!deps.newProfileNote.value.trim() || deps.memoryBusy.value) return
     deps.memoryBusy.value = 'note-new'
     try {
-      const result = await deps.request('/api/memory/profile-notes', {
-        method: 'POST',
-        body: JSON.stringify({ content: deps.newProfileNote.value }),
-      })
+      const result = await memoryApi.submitProfileNotes({ content: deps.newProfileNote.value }, {}, deps.request)
       deps.memoryData.value.profile = result.profile
       deps.newProfileNote.value = ''
     } catch (error) {
@@ -333,10 +306,7 @@ export function useMemory(deps) {
     if (!String(note || '').trim() || deps.memoryBusy.value) return
     deps.memoryBusy.value = `note-${index}`
     try {
-      const result = await deps.request(`/api/memory/profile-notes/${index}`, {
-        method: 'PUT',
-        body: JSON.stringify({ content: note }),
-      })
+      const result = await memoryApi.saveProfileNotes(index, { content: note }, {}, deps.request)
       deps.memoryData.value.profile = result.profile
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -350,7 +320,7 @@ export function useMemory(deps) {
     if (!confirmed) return
     deps.memoryBusy.value = `note-${index}`
     try {
-      const result = await deps.request(`/api/memory/profile-notes/${index}`, { method: 'DELETE' })
+      const result = await memoryApi.deleteProfileNotes(index, {}, deps.request)
       deps.memoryData.value.profile = result.profile
     } catch (error) {
       deps.errorMessage.value = error.message

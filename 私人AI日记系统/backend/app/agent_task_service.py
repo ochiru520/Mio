@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from . import db
+from .repositories import agent_tasks_repository as repository
 from .model_runtime import operation
 
 
@@ -23,26 +24,8 @@ logger = logging.getLogger(__name__)
 
 
 def initialize() -> None:
-    with db.get_conn() as conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS agent_tasks (
-                id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, source TEXT NOT NULL,
-                status TEXT NOT NULL, original_goal TEXT NOT NULL, snapshot_json TEXT NOT NULL,
-                model_id TEXT NOT NULL, reasoning_level TEXT NOT NULL,
-                allowed_tools_json TEXT NOT NULL, context_json TEXT NOT NULL,
-                waiting_jobs_json TEXT NOT NULL DEFAULT '[]',
-                spent_yuan REAL NOT NULL DEFAULT 0, budget_yuan REAL NOT NULL DEFAULT 2,
-                revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS agent_task_runs (
-                run_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, request_id TEXT NOT NULL UNIQUE
-            );
-            CREATE INDEX IF NOT EXISTS idx_agent_tasks_conversation
-                ON agent_tasks(conversation_id, updated_at);
-            CREATE TABLE IF NOT EXISTS agent_task_settings (
-                id INTEGER PRIMARY KEY CHECK(id=1), settings_json TEXT NOT NULL
-            );
-        """)
+    """Explicit compatibility bootstrap; ordinary calls never migrate."""
+    db.init_db()
 
 
 def _json(value: Any) -> str:
@@ -61,35 +44,21 @@ def _public(row) -> dict[str, Any] | None:
 
 
 def get(task_id: str) -> dict[str, Any] | None:
-    initialize()
-    with db.get_conn() as conn:
-        return _public(conn.execute("SELECT * FROM agent_tasks WHERE id=?", (task_id,)).fetchone())
+    return _public(repository.get(task_id))
 
 
 def for_run(run_id: str) -> dict[str, Any] | None:
-    initialize()
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT t.* FROM agent_tasks t JOIN agent_task_runs r ON r.task_id=t.id WHERE r.run_id=?", (run_id,)).fetchone()
-    return _public(row)
+    return _public(repository.for_run(run_id))
 
 
 def list_tasks(conversation_id: str = "", limit: int = 50, *, states: tuple[str, ...] = (), offset: int = 0, oldest: bool = False) -> list[dict[str, Any]]:
-    initialize()
-    with db.get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM agent_tasks WHERE (?='' OR conversation_id=?)"
-            + (" AND status IN (" + ",".join("?" for _ in states) + ")" if states else "")
-            + " ORDER BY updated_at " + ("ASC" if oldest else "DESC") + ",id LIMIT ? OFFSET ?",
-            (conversation_id, conversation_id, *states, max(1, min(limit, 200)), max(0, offset)),
-        ).fetchall()
+    rows = repository.listing(conversation_id,limit,states,offset,oldest)
     return [_public(row) for row in rows]
 
 
 def limits(changes: dict[str, Any] | None = None) -> dict[str, Any]:
-    initialize()
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT settings_json FROM agent_task_settings WHERE id=1").fetchone()
-        result = {**DEFAULT_LIMITS, **(json.loads(row[0]) if row else {})}
+    with repository.transaction() as conn:
+        result = {**DEFAULT_LIMITS, **repository.settings(conn)}
         if changes is not None:
             ranges = {"model_calls": (2, 24), "tool_calls": (1, 100), "seconds": (15, 1800), "cost_yuan": (0.01, 100)}
             for key, value in changes.items():
@@ -99,14 +68,13 @@ def limits(changes: dict[str, Any] | None = None) -> dict[str, Any]:
                 if key not in ranges or not ranges[key][0] <= float(value) <= ranges[key][1]:
                     raise ValueError("任务预算参数超出范围。")
                 result[key] = float(value) if key == "cost_yuan" else int(value)
-            conn.execute("INSERT INTO agent_task_settings VALUES(1,?) ON CONFLICT(id) DO UPDATE SET settings_json=excluded.settings_json", (_json(result),))
+            repository.set_settings(conn,result)
     return result
 
 
 def prepare(*, run_id: str, request_id: str, conversation_id: str, source: str,
             user_message: str, model_id: str, reasoning_level: str,
             allowed_tools: list[str], context: list[dict], task_id: str = "") -> dict[str, Any]:
-    initialize()
     previous = for_run(run_id)
     if previous:
         return previous
@@ -119,20 +87,15 @@ def prepare(*, run_id: str, request_id: str, conversation_id: str, source: str,
         task_id = "task_" + uuid.uuid4().hex[:24]
         snapshot = {"goal": user_message, "constraints": [], "completion_criteria": [],
                     "plan": [], "blocker": "", "next_step": "", "updates": [user_message]}
-        with db.get_conn() as conn:
-            conn.execute("INSERT INTO agent_tasks(id,conversation_id,source,status,original_goal,snapshot_json,model_id,reasoning_level,allowed_tools_json,context_json,budget_yuan,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (task_id, conversation_id, source, "running", user_message, _json(snapshot), model_id,
-                 reasoning_level, _json(allowed_tools), _json(context), limits()["cost_yuan"], now, now))
+        repository.create((task_id, conversation_id, source, "running", user_message, _json(snapshot), model_id,
+            reasoning_level, _json(allowed_tools), _json(context), limits()["cost_yuan"], now, now))
     else:
         task_id = task["id"]
         snapshot = task["snapshot"]
         if source != "agent_background":
             snapshot["updates"] = [*snapshot.get("updates", []), user_message][-30:]
-        with db.get_conn() as conn:
-            conn.execute("UPDATE agent_tasks SET status='running',snapshot_json=?,model_id=?,reasoning_level=?,allowed_tools_json=?,context_json=?,revision=revision+1,updated_at=? WHERE id=?",
-                (_json(snapshot), model_id, reasoning_level, _json(allowed_tools), _json(context), now, task_id))
-    with db.get_conn() as conn:
-        conn.execute("INSERT INTO agent_task_runs VALUES(?,?,?)", (run_id, task_id, request_id))
+        repository.start(task_id,snapshot,model_id,reasoning_level,allowed_tools,context,now)
+    repository.link_run(run_id,task_id,request_id)
     return get(task_id)
 
 
@@ -149,34 +112,21 @@ def update(task_id: str, *, status: str | None = None, snapshot: dict | None = N
         fields["snapshot_json"] = _json({**task["snapshot"], **snapshot})
     if waiting_jobs is not None:
         fields["waiting_jobs_json"] = _json(list(dict.fromkeys(waiting_jobs)))
-    with db.get_conn() as conn:
-        conn.execute("UPDATE agent_tasks SET spent_yuan=spent_yuan+?," + ",".join(key + "=?" for key in fields) + " WHERE id=?", (max(0, cost), *fields.values(), task_id))
+    repository.update(task_id,fields,cost)
+    if status is not None and status != task['status']:
+        titles = {'waiting_user': '任务需要补充信息', 'waiting_confirmation': '任务等待你的确认',
+                  'failed': '任务执行失败', 'budget_exhausted': '任务执行额度已用完'}
+        repository.publish_notification(task_id, task['conversation_id'], status, titles.get(status, ''),
+                                        status in {'waiting_user', 'waiting_confirmation', 'failed', 'budget_exhausted'})
     return get(task_id)
 
 
 def attach_retry(conn, original_id: str, retry_id: str) -> None:
-    """Persist attachment in the same transaction that creates the retry."""
-    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_tasks'").fetchone():
-        return
-    rows = conn.execute("SELECT * FROM agent_tasks WHERE status NOT IN ('completed','cancelled')").fetchall()
-    for row in rows:
-        jobs = json.loads(row['waiting_jobs_json'])
-        if original_id not in jobs:
-            continue
-        jobs = [retry_id if job == original_id else job for job in jobs]
-        snapshot = json.loads(row['snapshot_json'])
-        status = row['status']
-        if status == 'waiting_user' and snapshot.get('blocker') == '关联生成结果待核对，已停止自动推进。':
-            status = 'waiting_jobs'
-            snapshot.update(blocker='', next_step='等待人工确认重试及生成结果。')
-        conn.execute('UPDATE agent_tasks SET waiting_jobs_json=?,status=?,snapshot_json=?,revision=revision+1,updated_at=? WHERE id=?',
-                     (_json(jobs), status, _json(snapshot), db.now_iso(), row['id']))
+    repository.attach_retry(conn,original_id,retry_id)
 
 
 def observations(task_id: str) -> list[dict]:
-    with db.get_conn() as conn:
-        rows = conn.execute("""SELECT s.* FROM agent_run_steps s JOIN agent_task_runs r ON r.run_id=s.run_id
-            WHERE r.task_id=? AND s.step_kind='tool_call' ORDER BY s.id DESC LIMIT 100""", (task_id,)).fetchall()
+    rows = repository.observations(task_id)
     result = []
     for row in reversed(rows):
         try:
@@ -233,11 +183,7 @@ async def pause(task_id: str, *, cancel_jobs: bool = False, stop_linked_jobs: bo
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
     if cancel_jobs:
-        with db.get_conn() as conn:
-            run_ids = "SELECT run_id FROM agent_task_runs WHERE task_id=?"
-            conn.execute(f"UPDATE companion_actions SET status='cancelled' WHERE agent_run_id IN ({run_ids}) AND status IN ('needs_confirmation','running')", (task_id,))
-            conn.execute(f"UPDATE agent_run_steps SET status='cancelled' WHERE run_id IN ({run_ids}) AND status IN ('needs_confirmation','running')", (task_id,))
-            conn.execute(f"UPDATE tool_execution_receipts SET status='cancelled' WHERE agent_run_id IN ({run_ids}) AND status IN ('needs_confirmation','running')", (task_id,))
+        repository.cancel_pending(task_id)
     from . import media_compose_service, creative_batch_service
     await media_compose_service.stop_task(task_id, cancelled=cancel_jobs)
     from . import terminal_service, desktop_control_service
@@ -249,8 +195,7 @@ async def pause(task_id: str, *, cancel_jobs: bool = False, stop_linked_jobs: bo
     self_upgrade_service.stop_task(task_id)
     if cancel_jobs or stop_linked_jobs:
         creative_batch_service.initialize()
-        with db.get_conn() as conn:
-            batch_ids = [row[0] for row in conn.execute("SELECT id FROM creative_batches WHERE task_id=? AND status NOT IN ('completed','cancelled')",(task_id,))]
+        batch_ids = repository.active_batches(task_id)
         for batch_id in batch_ids:
             await creative_batch_service.control(batch_id,'cancel' if cancel_jobs else 'pause')
         from . import creation_service
@@ -272,17 +217,10 @@ def resume(task_id: str) -> dict[str, Any]:
         raise ValueError("已完成或取消的任务不能继续，请创建新任务。")
     if task_id in _active and not _active[task_id].done():
         return task
-    with db.get_conn() as conn:
-        unresolved = conn.execute('''SELECT 1 FROM agent_run_steps s JOIN agent_task_runs r ON r.run_id=s.run_id
-            WHERE r.task_id=? AND s.step_kind='tool_call' AND s.permission!='read_only'
-            AND s.status IN ('running','unknown') LIMIT 1''', (task_id,)).fetchone()
-    if unresolved:
+    if repository.unresolved_write(task_id):
         raise ValueError('写入工具的旧执行结果尚未确认，请先核对回执；不能通过继续任务重复执行。')
-    with db.get_conn() as conn:
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspace_browser_pending'").fetchone():
-            browser_write = conn.execute("SELECT 1 FROM workspace_browser_pending WHERE task_id=? AND status IN ('running','unknown') LIMIT 1", (task_id,)).fetchone()
-            if browser_write:
-                raise ValueError('浏览器提交仍在执行或结果未知，请先核对回执。')
+    if repository.unresolved_browser_write(task_id):
+        raise ValueError('浏览器提交仍在执行或结果未知，请先核对回执。')
     from .creation_service import current_attempt, TERMINAL_STATUSES
     jobs = [current_attempt(job_id) for job_id in task['waiting_jobs']]
     if any(job and job['status'] == 'unknown' for job in jobs):
@@ -292,21 +230,13 @@ def resume(task_id: str) -> dict[str, Any]:
     from . import creative_batch_service, media_compose_service
     if any(not creative_batch_service.ready([key]) for key in task['snapshot'].get('waiting_batches', [])) or any(media_compose_service.get(key)['status'] in {'queued','running'} for key in task['snapshot'].get('waiting_assemblies', [])):
         return update(task_id, status='waiting_jobs')
-    with db.get_conn() as conn:
-        conn.execute("UPDATE agent_tasks SET budget_yuan=?,status='ready',revision=revision+1,updated_at=? WHERE id=?",
-                     (task["spent_yuan"] + limits()["cost_yuan"], db.now_iso(), task_id))
+    repository.resume(task_id,task["spent_yuan"]+limits()["cost_yuan"])
     return get(task_id)
 
 
 def recover_interrupted() -> None:
-    initialize()
-    with db.get_conn() as conn:
-        # A running write has an unknown outcome after a crash. Reads can be retried safely.
-        conn.execute("""UPDATE agent_tasks SET status=CASE WHEN EXISTS(
-            SELECT 1 FROM agent_run_steps s JOIN agent_task_runs r ON s.run_id=r.run_id
-            WHERE r.task_id=agent_tasks.id AND s.step_kind='tool_call' AND s.status='running'
-                AND s.permission!='read_only') THEN 'paused' ELSE 'ready' END,
-            updated_at=? WHERE status IN ('running','responding')""", (db.now_iso(),))
+    # Interrupted writes pause; reads can resume after restart.
+    repository.recover_interrupted()
 
 
 async def yield_to_user(conversation_id: str) -> None:
@@ -322,17 +252,49 @@ async def yield_to_user(conversation_id: str) -> None:
 def ready_to_continue(task: dict[str, Any]) -> bool:
     if automatic_work_paused() or db.conversation_deleted(task["conversation_id"]):
         return False
-    if task["id"] in _active or task["id"] in _background:
+    if in_flight(task['id']):
         return False
+    pending_delivery = task['snapshot'].get('pending_background_delivery') or {}
+    if pending_delivery.get('id') and repository.background_message(pending_delivery['id']):
+        # A crash after save_message must not produce a second result or rerun
+        # side effects merely because the following checkpoint was not saved.
+        from .agent_input_service import has_pending
+        state = 'ready' if has_pending(task['id']) else pending_delivery.get('status', 'waiting_user')
+        update(task['id'], status=state, snapshot={'background_delivery_key': pending_delivery.get('state_key', ''),
+            'pending_background_delivery': None})
+        if state == 'completed':
+            repository.publish_notification(task['id'], task['conversation_id'], state, '任务已完成', False)
+        return False
+    if repository.unresolved_write(task['id']) or repository.unresolved_browser_write(task['id']):
+        update(task['id'], status='waiting_user', snapshot={'blocker': '旧执行结果未知，补充已保留；请先核对回执，不自动重放写入。'})
+        return False
+    from .creation_service import current_attempt, TERMINAL_STATUSES
+    jobs = [current_attempt(job_id) for job_id in task['waiting_jobs']]
+    if any(job and job['status'] == 'unknown' for job in jobs):
+        update(task['id'], status='waiting_user', snapshot={'blocker': '关联生成结果待核对，已停止自动推进。',
+            'next_step': '在任务页核对供应商回执；确认后再继续。'})
+        return False
+    batches = task['snapshot'].get('waiting_batches', [])
+    if batches:
+        from .creative_batch_service import get as get_batch
+        if any((item.get('job') or {}).get('status') == 'unknown' for key in batches for item in get_batch(key)['items']):
+            update(task['id'], status='waiting_user', snapshot={'blocker': '批量队列中有结果未知的项目，请先核对生成回执。'})
+            return False
     commands = []
     if task['snapshot'].get('waiting_terminal'):
         from .terminal_service import task_jobs
         commands = [item for item in task_jobs(task['id']) if item['id'] in task['snapshot']['waiting_terminal']]
-        if any(item['status'] == 'running' for item in commands):
-            return False
         if any(item['status'] == 'unknown' for item in commands):
             update(task['id'], status='waiting_user', snapshot={'blocker': '终端结果未知，请查看输出后决定，不自动重放命令。'})
             return False
+    if task['status'] in WAITING:
+        from .agent_input_service import has_pending
+        if has_pending(task['id']):
+            return True
+    if task['status'] == 'waiting_jobs' and task['snapshot'].get('background_delivery_key') == background_delivery_key(task):
+        return False
+    if any(item['status'] == 'running' for item in commands):
+        return False
     if task["status"] == "ready":
         return True
     if task["status"] not in WAITING:
@@ -350,8 +312,7 @@ def ready_to_continue(task: dict[str, Any]) -> bool:
         from .media_compose_service import get as get_assembly
         if any(get_assembly(key)['status'] in {'queued','running'} for key in assemblies):
             return False
-    with db.get_conn() as conn:
-        last = conn.execute("SELECT a.status FROM agent_runs a JOIN agent_task_runs r ON a.run_id=r.run_id WHERE r.task_id=? ORDER BY a.created_at DESC LIMIT 1", (task["id"],)).fetchone()
+    last = repository.latest_run_status(task["id"])
     # run_agent_loop deliberately leaves the run in awaiting_response until the
     # short progress/commit reply is written.  That reply is not a reason to
     # block an async task whose creation job has already reached a terminal
@@ -359,17 +320,11 @@ def ready_to_continue(task: dict[str, Any]) -> bool:
     if last is not None and last["status"] not in {"completed", "failed", "interrupted", "awaiting_response"}:
         return False
     items = observations(task["id"])
-    from .creation_service import current_attempt, TERMINAL_STATUSES
-    jobs = [current_attempt(job_id) for job_id in task["waiting_jobs"]]
-    if any(job and job["status"] == "unknown" for job in jobs):
-        update(task["id"], status="waiting_user", snapshot={
-            "blocker": "关联生成结果待核对，已停止自动推进。",
-            "next_step": "在任务页核对供应商回执；确认后再继续。"})
-        return False
     if task["status"] == "waiting_confirmation":
         return (not any(item["status"] in {"needs_confirmation", "running"} for item in items)
                 and all(job is None or job['status'] in TERMINAL_STATUSES for job in jobs))
-    return bool(jobs or batches or assemblies or commands) and all(job is None or job["status"] in TERMINAL_STATUSES for job in jobs)
+    undelivered_commands = [item for item in commands if not item.get('delivered_to')]
+    return bool(jobs or batches or assemblies or undelivered_commands) and all(job is None or job["status"] in TERMINAL_STATUSES for job in jobs)
 
 
 @operation("agent", automatic=True)
@@ -382,6 +337,10 @@ async def continue_task(task_id: str) -> None:
     if automatic_work_paused() or task is None or task["status"] not in {"ready", *WAITING}:
         return
     request_id = f"task:{task_id}:{task['revision'] + 1}"
+    delivery_key = background_delivery_key(task)
+    delivery = task['snapshot'].get('pending_background_delivery') or {
+        'id': uuid.uuid4().hex, 'state_key': delivery_key, 'status': 'waiting_user'}
+    update(task_id, snapshot={'pending_background_delivery': delivery})
     message = str(task["snapshot"].get("updates", [task["original_goal"]])[-1])
     continuation_context = [item for item in task['context'] if not str(item.get('content','')).startswith(('批量任务真实状态（','合成任务真实状态（','终端真实状态（'))]
     if task['snapshot'].get('waiting_batches'):
@@ -402,7 +361,11 @@ async def continue_task(task_id: str) -> None:
             creation_workflow_id=str(task["snapshot"].get("creation_workflow_id") or ""),
         )
         step_id = begin_final_response(result)
+        delivery = {**delivery, 'status': result.status}
+        update(task_id, snapshot={'pending_background_delivery': delivery})
         bind(task_id)
+        from .conversation_state_service import capture_source
+        reply_source = capture_source(task['conversation_id'])
         reply = await final_model_call(result, call_chat_completion_result, [
             {"role": "system", "content": "你是 Mio。根据任务的真实状态简短告知进度或结果，不声称未执行的操作。需要用户补充时只问最必要的问题。"},
             {"role": "user", "content": task["original_goal"]},
@@ -421,8 +384,8 @@ async def continue_task(task_id: str) -> None:
             model_id=task["model_id"], provider_model=reply.model, reasoning_level=task["reasoning_level"],
             prompt_tokens=reply.prompt_tokens, completion_tokens=reply.completion_tokens,
             request_cost_yuan=float(reply.cost_yuan or 0) + sum(float(item.cost_yuan or 0) for item in result.model_results),
-            request_cost_source=reply.cost_source, delivery_key=f"task-result:{request_id}",
-            attachments_json=_json([citation]))
+            request_cost_source=reply.cost_source, delivery_key=f"task-result:{delivery['id']}",
+            attachments_json=_json([citation]), expected_history_revision=reply_source['revision'])
         # A completed task is also a durable result for an existing user follow-up.
         # Matching is exact and only closes an already-open thread; it never creates one.
         try:
@@ -432,6 +395,12 @@ async def continue_task(task_id: str) -> None:
         except (ValueError, OSError):
             logger.exception("任务结果关联待跟进失败: %s", task_id)
         finish_final_response(result, step_id, reply=text)
+        update(task_id, snapshot={'background_delivery_key': delivery_key, 'pending_background_delivery': None})
+        if task['snapshot'].get('waiting_terminal'):
+            from .repositories import terminal_repository
+            with terminal_repository.unit_of_work() as conn:
+                for job_id in task['snapshot']['waiting_terminal']:
+                    conn.deliver(job_id, request_id)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -443,6 +412,22 @@ async def continue_task(task_id: str) -> None:
         unbind(task_id)
 
 
+def background_delivery_key(task):
+    """Terminal changes share one durable inbox position across restarts."""
+    from .creation_service import current_attempt
+    values = [('creation', job_id, (current_attempt(job_id) or {}).get('status', 'missing')) for job_id in task['waiting_jobs']]
+    if task['snapshot'].get('waiting_terminal'):
+        from .terminal_service import task_jobs
+        values.extend(('terminal', row['id'], row['status']) for row in task_jobs(task['id']) if row['id'] in task['snapshot']['waiting_terminal'])
+    if task['snapshot'].get('waiting_batches'):
+        from .creative_batch_service import get
+        values.extend(('batch', key, get(key)['status']) for key in task['snapshot']['waiting_batches'])
+    if task['snapshot'].get('waiting_assemblies'):
+        from .media_compose_service import get
+        values.extend(('assembly', key, get(key)['status']) for key in task['snapshot']['waiting_assemblies'])
+    return _json(sorted(values))
+
+
 def automatic_work_paused() -> bool:
     from .privacy_service import _load_state
     state = _load_state()
@@ -450,9 +435,8 @@ def automatic_work_paused() -> bool:
 
 
 async def stop_tasks(conversation_id: str = "", *, cancel_jobs: bool = False, stop_linked_jobs: bool = False) -> None:
-    initialize()
-    with db.get_conn() as conn:
-        ids = [row[0] for row in conn.execute("SELECT id FROM agent_tasks WHERE (?='' OR conversation_id=?) AND status!='cancelled'", (conversation_id, conversation_id)) if row[0] in _active or row[0] in _background or (get(row[0]) or {}).get("status") != "completed"]
+    ids = [task_id for task_id in repository.stoppable_ids(conversation_id)
+           if task_id in _active or task_id in _background or (get(task_id) or {}).get("status") != "completed"]
     for task_id in ids:
         await pause(task_id, cancel_jobs=cancel_jobs, stop_linked_jobs=stop_linked_jobs)
 
@@ -461,9 +445,7 @@ async def process_ready() -> int:
     if automatic_work_paused():
         return 0
     count = 0
-    initialize()
-    with db.get_conn() as conn:
-        candidates = [_public(row) for row in conn.execute("SELECT * FROM agent_tasks WHERE status IN ('ready','waiting_jobs','waiting_confirmation') ORDER BY updated_at,id")]
+    candidates = [_public(row) for row in repository.ready_candidates()]
     for task in candidates:
         if ready_to_continue(task):
             process = asyncio.create_task(continue_task(task["id"]), name=f"agent-task:{task['id']}")

@@ -1,7 +1,8 @@
 <script setup>
+import * as dataPrivacyApi from '../services/dataPrivacyApi.js'
+
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { PauseCircle, RefreshCw } from '@lucide/vue'
-import { apiRequest } from '../services/api.js'
+import { PauseCircle, RefreshCw } from '../icons/index.js'
 const active = ref([])
 const loading = ref(false)
 const error = ref('')
@@ -11,7 +12,7 @@ const purposes = { run_agent_loop: '推进任务', continue_task: '继续任务'
 function load() {
   if (loading.value) return
   loading.value = true
-  apiRequest('/api/privacy/status').then((data) => { active.value = data.active_operations || []; error.value = '' }).catch((cause) => { error.value = cause.message }).finally(() => { loading.value = false })
+  dataPrivacyApi.loadStatus({}).then((data) => { active.value = data.active_operations || []; error.value = '' }).catch((cause) => { error.value = cause.message }).finally(() => { loading.value = false })
 }
 onMounted(() => { load(); timer = window.setInterval(load, 3000) })
 onBeforeUnmount(() => window.clearInterval(timer))
@@ -26,5 +27,5 @@ onBeforeUnmount(() => window.clearInterval(timer))
 </template>
 
 <style scoped>
-.privacy-operations-panel{border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:18px}.privacy-operations-panel header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.privacy-operations-panel h2{display:flex;align-items:center;gap:7px;margin:0;font-size:calc(15px * var(--fs, 1))}.privacy-operations-panel p{margin:5px 0 0;color:var(--text-muted);font-size:calc(12px * var(--fs, 1))}.privacy-operations-panel header button{display:flex;border:1px solid var(--border);background:var(--surface);border-radius:5px;padding:6px;cursor:pointer}.privacy-operations-panel ul{list-style:none;padding:0;margin:12px 0 0;display:grid;gap:6px}.privacy-operations-panel li{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)}.privacy-operations-panel li span{min-width:0}.privacy-operations-panel strong,.privacy-operations-panel small{display:block;overflow-wrap:anywhere}.privacy-operations-panel small{color:var(--text-muted);margin-top:3px;font-size:calc(11px * var(--fs, 1))}.privacy-operations-panel b{font-size:calc(11px * var(--fs, 1));color:var(--warning);white-space:nowrap}.privacy-panel-error{color:var(--danger)}.privacy-panel-empty{padding:8px 0}
+.privacy-operations-panel{border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:18px}.privacy-operations-panel header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.privacy-operations-panel h2{display:flex;align-items:center;gap:7px;margin:0;font-size:calc(15px * var(--fs, 1))}.privacy-operations-panel p{margin:5px 0 0;color:var(--text-muted);font-size:calc(12px * var(--fs, 1))}.privacy-operations-panel header button{display:flex;border:1px solid var(--border);background:var(--surface);border-radius:5px;padding:6px;cursor:pointer}.privacy-operations-panel ul{list-style:none;padding:0;margin:12px 0 0;display:grid;gap:6px}.privacy-operations-panel li{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)}.privacy-operations-panel li span{min-width:0}.privacy-operations-panel strong,.privacy-operations-panel small{display:block;overflow-wrap:anywhere}.privacy-operations-panel small{color:var(--text-muted);margin-top:3px;font-size:calc(12px * var(--fs, 1))}.privacy-operations-panel b{font-size:calc(12px * var(--fs, 1));color:var(--warning);white-space:nowrap}.privacy-panel-error{color:var(--danger)}.privacy-panel-empty{padding:8px 0}
 </style>

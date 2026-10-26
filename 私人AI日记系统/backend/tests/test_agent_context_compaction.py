@@ -3,11 +3,13 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
 from app import db, llm, agent_context_service as context, agent_task_service as tasks
 from app.config import settings
+from app.model_registry import ModelProfile
 from app.routes.agent import chat_request_status, _context_usage
 from test_runtime_safety_v2 import isolated
 
@@ -88,6 +90,66 @@ def test_short_context_does_not_call_model_and_failed_summary_not_retried(monkey
         assert usage['auto_compression_enabled'] is True
 
 
+@pytest.mark.parametrize('api_mode', ['chat_completions', 'responses'])
+def test_new_tool_rounds_reuse_compressed_prefix_in_actual_payload(api_mode):
+    object.__setattr__(settings, 'chat_context_max_tokens', 30000)
+    object.__setattr__(settings, 'chat_context_compress_ratio', .1)
+    t = task(); source, protocol, observations = materials()
+    outputs = []
+    profile = ModelProfile(id='synthetic', provider_name='Synthetic', display_name='Synthetic',
+                           model='test-model', api_key='synthetic-only',
+                           base_urls=('https://cache.example.test/v1',), api_mode=api_mode)
+    with (patch.object(llm, 'call_chat_completion_result', AsyncMock(return_value=completion())) as summary,
+          patch('app.model_registry.get_model_profile', return_value=profile)):
+        for step in range(6, 9):
+            if step > 6:
+                protocol.extend([
+                    {'role': 'assistant', 'tool_calls': [{'id': f'call-{step}', 'type': 'function',
+                     'function': {'name': 'search_memory', 'arguments': '{}'}}], '_mio_step_ids': [step]},
+                    {'role': 'tool', 'tool_call_id': f'call-{step}', 'content': json.dumps({'result': f'结果{step}'})}])
+                observations.append({'tool_name': 'search_memory', 'status': 'completed',
+                                     'result': {'result': f'结果{step}'}, 'step_id': step})
+            output, _ = run(t, source, protocol, observations)
+            outputs.append(output)
+        assert summary.await_count == 1  # no extra paid summary call per new round
+        assert context._cache(t['id'])['through_step'] == 3
+        assert [item['tool_call_id'] for item in outputs[-1] if item['role'] == 'tool'] == [
+            'call-4', 'call-5', 'call-6', 'call-7', 'call-8']
+        # Automatic compression still runs when the real rendered prompt grows
+        # past the threshold, without a manual request.
+        object.__setattr__(settings, 'chat_context_max_tokens', 1000)
+        run(t, source, protocol, observations)
+        assert summary.await_count == 2
+        assert context._cache(t['id'])['through_step'] > 3
+
+    payloads = []
+    client_class = httpx.AsyncClient
+
+    def transport(request):
+        payloads.append(json.loads(request.content))
+        body = ({'model': profile.model, 'output': [{'type': 'message', 'content': [
+                    {'type': 'output_text', 'text': '继续。'}]}]} if api_mode == 'responses' else
+                {'model': profile.model, 'choices': [{'message': {'content': '继续。'}, 'finish_reason': 'stop'}]})
+        return httpx.Response(200, json=body)
+
+    def client(**_kwargs):
+        return client_class(transport=httpx.MockTransport(transport), trust_env=False)
+
+    with (patch.object(llm, 'require_configured'),
+          patch.object(llm, 'resolve_model_id', return_value=profile.id),
+          patch.object(llm, 'get_model_profile', return_value=profile),
+          patch.object(llm, '_completion_routes', return_value=[
+              llm.CompletionRoute(profile.base_urls[0], '', 'synthetic', api_mode=api_mode)]),
+          patch.object(llm.httpx, 'AsyncClient', side_effect=client)):
+        for output in outputs:
+            asyncio.run(llm.call_chat_completion_result.__wrapped__(output, model_id=profile.id))
+    key = 'input' if api_mode == 'responses' else 'messages'
+    first, second, third = [payload[key] for payload in payloads]
+    assert first[:-1] == second[:len(first) - 1]
+    assert second[:-1] == third[:len(second) - 1]
+    assert all('已自动压缩的历史工作摘要' in messages[1]['content'] for messages in (first, second, third))
+
+
 def test_protocol_dedup_preserves_unrecorded_errors_and_readback():
     t = task(); source, protocol, observations = materials()
     missing = {'step_id': 99, 'tool_name': 'code_apply_patch', 'status': 'failed',
@@ -132,6 +194,13 @@ def test_durable_history_beyond_ui_window_is_incrementally_summarized_and_rebuil
         assert first['new_evidence'][0]['step_id'] == ids[0]
         assert len(first['new_evidence']) == 60
         run(t, source, [], observations)
+        assert model.await_count == 1
+        assert context._cache(t['id'])['through_step'] == ids[59]
+        # Uncovered evidence remains readable; another page is summarized only
+        # when the budget requires it or the user explicitly requests it.
+        assert context.receipt_context(observations, [], t['id'])['receipt_index'][-1]['step_id'] == ids[-1]
+        context.request_force_compression(t['conversation_id'])
+        run(t, source, [], observations)
         second = json.loads(model.call_args.args[0][1]['content'])
         assert second['new_evidence'][0]['step_id'] == ids[60]
         assert context._cache(t['id'])['through_step'] == ids[113]
@@ -140,10 +209,39 @@ def test_durable_history_beyond_ui_window_is_incrementally_summarized_and_rebuil
         rebuilt = json.loads(model.call_args.args[0][1]['content'])
         assert rebuilt['previous_summary'] == ''
         assert context._cache(t['id'])['through_step'] == ids[59]
+        context.request_force_compression(t['conversation_id'])
         run(t, source, [], tasks.observations(t['id']))
         changed = json.loads(model.call_args.args[0][1]['content'])
         fact = next(item for item in changed['new_evidence'] if item['step_id'] == ids[89])
         assert fact['status'] == 'failed' and fact['error'] == '晚到的终态失败'
+
+
+def test_json_observation_window_gap_catches_up_in_batches_below_token_threshold():
+    from test_agent_result_recovery import store
+    object.__setattr__(settings, 'chat_context_max_tokens', 30000)
+    object.__setattr__(settings, 'chat_context_compress_ratio', .1)
+    t = task(); source, _, _ = materials()
+    ids = durable_steps(t, 120)
+    with patch.object(llm, 'call_chat_completion_result', AsyncMock(return_value=completion())) as model:
+        run(t, source, [], tasks.observations(t['id']))
+        assert context._cache(t['id'])['through_step'] == ids[59]
+        for ordinal in range(120, 160):
+            store(t, {'ordinal': ordinal}, 'search_memory', run_id=f'window-{ordinal}')
+        run(t, source, [], tasks.observations(t['id']))
+        assert model.await_count == 1
+        assert context.usage_for_conversation(t['conversation_id'])['used_tokens'] < 3000
+        store(t, {'ordinal': 160}, 'search_memory', run_id='window-160')
+        visible = tasks.observations(t['id'])
+        assert all(item['step_id'] != ids[60] for item in visible)
+        run(t, source, [], visible)
+        # The first uncovered result fell out of the JSON observation window.
+        # Absorb a full page, rather than resummarizing on each new tool call.
+        assert model.await_count == 2
+        payload = json.loads(model.call_args.args[0][1]['content'])
+        assert payload['new_evidence'][0]['step_id'] == ids[60]
+        assert context._cache(t['id'])['through_step'] == ids[119]
+        run(t, source, [], visible)
+        assert model.await_count == 2
 
 
 def test_durable_actions_are_bounded_and_earlier_effects_remain_readable():

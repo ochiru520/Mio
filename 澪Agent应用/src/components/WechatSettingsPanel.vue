@@ -1,21 +1,22 @@
 <script setup>
+import * as wechatApi from '../services/wechatApi.js'
+
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { MessageSquareText, QrCode, RefreshCw } from '@lucide/vue'
-import { apiRequest } from '../services/api.js'
+import { MessageSquareText, QrCode, RefreshCw } from '../icons/index.js'
 
 const status = ref({}), login = ref(null), busy = ref(false), error = ref(''), verify = ref('')
 const labels = { wait: '用手机微信扫描二维码', scaned: '已扫码，请在手机上继续确认', confirmed: '绑定成功', expired: '二维码已过期，请重新获取', need_verifycode: '请输入手机微信显示的验证码', verify_code_blocked: '验证次数过多，请重新获取二维码', binded_redirect: '这个 Bot 已绑定，请重新获取二维码或在手机上检查绑定' }
 let disposed = false, timer, pollController, loadController
 async function load() {
   loadController?.abort(); loadController = new AbortController()
-  try { status.value = await apiRequest('/api/wechat/status', { signal: loadController.signal }) }
+  try { status.value = await wechatApi.loadStatus({signal: loadController.signal}) }
   catch (cause) { if (!disposed && cause.code !== 'request_cancelled') error.value = cause.message }
 }
 function stopPolling() { clearTimeout(timer); pollController?.abort(); pollController = null }
 async function start() {
   stopPolling(); busy.value = true; error.value = ''; verify.value = ''; login.value = null
   try {
-    const result = await apiRequest('/api/wechat/login', { method: 'POST' })
+    const result = await wechatApi.submitLogin({})
     if (disposed) return
     login.value = result; timer = setTimeout(poll, 500)
   } catch (cause) { if (!disposed) error.value = cause.message }
@@ -26,8 +27,7 @@ async function poll() {
   pollController = new AbortController()
   const id = login.value.login_id
   try {
-    const result = await apiRequest('/api/wechat/login/status', { method: 'POST', timeoutMs: 45000,
-      signal: pollController.signal, body: JSON.stringify({ login_id: id, verify_code: verify.value }) })
+    const result = await wechatApi.submitLoginStatus({ login_id: id, verify_code: verify.value }, {timeoutMs: 45000, signal: pollController.signal})
     if (disposed || login.value?.login_id !== id) return
     login.value.status = result.status
     if (result.status === 'confirmed') { login.value = null; await load(); return }
@@ -39,13 +39,13 @@ async function poll() {
 }
 async function change(enabled) {
   busy.value = true; error.value = ''
-  try { status.value = await apiRequest('/api/wechat/connection', { method: 'PATCH', body: JSON.stringify({ enabled }) }) }
+  try { status.value = await wechatApi.updateConnection({ enabled }, {}) }
   catch (cause) { error.value = cause.message }
   finally { busy.value = false }
 }
 async function forget() {
   busy.value = true; error.value = ''; stopPolling(); login.value = null
-  try { status.value = await apiRequest('/api/wechat/connection', { method: 'DELETE' }) }
+  try { status.value = await wechatApi.deleteConnection({}) }
   catch (cause) { error.value = cause.message }
   finally { busy.value = false }
 }

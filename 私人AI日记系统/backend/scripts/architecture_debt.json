@@ -1,0 +1,7 @@
+{
+  "description": "Business SQL, database access and reverse route dependencies have no exemptions. Router registration is allowed.",
+  "limits": {
+    "sql-layer": {},
+    "route-layer": {}
+  }
+}

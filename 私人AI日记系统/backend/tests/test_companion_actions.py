@@ -430,8 +430,8 @@ class CompanionActionTests(unittest.IsolatedAsyncioTestCase):
         generate_mock = AsyncMock(return_value={"date": "2026-07-13"})
         with (
             patch.object(db, "now_iso", return_value="2026-07-13T23:10:00+08:00"),
-            patch("app.routes.chat.analyze_today_state", analyze_mock),
-            patch("app.routes.diary.generate_today_diary_payload", generate_mock),
+            patch("app.daily_state_analysis_service.analyze_today_state", analyze_mock),
+            patch("app.diary_operations_service.generate_today_diary_payload", generate_mock),
         ):
             results = await execute_companion_actions(
                 [
@@ -454,8 +454,8 @@ class CompanionActionTests(unittest.IsolatedAsyncioTestCase):
         generate_mock = AsyncMock(return_value={"date": "2026-07-13"})
         with (
             patch.object(db, "now_iso", return_value="2026-07-13T14:10:00+08:00"),
-            patch("app.routes.chat.analyze_today_state", analyze_mock),
-            patch("app.routes.diary.generate_today_diary_payload", generate_mock),
+            patch("app.daily_state_analysis_service.analyze_today_state", analyze_mock),
+            patch("app.diary_operations_service.generate_today_diary_payload", generate_mock),
         ):
             results = await execute_companion_actions(
                 [],

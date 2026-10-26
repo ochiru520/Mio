@@ -5,13 +5,14 @@ import hashlib
 import json
 import logging
 import time
-from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from .repositories import daily_diary_repository as repository
+
 from . import db
 from .config import settings
-from .routes.diary import generate_diary_for_date_payload
+from .diary_operations_service import generate_diary_for_date_payload
 
 
 logger = logging.getLogger(__name__)
@@ -40,11 +41,8 @@ def _configuration_signature() -> tuple:
 def _missing_dates(current: datetime) -> list[str]:
     """Discover source days, preserving timezone and the configured day boundary."""
     cutoff = db.today_string(current)
-    with db.get_conn() as conn:
-        existing = {row[0] for row in conn.execute("SELECT date FROM diaries")}
-        dates = {row[0] for row in conn.execute("SELECT DISTINCT date FROM diary_materials WHERE date < ?", (cutoff,))}
-        # Only timestamps are read. Process the cursor incrementally, not chat contents.
-        for row in conn.execute("SELECT created_at FROM messages WHERE conversation_id NOT LIKE 'qq_group_%'"):
+    with repository.source_dates(cutoff) as (existing, dates, timestamps):
+        for row in timestamps:
             try:
                 date = db.logical_date_for_datetime(datetime.fromisoformat(row[0]))
             except (ValueError, TypeError):
@@ -56,12 +54,7 @@ def _missing_dates(current: datetime) -> list[str]:
 
 def _date_attempts(signature: tuple) -> tuple[str, dict[str, dict]]:
     key = hashlib.sha256(json.dumps(signature).encode()).hexdigest()
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("""CREATE TABLE IF NOT EXISTS daily_diary_attempts (
-            date TEXT PRIMARY KEY, configuration_key TEXT NOT NULL,
-            failures INTEGER NOT NULL, next_retry_at TEXT NOT NULL, error TEXT NOT NULL
-        )""")
-        rows = conn.execute("SELECT * FROM daily_diary_attempts WHERE configuration_key=?", (key,)).fetchall()
+    rows = repository.attempts_for_configuration(key)
     return key, {row["date"]: dict(row) for row in rows}
 
 
@@ -152,9 +145,7 @@ async def run_daily_diary_once(now: datetime | None = None, *, force: bool = Fal
         delay = min(3600, 300 * 2 ** min(_failures - 1, 4))
         error = str(getattr(exc, "detail", str(exc)))[:1000]
         retry_at = (current + timedelta(seconds=delay)).isoformat(timespec="seconds")
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("INSERT INTO daily_diary_attempts VALUES(?,?,?,?,?) ON CONFLICT(date) DO UPDATE SET configuration_key=excluded.configuration_key,failures=excluded.failures,next_retry_at=excluded.next_retry_at,error=excluded.error",
-                         (date, configuration_key, _failures, retry_at, error))
+        repository.save_attempt(date, configuration_key, _failures, retry_at, error)
         _retry_at = time.monotonic() + delay
         _record_check(date, "error", error)
         raise
@@ -162,8 +153,7 @@ async def run_daily_diary_once(now: datetime | None = None, *, force: bool = Fal
         _active = None
 
     _retry_at, _failures = 0.0, 0
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("DELETE FROM daily_diary_attempts WHERE date=?", (date,))
+    repository.clear_attempt(date)
     _last_check["pending_dates"] = [day for day in dates if day != date]
     if result.get("skipped"):
         _record_check(date, "skipped")

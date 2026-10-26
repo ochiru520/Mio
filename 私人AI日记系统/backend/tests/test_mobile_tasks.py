@@ -16,6 +16,7 @@ from app.config import settings
 from app.agent_handoff_service import create_handoff
 from app.agent_tool_service import ToolExecutionContext
 from app.routes import onebot
+from app import onebot_transport_service
 from tests.test_agent_model_first import _completion
 from app.llm import ToolCall
 from test_runtime_safety_v2 import isolated
@@ -31,7 +32,9 @@ def phone_setup(isolated, monkeypatch):
     monkeypatch.setattr(mobile, '_locks', {})
     monkeypatch.setattr(files, '_intake_locks', {})
     monkeypatch.setattr(onebot, '_mobile_intake_locks', {})
-    monkeypatch.setattr(onebot, '_active_connections', {})
+    connections = {}
+    monkeypatch.setattr(onebot, '_active_connections', connections)
+    monkeypatch.setattr(onebot_transport_service, '_active_connections', connections)
     monkeypatch.setattr(wx, '_state', {'connected': False, 'message': '尚未连接微信'})
     monkeypatch.setattr(wx, '_inflight', set())
     monkeypatch.setattr(wx, '_stopping', set())
@@ -141,7 +144,7 @@ def test_unconnected_owner_backlog_does_not_starve_online_owner():
         online={**OTHER,'self_id':'90002'}
         mobile.queue(online,'online',key='online')
         api=AsyncMock(return_value={'status':'ok','retcode':0})
-        with patch.object(onebot,'has_task_connection',side_effect=lambda identifier:identifier=='90002'), patch.object(onebot,'request_task_api',api):
+        with patch.object(onebot_transport_service,'has_task_connection',side_effect=lambda identifier:identifier=='90002'), patch.object(onebot_transport_service,'request_task_api',api):
             assert await mobile.flush_outbox()==1
         assert outbox()[-1]['status']=='sent'
         assert all(row['status']=='pending' for row in outbox()[:-1])
@@ -200,7 +203,7 @@ def test_qq_file_resolves_id_never_trusts_event_url_or_local_path():
         incoming = event([{'type':'file','data':{'file_id':'opaque-id','name':'note.txt','url':'http://localhost/secret','path':'C:/secret'}}])
         api = AsyncMock(return_value={'data':{'url':'https://multimedia.nt.qq.com/download'}})
         download = AsyncMock(return_value=b'synthetic note')
-        with patch.object(onebot, 'request_task_api', api), patch.object(files, 'download', download):
+        with patch.object(onebot_transport_service, 'request_task_api', api), patch.object(files, 'download', download):
             await onebot.process_onebot_event(incoming, AsyncMock())
         assert api.await_args.args[1:] == ('get_private_file_url', {'file_id':'opaque-id'})
         download.assert_awaited_once_with('https://multimedia.nt.qq.com/download')
@@ -237,10 +240,10 @@ def test_durable_outbox_waits_for_correct_bot_and_stores_ack():
     async def run():
         handoff()
         api = AsyncMock(return_value={'status':'ok','retcode':0,'data':{'message_id':123}})
-        with patch.object(onebot, 'request_task_api', api):
+        with patch.object(onebot_transport_service, 'request_task_api', api):
             assert await mobile.flush_outbox() == 0
             api.assert_not_awaited()
-            with patch.object(onebot, 'has_task_connection', return_value=True):
+            with patch.object(onebot_transport_service, 'has_task_connection', return_value=True):
                 assert await mobile.flush_outbox() == 1
                 assert await mobile.flush_outbox() == 0
         assert outbox()[0]['status'] == 'sent'
@@ -253,7 +256,7 @@ def test_uncertain_or_rejected_sends_not_automatically_repeated(error, state):
     async def run():
         handoff()
         api = AsyncMock(side_effect=error)
-        with patch.object(onebot, 'has_task_connection', return_value=True), patch.object(onebot, 'request_task_api', api):
+        with patch.object(onebot_transport_service, 'has_task_connection', return_value=True), patch.object(onebot_transport_service, 'request_task_api', api):
             await mobile.flush_outbox(); await mobile.flush_outbox()
         assert api.await_count == 1
         assert outbox()[0]['status'] == state
@@ -306,7 +309,7 @@ def test_document_task_executes_real_tools_and_returns_verified_file():
         assert '10 万' in '\n'.join(p.text for p in Document(file).paragraphs)
         mobile.report_task(current)
         api = AsyncMock(return_value={'status':'ok','retcode':0})
-        with patch.object(onebot, 'has_task_connection',return_value=True), patch.object(onebot,'request_task_api',api):
+        with patch.object(onebot_transport_service, 'has_task_connection',return_value=True), patch.object(onebot_transport_service,'request_task_api',api):
             await mobile.flush_outbox()
         assert any(call.args[1] == 'upload_private_file' for call in api.await_args_list)
     asyncio.run(run())

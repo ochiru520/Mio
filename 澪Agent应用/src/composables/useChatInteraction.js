@@ -1,8 +1,9 @@
+
+import * as companionApi from '../services/companionApi.js'
 /** ChatInteraction operations. Reactive values and cross-domain callbacks are explicitly injected.
  * This module owns behavior, not application-global mutable state.
  * Dependencies are accessors so async callbacks see the latest state.
  */
-import { apiRequest } from '../services/api.js'
 import { buildTurnVoicePayload } from '../chatVoice.js'
 import { nextTick } from 'vue'
 import { savedReadingPosition, restoreReadingPosition, rememberReadingPosition } from '../conversationScroll.js'
@@ -69,14 +70,7 @@ export function useChatInteraction(deps) {
     acquireAudioOwner('message-voice')
     deps.voiceAbortController = new AbortController()
     try {
-      const audioBlob = await apiRequest('/api/companion/voice/audio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: deps.voiceAbortController.signal,
-        deadlineClass: 'media',
-        responseType: 'blob',
-      })
+      const audioBlob = await companionApi.submitVoiceAudio(payload, {headers: { 'Content-Type': 'application/json' }, signal: deps.voiceAbortController.signal, deadlineClass: 'media', responseType: 'blob'})
       if (version !== voicePlaybackVersion) return
       deps.activeMessageAudioUrl = URL.createObjectURL(audioBlob)
       deps.activeMessageAudio = new Audio(deps.activeMessageAudioUrl)
@@ -188,14 +182,11 @@ export function useChatInteraction(deps) {
   }
   async function syncSharedChatSettings(voiceLanguage = deps.chatVoiceLanguage.value) {
     try {
-      const saved = await deps.request('/api/companion/chat-settings', {
-        method: 'PATCH',
-        body: JSON.stringify({
+      const saved = await companionApi.updateChatSettings({
           model_id: deps.selectedModel.value,
           reasoning_level: deps.reasoningLevel.value,
           voice_language: voiceLanguage || 'auto',
-        }),
-      })
+        }, {}, deps.request)
       deps.chatVoiceLanguage.value = saved.voice_language || 'auto'
       if (saved.voice_language && deps.companionStatus.value.pet?.settings) {
         deps.companionStatus.value.pet.settings.gpt_sovits_text_language = saved.voice_language

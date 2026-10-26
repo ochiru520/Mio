@@ -8,13 +8,15 @@ async function main() {
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   try {
-    await page.goto('http://127.0.0.1:1422/scripts/control-surfaces-preview.html', { waitUntil: 'domcontentloaded', timeout: 60000 })
+    await page.goto((process.env.MIO_UI_BASE || 'http://127.0.0.1:1422') + '/scripts/control-surfaces-preview.html', { waitUntil: 'domcontentloaded', timeout: 60000 })
     await page.getByText('模型策略').waitFor()
     assert.match(await page.locator('.runtime-timeline').innerText(), /推进任务/)
     assert.match(await page.locator('.artifact-library').innerText(), /result.png/)
     assert.match(await page.locator('.privacy-operations-panel').innerText(), /推进任务/)
-    await page.getByLabel('Agent 任务选择策略').selectOption('fixed')
-    await page.getByLabel('Agent 任务固定模型').selectOption('model-b')
+    await page.getByRole('combobox', { name: 'Agent 任务选择策略' }).click()
+    await page.getByRole('option', { name: '固定模型', exact: true }).click()
+    await page.getByRole('combobox', { name: 'Agent 任务固定模型' }).click()
+    await page.getByRole('option', { name: '模型 B', exact: true }).click()
     await page.getByRole('button', { name: '保存Agent 任务策略' }).click()
     await page.getByText('Agent 任务策略已保存').waitFor()
     assert.deepEqual(errors, [])

@@ -66,6 +66,9 @@ hiddenimports += [
     "app.routes.companion",
     "app.routes.onebot",
     "screen_preview",
+    "window_bridge",
+    "backend_runtime",
+    "local_path_picker",
     "PIL.ImageTk",
     "pystray",
     "pystray._win32",
@@ -74,7 +77,7 @@ hiddenimports += [
 
 a = Analysis(
     [str(desktop / "launcher.py")],
-    pathex=[str(backend)],
+    pathex=[str(desktop), str(backend)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,

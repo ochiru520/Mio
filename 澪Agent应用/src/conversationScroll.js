@@ -15,3 +15,4 @@ export function restoreReadingPosition(scroll, position) {
 }
 export function rememberReadingPosition(id, scroll) {if(id && scroll)positions.set(id,captureReadingPosition(scroll))}
 export function savedReadingPosition(id) {return positions.get(id)}
+export function pauseReadingFollow(id,scroll) { if(id && scroll) {const position=captureReadingPosition(scroll);positions.set(id,{...position,atBottom:false})} }

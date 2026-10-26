@@ -1,11 +1,14 @@
 <script setup>
+import SelectField from './SelectField.vue'
 import { computed } from 'vue'
-import { Check, Gamepad2, ImagePlus, Plus, Play, Power, RotateCw, Trash2, Volume2 } from '@lucide/vue'
+import { petStartupPresentation } from '../petStartupState.js'
+import { Check, Gamepad2, ImagePlus, Plus, Play, Power, RotateCw, Trash2, Volume2 } from '../icons/index.js'
 
 const props = defineProps({
   status: { type: Object, required: true },
   avatarUrl: { type: String, required: true },
   busy: { type: Boolean, default: false },
+  controlAction: { type: String, default: '' },
   controlMode: { type: Boolean, default: false },
   managementMode: { type: Boolean, default: false },
 })
@@ -21,6 +24,7 @@ const emit = defineEmits([
   'save-size',
 ])
 const pet = computed(() => props.status.pet || { settings: {} })
+const startup = computed(() => petStartupPresentation(pet.value, props.controlAction))
 const settings = computed(() => pet.value.settings || {})
 const live2d = computed(() => pet.value.live2d || {})
 const appAssetBase = window.location.pathname.startsWith('/agent-app') ? '/agent-app' : ''
@@ -84,7 +88,14 @@ function rangeInputStyle(value, minimum, maximum) {
 
 <template>
   <section class="pet-appearance-panel simplified-pet-panel compact-pet-panel">
-    <header class="pet-appearance-heading"><div><Gamepad2 :size="18" /><span><strong>桌宠</strong><small>选择形象，调整桌面上的陪伴方式</small></span></div><span :class="['connection-label', { online: pet.running }]">{{ pet.running ? '运行中' : '未启动' }}</span></header>
+    <header class="pet-appearance-heading"><div><Gamepad2 :size="18" /><span><strong>桌宠</strong><small>选择形象，调整桌面上的陪伴方式</small></span></div><span :class="['connection-label', { online: startup.ready }]">{{ startup.label }}</span></header>
+    <div v-if="startup.message" class="pet-startup-notice" :class="{ 'pet-startup-error': startup.state === 'failed' }" role="status">
+      <p>{{ startup.message }}</p>
+      <template v-if="startup.state === 'failed' || startup.state === 'unverified'">
+        <p v-if="pet.log_path">桌宠日志：{{ pet.log_path }}</p>
+        <p v-if="pet.process_log_path">启动日志：{{ pet.process_log_path }}</p>
+      </template>
+    </div>
     <div class="appearance-unified-list">
       <div v-for="item in appearanceItems" :key="item.id" class="appearance-item-wrap">
         <button class="appearance-choice" type="button" :class="{ active: isSelected(item) }" :aria-pressed="isSelected(item)" :title="item.name" @click="selectAppearance(item)"><img :src="item.preview" :alt="item.name" /><span class="appearance-description"><strong>{{ item.name }}</strong><small>{{ item.type }}</small></span><span v-if="isSelected(item)" class="appearance-selection" aria-label="已选择"><Check :size="14" /></span></button>
@@ -97,8 +108,8 @@ function rangeInputStyle(value, minimum, maximum) {
     </div>
     <div v-if="managementMode && selectedLive2D" class="live2d-resource-manager">
       <header><strong>{{ selectedLive2D.name }} 的动作与表情</strong><small>说话时会按语义和情绪自动使用；也可以手动指定</small></header>
-      <div v-if="selectedMotions.length" class="live2d-resource-section"><h3>动作</h3><div class="live2d-resource-grid"><label v-for="(label, slot) in motionLabels" :key="slot"><span>{{ label }}</span><select v-model="currentMotionSlots[slot]"><option value="">自动判断</option><option v-for="motion in selectedMotions" :key="motion.name" :value="motion.name">{{ motion.name }}（{{ motion.count || 0 }}）</option></select><button type="button" title="预览动作" :disabled="!currentMotionSlots[slot] || busy" @click="emit('preview-motion', currentMotionSlots[slot])"><Play :size="13" /></button></label></div></div>
-      <div v-if="selectedExpressions.length" class="live2d-resource-section"><h3>表情</h3><div class="live2d-resource-grid"><label v-for="(label, slot) in expressionLabels" :key="slot"><span>{{ label }}</span><select v-model="currentExpressionSlots[slot]"><option value="">自动判断</option><option v-for="expression in selectedExpressions" :key="expression.Name || expression.name" :value="expression.Name || expression.name">{{ expression.Name || expression.name }}</option></select><button type="button" title="预览表情" :disabled="!currentExpressionSlots[slot] || busy" @click="emit('preview-expression', currentExpressionSlots[slot])"><Volume2 :size="13" /></button></label></div></div>
+      <div v-if="selectedMotions.length" class="live2d-resource-section"><h3>动作</h3><div class="live2d-resource-grid"><label v-for="(label, slot) in motionLabels" :key="slot"><span>{{ label }}</span><SelectField v-model="currentMotionSlots[slot]"><option value="">自动判断</option><option v-for="motion in selectedMotions" :key="motion.name" :value="motion.name">{{ motion.name }}（{{ motion.count || 0 }}）</option></SelectField><button type="button" title="预览动作" :disabled="!currentMotionSlots[slot] || busy" @click="emit('preview-motion', currentMotionSlots[slot])"><Play :size="13" /></button></label></div></div>
+      <div v-if="selectedExpressions.length" class="live2d-resource-section"><h3>表情</h3><div class="live2d-resource-grid"><label v-for="(label, slot) in expressionLabels" :key="slot"><span>{{ label }}</span><SelectField v-model="currentExpressionSlots[slot]"><option value="">自动判断</option><option v-for="expression in selectedExpressions" :key="expression.Name || expression.name" :value="expression.Name || expression.name">{{ expression.Name || expression.name }}</option></SelectField><button type="button" title="预览表情" :disabled="!currentExpressionSlots[slot] || busy" @click="emit('preview-expression', currentExpressionSlots[slot])"><Volume2 :size="13" /></button></label></div></div>
       <p v-if="!selectedMotions.length && !selectedExpressions.length">模型配置中没有登记动作或表情</p>
     </div>
     <div class="pet-quick-controls">
@@ -111,5 +122,6 @@ function rangeInputStyle(value, minimum, maximum) {
       <button type="button" :disabled="busy" @click="emit('control', 'stop')"><Power :size="15" />停止</button>
       <button type="button" :disabled="busy" @click="emit('save')"><Check :size="15" />应用修改</button>
     </div>
+    <label class="pet-gpu-compatibility"><input v-model="settings.live2d_disable_gpu" type="checkbox" :disabled="busy" />显卡兼容模式（黑屏或透明时尝试，应用修改后重启生效）</label>
   </section>
 </template>

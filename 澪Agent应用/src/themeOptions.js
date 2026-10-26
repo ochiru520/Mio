@@ -19,6 +19,13 @@ export const THEME_OPTIONS = [
     swatch: ['#f3efe9', '#fdfbf7', '#4a6b74'],
   },
   {
+    id: 'calm-day',
+    label: '晴窗',
+    description: '近白墙面 · 薰衣草色',
+    mode: 'light',
+    swatch: ['#f1eff7', '#ffffff', '#6c5dd3'],
+  },
+  {
     id: 'celadon',
     label: '青瓷',
     description: '青灰釉色 · 温润',
@@ -59,6 +66,13 @@ export const THEME_OPTIONS = [
     description: '赭石与枯叶黄',
     mode: 'light',
     swatch: ['#f3eee6', '#fdfaf3', '#996a2f'],
+  },
+  {
+    id: 'calm-night',
+    label: '夜窗',
+    description: '深蓝灰紫 · 安静',
+    mode: 'dark',
+    swatch: ['#14121f', '#1d1a2e', '#b3a6ff'],
   },
   {
     id: 'ink',

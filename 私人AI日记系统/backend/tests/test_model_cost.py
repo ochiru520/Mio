@@ -34,7 +34,8 @@ from app.napcat_service import (
     _repair_mojibake,
     get_napcat_login_status,
 )
-from app.routes.agent import _discovery_records, _new_api_pricing_map, qq_login_qrcode
+from app.model_provider_service import _discovery_records, _new_api_pricing_map
+from app.routes.agent import qq_login_qrcode
 
 
 class ModelCostTests(unittest.TestCase):

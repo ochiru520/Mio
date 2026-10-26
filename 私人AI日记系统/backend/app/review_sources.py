@@ -6,23 +6,13 @@ import json
 from datetime import date as date_cls, timedelta
 from typing import Any
 
+from .repositories import review_sources_repository as repository
 from . import db
 
 
 def _ensure_table() -> None:
-    with db.get_conn() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS review_source_snapshots (
-                review_kind TEXT NOT NULL,
-                review_key TEXT NOT NULL,
-                source_hash TEXT NOT NULL,
-                source_json TEXT NOT NULL,
-                generated_at TEXT NOT NULL,
-                PRIMARY KEY (review_kind, review_key)
-            )
-            """
-        )
+    with repository.transaction() as conn:
+        conn.ensure_table_n_review_source_snapshots()
 
 
 def _hash(value: Any) -> str:
@@ -96,26 +86,15 @@ def save_snapshot(kind: str, key: str, payload: dict[str, Any], generated_at: st
     generated = generated_at or db.now_iso()
     source_hash = _hash(payload)
     source_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    with db.get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO review_source_snapshots(review_kind, review_key, source_hash, source_json, generated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(review_kind, review_key) DO UPDATE SET
-                source_hash=excluded.source_hash, source_json=excluded.source_json, generated_at=excluded.generated_at
-            """,
-            (kind, key, source_hash, source_json, generated),
-        )
+    with repository.transaction() as conn:
+        conn.save_snapshot_n_review_source_snapshots((kind, key, source_hash, source_json, generated))
     return {"source_hash": source_hash, "source_generated_at": generated, "source_status": "current", "stale": False}
 
 
 def status(kind: str, key: str, current_payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_table()
-    with db.get_conn() as conn:
-        row = conn.execute(
-            "SELECT source_hash, source_json, generated_at FROM review_source_snapshots WHERE review_kind=? AND review_key=?",
-            (kind, key),
-        ).fetchone()
+    with repository.transaction() as conn:
+        row = conn.status_find_review_source_snapshots((kind, key))
     if row is None:
         return {
             "source_hash": "",

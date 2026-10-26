@@ -8,7 +8,7 @@ import ipaddress
 import secrets
 import socket
 import time
-from contextlib import closing, nullcontext
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, ConfigDict
+from .repositories import mobile_gateway_repository as repository
 from . import db, agent_task_service as tasks
 
 _pair = {}
@@ -25,16 +26,14 @@ _state = {'running':False,'error':''}
 
 
 def initialize():
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript('''CREATE TABLE IF NOT EXISTS mobile_portal_settings(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL,port INTEGER NOT NULL);
-          INSERT OR IGNORE INTO mobile_portal_settings VALUES(1,0,8443);
-          CREATE TABLE IF NOT EXISTS mobile_portal_devices(id TEXT PRIMARY KEY,name TEXT NOT NULL,token_hash TEXT UNIQUE NOT NULL,expires_at REAL NOT NULL,created_at TEXT NOT NULL,last_seen TEXT NOT NULL);''')
+    with repository.transaction() as conn:
+        conn.initialize_initialize_mobile_portal_settings()
 
 
 def configuration():
     initialize()
-    with closing(db.get_conn()) as conn:
-        return dict(conn.execute('SELECT enabled,port FROM mobile_portal_settings WHERE id=1').fetchone())
+    with repository.read() as conn:
+        return dict(conn.configuration_find_mobile_portal_settings())
 
 
 def addresses():
@@ -91,8 +90,8 @@ def certificate():
 
 def status():
     value=configuration()
-    with closing(db.get_conn()) as conn:
-        devices=[dict(r) for r in conn.execute('SELECT id,name,created_at,last_seen,expires_at FROM mobile_portal_devices WHERE expires_at>? ORDER BY created_at DESC',(time.time(),))]
+    with repository.read() as conn:
+        devices=[dict(r) for r in conn.status_find_mobile_portal_devices((time.time(),))]
     return {**value,**_state,'addresses':[f'https://{ip}:{value["port"]}/mobile/' for ip in addresses() if ip!='127.0.0.1'],
             'devices':devices,'certificate_url':'/api/mobile-portal/certificate',
             'help':'首次使用需在手机信任本机证书；电脑保持运行。外出访问需你已配置的私人 VPN 或可信 HTTPS 网络入口。不会自动开放公网端口。'}
@@ -100,8 +99,8 @@ def status():
 
 def configure(enabled,port):
     initialize()
-    with closing(db.get_conn()) as conn,conn:
-        conn.execute('UPDATE mobile_portal_settings SET enabled=?,port=? WHERE id=1',(int(enabled),port))
+    with repository.transaction() as conn:
+        conn.configure_update_mobile_portal_settings((int(enabled),port))
     return status()
 
 
@@ -116,8 +115,8 @@ def session(request):
     token=request.cookies.get('mio_owner','')
     if not token:return None
     initialize()
-    with closing(db.get_conn()) as conn:
-        row=conn.execute('SELECT * FROM mobile_portal_devices WHERE token_hash=? AND expires_at>?',(hashlib.sha256(token.encode()).hexdigest(),time.time())).fetchone()
+    with repository.read() as conn:
+        row=conn.session_find_mobile_portal_devices((hashlib.sha256(token.encode()).hexdigest(),time.time()))
     return dict(row) if row else None
 
 
@@ -175,8 +174,8 @@ def create_app():
             request.state.mobile_portal = True
             if path not in {'/api/mobile/session','/api/mobile/logout'} and not allowed(request.method,path):
                 return JSONResponse({'detail':'手机入口不提供此接口。'},403)
-            with closing(db.get_conn()) as conn,conn:
-                conn.execute('UPDATE mobile_portal_devices SET last_seen=? WHERE id=?',(db.now_iso(),device['id']))
+            with repository.transaction() as conn:
+                conn.protect_update_mobile_portal_devices((db.now_iso(),device['id']))
         from . import maintenance_service
         try:
             with maintenance_service.mutation_scope() if request.method not in {'GET','HEAD'} else nullcontext():
@@ -200,8 +199,8 @@ def create_app():
             raise HTTPException(401,'配对码无效或已过期。')
         _pair.clear()
         token=secrets.token_urlsafe(40);device_id='device_'+secrets.token_hex(12)
-        with closing(db.get_conn()) as conn,conn:
-            conn.execute('INSERT INTO mobile_portal_devices VALUES(?,?,?,?,?,?)',(device_id,payload.name,hashlib.sha256(token.encode()).hexdigest(),now+30*86400,db.now_iso(),db.now_iso()))
+        with repository.transaction() as conn:
+            conn.pair_device_insert_mobile_portal_devices((device_id,payload.name,hashlib.sha256(token.encode()).hexdigest(),now+30*86400,db.now_iso(),db.now_iso()))
         response=JSONResponse({'paired':True,'name':payload.name})
         response.set_cookie('mio_owner',token,max_age=30*86400,httponly=True,secure=True,samesite='strict',path='/')
         return response
@@ -214,7 +213,7 @@ def create_app():
     @app.post('/api/mobile/logout')
     async def logout(request:Request):
         device=session(request)
-        with closing(db.get_conn()) as conn,conn:conn.execute('DELETE FROM mobile_portal_devices WHERE id=?',(device['id'],))
+        with repository.transaction() as conn:conn.logout_delete_mobile_portal_devices((device['id'],))
         response=JSONResponse({'paired':False});response.delete_cookie('mio_owner',path='/');return response
 
     @app.get('/mobile/')
@@ -286,7 +285,7 @@ async def portal_pairing():
 @router.delete('/devices/{device_id}')
 async def revoke(device_id:str):
     initialize()
-    with closing(db.get_conn()) as conn,conn:conn.execute('DELETE FROM mobile_portal_devices WHERE id=?',(device_id,))
+    with repository.transaction() as conn:conn.revoke_delete_mobile_portal_devices((device_id,))
     return {'revoked':True}
 
 @router.get('/certificate')

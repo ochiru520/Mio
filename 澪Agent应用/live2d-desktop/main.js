@@ -546,6 +546,7 @@ function toggleChatWindow(anchor) {
 
 function restoreWindowVisibility() {
   if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
   if (!mainWindow.isVisible()) mainWindow.showInactive()
   applyWindowLayering()
   if (lockControlWindow && !lockControlWindow.isDestroyed()) {
@@ -752,11 +753,19 @@ function createTray() {
 function registerIpc() {
   ipcMain.handle('mio-desktop:get-state', () => ({
     apiBase: API_BASE,
+    launchId: String(process.env.MIO_PET_LAUNCH_ID || ''),
     bounds: virtualBounds(),
     models: modelCatalog(),
     selectedModelId: String(loadRuntimeState().selectedModelId || ''),
     clickThroughLocked,
   }))
+  ipcMain.handle('mio-desktop:ensure-visible', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow()
+    restoreWindowVisibility()
+    const visible = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized())
+    log('window.ensure_visible', String(visible))
+    return { visible }
+  })
   ipcMain.on('mio-desktop:set-interactive', (_event, interactive) => setMouseInteractive(Boolean(interactive)))
   ipcMain.on('mio-desktop:set-click-through-locked', (_event, enabled) => {
     setClickThroughLocked(Boolean(enabled), false)
@@ -808,6 +817,10 @@ else {
     createWindow()
     createTray()
     startParentWatchdog()
+  }).catch((error) => {
+    log('runtime.start_failed', error.stack || String(error))
+    console.error('桌宠初始化失败', error)
+    app.exit(1)
   })
 }
 

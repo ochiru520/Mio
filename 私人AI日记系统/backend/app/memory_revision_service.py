@@ -4,30 +4,19 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from .repositories import memory_revision_service_repository as repository
 from . import db
 
 
 def initialize() -> None:
-    with db.get_conn() as conn:
-        conn.executescript('''
-            CREATE TABLE IF NOT EXISTS memory_user_controls (
-                category TEXT NOT NULL, memory_key TEXT NOT NULL,
-                memory_id INTEGER NOT NULL, action TEXT NOT NULL, updated_at TEXT NOT NULL,
-                PRIMARY KEY(category, memory_key)
-            );
-            CREATE TABLE IF NOT EXISTS memory_revision_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id INTEGER NOT NULL,
-                previous_id INTEGER NOT NULL, action TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-        ''')
+    with repository.transaction() as conn:
+        conn.initialize_initialize_memory_user_controls()
 
 
 def control(category: str, key: str):
     initialize()
-    with db.get_conn() as conn:
-        return conn.execute('SELECT * FROM memory_user_controls WHERE category=? AND memory_key=?',
-                            (category, key)).fetchone()
+    with repository.transaction() as conn:
+        return conn.control_find_memory_user_controls((category, key))
 
 
 def revise(memory_id: int, action: str, *, content: str = '', expected_content: str | None = None) -> int:
@@ -37,9 +26,9 @@ def revise(memory_id: int, action: str, *, content: str = '', expected_content: 
     if action == 'correct' and not 1 <= len(text) <= 800:
         raise ValueError('修正内容需要 1–800 个字符。')
     initialize()
-    with db.get_conn() as conn:
-        conn.execute('BEGIN IMMEDIATE')
-        row = conn.execute('SELECT * FROM structured_memories WHERE id=?', (memory_id,)).fetchone()
+    with repository.transaction() as conn:
+        conn.revise_begin_schema()
+        row = conn.revise_find_structured_memories((memory_id,))
         if row is None:
             raise ValueError('没有找到这条记忆。')
         if expected_content is not None and row['content'] != expected_content:
@@ -57,24 +46,15 @@ def revise(memory_id: int, action: str, *, content: str = '', expected_content: 
             data.pop('id')
             data.update(content=text, confidence=1.0, status='active', superseded_by=0,
                         last_confirmed_at=now, updated_at=now, created_at=now, last_seen_at=now)
-            columns = ','.join(data)
-            new_id = conn.execute(f'INSERT INTO structured_memories ({columns}) VALUES ({",".join("?" for _ in data)})',
-                                  tuple(data.values())).lastrowid
-            db._upsert_structured_memory_fts(conn, new_id, row['memory_key'], row['category'], text)
+            new_id = conn.insert_corrected_memory(data)
+            conn.upsert_memory_fts(new_id, row['memory_key'], row['category'], text)
         if action not in {'archive', 'sleep'}:
-            conn.execute("UPDATE structured_memories SET status='superseded',superseded_by=?,updated_at=? "
-                         "WHERE category=? AND memory_key=? AND status='active' AND id<>?",
-                         (new_id, now, row['category'], row['memory_key'], new_id))
-            conn.execute("UPDATE structured_memories SET status='active',superseded_by=0,confidence=1,"
-                         "last_confirmed_at=?,updated_at=? WHERE id=?", (now, now, new_id))
+            conn.revise_update_structured_memories((new_id, now, row['category'], row['memory_key'], new_id))
+            conn.revise_update_structured_memories_2((now, now, new_id))
         else:
-            conn.execute("UPDATE structured_memories SET status=?,updated_at=? WHERE id=?",
-                         ('sleeping' if action == 'sleep' else 'archived', now, memory_id))
-        conn.execute('INSERT INTO memory_user_controls VALUES(?,?,?,?,?) ON CONFLICT(category,memory_key) '
-                     'DO UPDATE SET memory_id=excluded.memory_id,action=excluded.action,updated_at=excluded.updated_at',
-                     (row['category'], row['memory_key'], new_id, action, now))
-        conn.execute('INSERT INTO memory_revision_events(memory_id,previous_id,action,created_at) VALUES(?,?,?,?)',
-                     (new_id, memory_id, action, now))
+            conn.revise_update_structured_memories_3(('sleeping' if action == 'sleep' else 'archived', now, memory_id))
+        conn.revise_insert_memory_user_controls((row['category'], row['memory_key'], new_id, action, now))
+        conn.revise_insert_memory_revision_events((new_id, memory_id, action, now))
         return int(new_id)
 
 
@@ -87,10 +67,8 @@ def evidence(memory_id: int) -> dict:
     # A malformed or migrated reference must never reveal another conversation.
     if source is not None and str(source['conversation_id']) != str(row['source_conversation_id']):
         source = None
-    with db.get_conn() as conn:
-        events = [dict(item) for item in conn.execute(
-            'SELECT * FROM memory_revision_events WHERE memory_id=? OR previous_id=? ORDER BY id DESC',
-            (memory_id, memory_id))]
+    with repository.transaction() as conn:
+        events = [dict(item) for item in conn.evidence_find_memory_revision_events((memory_id, memory_id))]
     return {'memory_id': memory_id,
             'kind': 'user_confirmed' if any(e['memory_id'] == memory_id and e['action'] != 'archive' for e in events)
                     else 'model_extracted' if row['source_message_id'] else 'unverified_origin',
@@ -101,16 +79,11 @@ def evidence(memory_id: int) -> dict:
 def _rules() -> list[dict]:
     # Read-only prompt construction must work before database initialization.
     try:
-        with db.get_conn() as conn:
-            controls = conn.execute('SELECT c.*,m.content,m.status,COALESCE(s.id,0) AS source_message_id '
-                                    'FROM memory_user_controls c JOIN structured_memories m ON m.id=c.memory_id '
-                                    'LEFT JOIN messages s ON s.id=m.source_message_id AND s.conversation_id=m.source_conversation_id '
-                                    'ORDER BY c.updated_at DESC').fetchall()
+        with repository.transaction() as conn:
+            controls = conn.rules_find_memory_user_controls()
             result = []
             for item in controls:
-                old = [str(r[0]) for r in conn.execute(
-                    'SELECT content FROM structured_memories WHERE category=? AND memory_key=? AND id<>?',
-                    (item['category'], item['memory_key'], item['memory_id']))]
+                old = [str(r[0]) for r in conn.rules_find_structured_memories((item['category'], item['memory_key'], item['memory_id']))]
                 if item['status'] != 'active':
                     old.append(item['content'])
                 result.append({**dict(item), 'old': old})

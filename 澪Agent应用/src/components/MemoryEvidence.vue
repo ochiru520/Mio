@@ -1,6 +1,7 @@
 <script setup>
+import * as memoryApi from '../services/memoryApi.js'
+
 import { ref, watch } from 'vue'
-import { apiRequest } from '../services/api.js'
 const props = defineProps({ memory: { type: Object, required: true } })
 const evidence = ref(null)
 const error = ref('')
@@ -13,7 +14,7 @@ async function load(event) {
   loading.value = true
   error.value = ''
   try {
-    const value = await apiRequest(`/api/memory/items/${props.memory.id}/evidence`)
+    const value = await memoryApi.loadItemEvidence(props.memory.id, {})
     if (generation === current) evidence.value = value
   } catch (cause) { if (generation === current) error.value = cause.message }
   finally { if (generation === current) loading.value = false }

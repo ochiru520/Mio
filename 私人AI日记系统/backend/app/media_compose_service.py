@@ -6,8 +6,9 @@ import hashlib
 import json
 import os
 import shutil
-from contextlib import closing
 from pathlib import Path
+
+from .repositories import media_compose_repository as repository
 
 from . import db, artifact_service, agent_file_service, creation_service
 from .workspace_service import encode
@@ -17,10 +18,7 @@ _running = {}
 
 
 def initialize():
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS media_assemblies(
-          id TEXT PRIMARY KEY,task_id TEXT NOT NULL,spec_json TEXT NOT NULL,status TEXT NOT NULL,
-          artifact_id TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL)''')
+    repository.initialize()
 
 
 def binary():
@@ -29,8 +27,7 @@ def binary():
 
 def get(assembly_id):
     initialize()
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM media_assemblies WHERE id=?',(assembly_id,)).fetchone()
+    row = repository.get(assembly_id)
     if not row:
         raise ValueError('找不到合成任务。')
     item = dict(row)
@@ -70,8 +67,7 @@ def create(spec, context):
     if spec.get('audio'):
         input_path(spec['audio'],context.task_id)
     assembly_id = 'assembly_' + hashlib.sha256(encode([context.task_id,spec]).encode()).hexdigest()[:24]
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('INSERT OR IGNORE INTO media_assemblies VALUES(?,?,?,\'queued\',\'\',\'\',?,?)',(assembly_id,context.task_id,encode(spec),db.now_iso(),db.now_iso()))
+    repository.create(assembly_id, context.task_id, encode(spec), db.now_iso(), db.now_iso())
     schedule(assembly_id)
     return {'assembly':get(assembly_id)}
 
@@ -127,8 +123,7 @@ async def run(assembly_id):
     folder = agent_file_service.workspace() / item['task_id'] / assembly_id
     folder.mkdir(parents=True,exist_ok=True)
     try:
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE media_assemblies SET status='running',updated_at=? WHERE id=?",(db.now_iso(),assembly_id))
+        repository.mark_running(assembly_id, db.now_iso())
         width,height = int(spec.get('width',720)),int(spec.get('height',1280))
         if width<128 or height<128 or width>3840 or height>3840 or width%2 or height%2:
             raise ValueError('合成尺寸需要是 128–3840 的偶数。')
@@ -182,27 +177,22 @@ async def run(assembly_id):
         if not output.is_file() or output.stat().st_size<100:
             raise ValueError('未生成有效视频文件。')
         artifact = artifact_service.import_file(output,expected_sha256=hashlib.sha256(output.read_bytes()).hexdigest(),source_root=folder,producer='media_assembly',task_id=item['task_id'],name=Path(spec.get('name') or '成片.mp4').stem+'.mp4')
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE media_assemblies SET status='completed',artifact_id=?,updated_at=? WHERE id=?",(artifact['id'],db.now_iso(),assembly_id))
+        repository.mark_completed(assembly_id, artifact['id'], db.now_iso())
     except asyncio.CancelledError:
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE media_assemblies SET status='queued',updated_at=? WHERE id=?",(db.now_iso(),assembly_id))
+        repository.requeue(assembly_id, db.now_iso())
         raise
     except Exception as exc:
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE media_assemblies SET status='failed',error=?,updated_at=? WHERE id=?",(str(exc)[:1800],db.now_iso(),assembly_id))
+        repository.mark_failed(assembly_id, str(exc)[:1800], db.now_iso())
 
 
 async def stop_task(task_id, cancelled=False):
     initialize()
-    with closing(db.get_conn()) as conn:
-        ids=[row[0] for row in conn.execute("SELECT id FROM media_assemblies WHERE task_id=? AND status IN ('queued','running')",(task_id,))]
+    ids = repository.active_for_task(task_id)
     running=[_running[key] for key in ids if key in _running]
     for job in running: job.cancel()
     if running: await asyncio.gather(*running,return_exceptions=True)
     if cancelled:
-        with closing(db.get_conn()) as conn,conn:
-            conn.execute("UPDATE media_assemblies SET status='cancelled' WHERE task_id=? AND status='queued'",(task_id,))
+        repository.cancel_queued(task_id)
 
 
 async def service_loop():
@@ -216,8 +206,7 @@ async def service_loop():
                     job.cancel()
                     await asyncio.gather(job,return_exceptions=True)
             if not tasks.automatic_work_paused():
-                with closing(db.get_conn()) as conn:
-                    rows = conn.execute("SELECT id,task_id FROM media_assemblies WHERE status IN ('queued','running')").fetchall()
+                rows = repository.active_assemblies()
                 for row in rows:
                     parent = tasks.get(row['task_id'])
                     if parent and parent['status'] not in {'paused','cancelled'}:

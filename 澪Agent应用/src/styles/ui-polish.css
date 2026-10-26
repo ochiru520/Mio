@@ -40,13 +40,13 @@
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-input::placeholder { color: var(--text-faint); }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-actions { gap: 9px; margin-top: 8px; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger { border: 0; background: transparent; padding: 5px 7px; font-size: calc(12px * var(--fs)); box-shadow: none; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger small { font-size: calc(10px * var(--fs)); color: var(--text-faint); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger small { font-size: calc(12px * var(--fs)); color: var(--text-faint); }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .send-button { border-radius: 50%; width: 32px; min-width: 32px; height: 32px; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-trigger { border: 0; background: var(--surface-soft); border-radius: 8px; padding: 7px 11px; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-trigger span { font-size: calc(12px * var(--fs)); }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer { border-radius: 0; box-shadow: 6px 0 20px color-mix(in srgb,var(--shadow-tint) 60%,transparent); }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-list strong { font-size: calc(13px * var(--fs)); font-weight: 500; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-list small { font-size: calc(11px * var(--fs)); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-list small { font-size: calc(12px * var(--fs)); }
 .mio-settings-content .settings-page-title h1 { font-size: calc(25px * var(--fs)); font-weight: 500; letter-spacing: 0; }
 .mio-agent-project-sidebar button,.agent-content-sidebar button,.agent-personal-menu button,.mio-settings-sidebar nav > button { color: var(--text); font-size: calc(13px * var(--fs,1)); }
 .mio-agent-project-sidebar .agent-sidebar-label,.mio-settings-sidebar nav > small { color: var(--text-muted); }

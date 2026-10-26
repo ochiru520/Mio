@@ -9,3 +9,7 @@ export const loadDependencyStatus = (depId) => apiRequest(`/api/dependencies/${e
 export const previewDependencyUninstall = (depId) => apiRequest(`/api/dependencies/${encodeURIComponent(depId)}/uninstall-preview`, { timeoutMs: 60_000 })
 export const uninstallDependency = (depId, token) => apiRequest(`/api/dependencies/${encodeURIComponent(depId)}/uninstall`, { method: 'POST', body: JSON.stringify({ token }), timeoutMs: 180_000 })
 export const activateLocalVision = () => apiRequest('/api/dependencies/ollama_vision/activate', { method: 'POST', body: '{}', timeoutMs: 150_000 })
+
+export const loadNapcatStatus = (options = {}, transport = apiRequest) => transport("/api/dependencies/napcat/status", Object.keys(options).length ? options : undefined)
+
+export const loadDiagnostics = (options = {}, transport = apiRequest) => transport("/api/dependencies/diagnostics", Object.keys(options).length ? options : undefined)

@@ -143,7 +143,7 @@ class NapCatSetupTests(unittest.TestCase):
                 return_value={"ok": True, "output": "started", "returncode": 0},
             ) as control,
             patch("app.routes.agent.refresh_napcat_qrcode", new=AsyncMock(return_value=True)),
-            patch("app.routes.agent._qq_status", new=AsyncMock(return_value={"logged_in": False})),
+            patch("app.qq_status_service.status", new=AsyncMock(return_value={"logged_in": False})),
             patch("app.routes.agent.asyncio.sleep", new=AsyncMock()),
         ):
             result = asyncio.run(control_qq("login"))
@@ -155,7 +155,7 @@ class NapCatSetupTests(unittest.TestCase):
         payload = QQSetupRequest(account="87654321", target_user_id="")
         with (
             patch(
-                "app.routes.agent._qq_status",
+                "app.qq_status_service.status",
                 new=AsyncMock(
                     side_effect=[
                         {"napcat_executable_exists": True, "connected_account": "12345678"},

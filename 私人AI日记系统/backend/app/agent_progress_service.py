@@ -70,4 +70,3 @@ async def stream(task_id,request,after_id=0,*,max_seconds=55):
         if time.monotonic()-last_heartbeat>=10:
             yield ': heartbeat\n\n'; last_heartbeat=time.monotonic()
         if len(rows)<100: await asyncio.sleep(.3)
-

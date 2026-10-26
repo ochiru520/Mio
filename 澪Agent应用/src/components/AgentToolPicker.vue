@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Check, ChevronDown, Image, Sparkles, Video, Wrench } from '@lucide/vue'
+import { Check, ChevronDown, Image, Sparkles, Video, Wrench } from '../icons/index.js'
 import { loadCreationConfiguration, loadCreationWorkflows } from '../services/creationApi.js'
 
 const props = defineProps({ modelValue: { type: String, default: '' }, disabled: Boolean, mode: { type: String, default: '' } })
@@ -109,7 +109,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeOutside))
 
 <style scoped>
 .agent-tool-picker { position: relative; flex: 0 1 auto; min-width: 0; }
-.agent-tool-mode { display: inline-flex; align-items: center; gap: 5px; max-width: 150px; height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); font: inherit; font-size: calc(11px * var(--fs, 1)); cursor: pointer; }
+.agent-tool-mode { display: inline-flex; align-items: center; gap: 5px; max-width: 150px; height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); font: inherit; font-size: calc(12px * var(--fs, 1)); cursor: pointer; }
 .agent-tool-mode span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-tool-mode svg { flex-shrink: 0; }
 .agent-tool-mode:hover, .agent-tool-mode.selected, .agent-tool-mode[aria-expanded="true"] { color: var(--view-accent-dark); background: var(--view-accent-soft); }
@@ -117,14 +117,14 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeOutside))
 .agent-tool-mode:focus-visible, .agent-tool-popover button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .agent-tool-popover { position: absolute; z-index: 40; bottom: calc(100% + 10px); left: 0; width: min(302px, calc(100vw - 90px)); max-height: min(440px, 65vh); overflow: auto; padding: 7px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 30px var(--shadow-tint); }
 .agent-tool-popover header { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 8px 10px; font-size: calc(12px * var(--fs, 1)); color: var(--text); }
-.agent-tool-popover header small, .agent-tool-popover footer, .agent-tool-popover p { color: var(--text-faint); font-size: calc(10px * var(--fs, 1)); }
+.agent-tool-popover header small, .agent-tool-popover footer, .agent-tool-popover p { color: var(--text-faint); font-size: calc(12px * var(--fs, 1)); }
 .agent-tool-popover > button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); text-align: left; cursor: pointer; }
 .agent-tool-popover > button:hover, .agent-tool-popover > button[aria-checked="true"] { color: var(--view-accent-dark); background: var(--view-accent-soft); }
 .agent-tool-popover > button:disabled { opacity: .45; cursor: not-allowed; }
 .agent-tool-popover > button > svg { flex-shrink: 0; }
 .agent-tool-popover > button > span { display: grid; gap: 4px; flex: 1; min-width: 0; }
 .agent-tool-popover strong { font-size: calc(12px * var(--fs, 1)); font-weight: 500; }
-.agent-tool-popover small { color: var(--text-faint); font-size: calc(10px * var(--fs, 1)); line-height: 1.5; }
+.agent-tool-popover small { color: var(--text-faint); font-size: calc(12px * var(--fs, 1)); line-height: 1.5; }
 .agent-tool-popover footer { margin: 6px 7px 2px; padding-top: 9px; border-top: 1px solid var(--border); line-height: 1.5; }
 .agent-tool-popover p { margin: 8px; line-height: 1.5; }
 .agent-tool-popover p button { background: transparent; border: 0; color: var(--view-accent-dark); cursor: pointer; }

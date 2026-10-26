@@ -45,11 +45,11 @@ onBeforeUnmount(dispose)
 .checks-heading, .check-title, .check-actions { display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 h3 { margin: 0; font-size: calc(15px * var(--fs, 1)); }
 p { font-size: calc(12px * var(--fs, 1)); line-height: 1.65; margin: 8px 0; }
-small { display: block; font-size: calc(11px * var(--fs, 1)); line-height: 1.7; opacity: .8; }
+small { display: block; font-size: calc(12px * var(--fs, 1)); line-height: 1.7; opacity: .8; }
 .checks-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; margin-top: 12px; }
 article { padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-width: 0; overflow-wrap: anywhere; }
 .check-title { font-size: calc(12px * var(--fs, 1)); }
-.check-title span { font-size: calc(11px * var(--fs, 1)); }
+.check-title span { font-size: calc(12px * var(--fs, 1)); }
 .passed { color: var(--success); } .failed, .checks-error { color: var(--danger); } .stale, .interrupted { color: var(--warning); }
 .check-actions { justify-content: flex-start; margin-top: 10px; }
 button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: inherit; font: inherit; font-size: calc(12px * var(--fs, 1)); cursor: pointer; }

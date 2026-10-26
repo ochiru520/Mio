@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('mioDesktop', {
   toggleChatWindow: (anchor) => ipcRenderer.invoke('mio-desktop:toggle-chat-window', anchor || {}),
   showChatWindow: (anchor) => ipcRenderer.invoke('mio-desktop:show-chat-window', anchor || {}),
   restoreVisibility: () => ipcRenderer.send('mio-desktop:restore-visibility'),
+  ensureVisible: () => ipcRenderer.invoke('mio-desktop:ensure-visible'),
   importModel: () => ipcRenderer.invoke('mio-desktop:import-model'),
   selectModel: (modelId) => ipcRenderer.invoke('mio-desktop:select-model', String(modelId || '')),
   openAgent: () => ipcRenderer.invoke('mio-desktop:open-agent'),

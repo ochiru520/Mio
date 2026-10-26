@@ -1,5 +1,7 @@
 <script>
-import { inject } from 'vue'
+import SelectField from './SelectField.vue'
+import { inject, provide, toRefs, useId } from 'vue'
+import SettingsSaveActions from './SettingsSaveActions.vue'
 import UpdatePanel from './UpdatePanel.vue'
 import CharacterCardPanel from './CharacterCardPanel.vue'
 import DependencyCenter from './DependencyCenter.vue'
@@ -35,12 +37,13 @@ import {
   UserRound,
   Volume2,
   Wifi,
-} from '@lucide/vue'
+} from '../icons/index.js'
 
 export default {
   name: 'SettingsPage',
   props: { agent: Boolean },
-  components: {
+  components: { SelectField,
+    SettingsSaveActions,
     UpdatePanel,
     WechatSettingsPanel,
     Activity, Archive, Bot, CalendarDays, Check, Clock3, Download, Feather, FolderOpen,
@@ -49,8 +52,10 @@ export default {
   },
   setup() {
     const context = inject('mio-settings-page')
+    const headerActionsId = `settings-actions-${useId().replace(/:/g, '-')}`
+    provide('settings-header-actions-target', `#${headerActionsId}`)
     if (!context) throw new Error('设置页上下文未初始化')
-    return context
+    return { ...toRefs(context), headerActionsId }
   },
   data() {
     return {
@@ -79,7 +84,7 @@ export default {
         <component :is="activeSettingsItem.icon" :size="20" />
         <div><h1>{{ agent ? ({ appearance: '外观主题', profile: '人设与表达' })[activeSettingsSection] || activeSettingsItem.label : activeSettingsItem.label }}</h1><p>{{ agent && activeSettingsSection === 'appearance' ? '主题、字体与消息信息，和 Mio 聊天共用' : activeSettingsItem.description }}</p></div>
       </div>
-      <div class="settings-header-actions">
+      <div :id="headerActionsId" class="settings-header-actions">
         <span v-if="isSettingsSectionDirty(activeSettingsSection)" class="settings-unsaved">有未保存修改</span>
         <button v-if="['general', 'conversation', 'diary', 'qq', 'advanced'].includes(activeSettingsSection) && runtimeSettingsReady" type="button" class="text-button" :disabled="runtimeSettingsBusy" @click="reloadRuntimeSettings"><RefreshCw :size="14" />重新读取</button>
       </div>
@@ -98,7 +103,7 @@ export default {
           <label class="settings-item"><span><strong>打开应用时主动打招呼</strong><small>每次真正启动应用后，由{{ mioDisplayName }}结合时间和最近记忆自然开场</small></span><span class="switch-control"><input v-model="startupGreetingEnabled" type="checkbox" /><i /></span></label>
           <label class="settings-item"><span><strong>关闭窗口后留在后台</strong><small>关闭主窗口不会退出服务，可从系统托盘重新打开</small></span><span class="switch-control"><input v-model="desktopPreferencesDraft.close_to_background" type="checkbox" :disabled="!desktopPreferencesReady" /><i /></span></label>
           <label class="settings-item"><span><strong>开机启动</strong><small>写入 Windows 当前用户启动项，可随时关闭</small></span><span class="switch-control"><input v-model="desktopPreferencesDraft.windows_startup" type="checkbox" :disabled="!desktopPreferencesReady" /><i /></span></label>
-          <label class="settings-item"><span><strong>默认打开页面</strong><small>下一次启动主应用时首先进入的页面</small></span><select v-model="appPreferencesDraft.default_open_page"><option value="home">首页</option><option value="chat">对话</option><option value="diaries">日记</option><option value="memory">记忆</option><option value="tasks">任务</option><option value="companion">桌宠</option></select></label>
+          <label class="settings-item"><span><strong>默认打开页面</strong><small>下一次启动主应用时首先进入的页面</small></span><SelectField v-model="appPreferencesDraft.default_open_page"><option value="home">首页</option><option value="chat">对话</option><option value="diaries">日记</option><option value="memory">记忆</option><option value="tasks">任务</option><option value="companion">桌宠</option></SelectField></label>
         </div>
       </div>
       <div v-if="runtimeSettingsReady" class="settings-section-block">
@@ -113,7 +118,7 @@ export default {
         </div>
       </div>
       <UpdatePanel />
-      <div class="settings-savebar"><span>启动行为和主动联系修改后保存生效</span><div><button type="button" :disabled="!isSettingsSectionDirty('general')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('general') || !runtimeSettingsReady || runtimeSettingsBusy || desktopPreferencesBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></div></div>
+      <div class="settings-savebar"><span>启动行为和主动联系修改后保存生效</span><SettingsSaveActions><button type="button" :disabled="!isSettingsSectionDirty('general')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('general') || !runtimeSettingsReady || runtimeSettingsBusy || desktopPreferencesBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></SettingsSaveActions></div>
     </section>
 
     <section v-else-if="activeSettingsSection === 'appearance'" class="settings-content-section">
@@ -140,7 +145,7 @@ export default {
             </section>
           </div>
         </div>
-        <label class="settings-item"><span><strong>字体大小</strong><small>调整应用正文与控件的整体字号</small></span><select v-model="appPreferencesDraft.font_size"><option value="small">较小</option><option value="medium">标准</option><option value="large">较大</option></select></label>
+        <label class="settings-item"><span><strong>字体大小</strong><small>调整应用正文与控件的整体字号</small></span><SelectField v-model="appPreferencesDraft.font_size"><option value="small">较小</option><option value="medium">标准</option><option value="large">较大</option></SelectField></label>
         <label class="settings-item"><span><strong>轻量动画</strong><small>保留侧栏展开、悬停和状态切换的短动画</small></span><span class="switch-control"><input v-model="appPreferencesDraft.light_animations" type="checkbox" /><i /></span></label>
         <label v-if="!agent" class="settings-item"><span><strong>专注模式</strong><small>默认收起左右侧栏，让主内容获得更多空间</small></span><span class="switch-control"><input v-model="appPreferencesDraft.focus_mode" type="checkbox" /><i /></span></label>
       </div></div>
@@ -165,7 +170,7 @@ export default {
       <div class="settings-section-block"><h2>对话信息</h2><div class="settings-check-grid message-field-grid">
         <label v-for="item in visibilityOptions.filter((entry) => ['message_time','message_model','message_tokens','response_latency','message_cost','message_copy','message_play'].includes(entry.id))" :key="item.id" class="toggle-row"><input v-model="appPreferencesDraft.visibility[item.id]" type="checkbox" /><span>{{ item.label }}</span></label>
       </div></div>
-      <div class="settings-savebar"><span>主题会即时预览；取消可恢复已保存状态</span><div><button type="button" :disabled="!isSettingsSectionDirty('appearance')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('appearance')" @click="saveActiveSettings"><Check :size="15" />保存</button></div></div>
+      <div class="settings-savebar"><span>主题会即时预览；取消可恢复已保存状态</span><SettingsSaveActions><button type="button" :disabled="!isSettingsSectionDirty('appearance')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('appearance')" @click="saveActiveSettings"><Check :size="15" />保存</button></SettingsSaveActions></div>
     </section>
 
     <section v-else-if="activeSettingsSection === 'profile'" class="settings-content-section">
@@ -200,14 +205,14 @@ export default {
         </div></div>
         <details class="settings-details"><summary>开发者：查看原始 JSON</summary><pre>{{ JSON.stringify(mioProfileDraft, null, 2) }}</pre></details>
       </details>
-      <div class="settings-savebar"><span>保存后从下一轮对话起生效，不授予密钥、命令或系统权限</span><div><button type="button" :disabled="!isSettingsSectionDirty('profile')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!mioProfileReady || !isSettingsSectionDirty('profile') || mioProfileBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></div></div>
+      <div class="settings-savebar"><span>保存后从下一轮对话起生效，不授予密钥、命令或系统权限</span><SettingsSaveActions><button type="button" :disabled="!isSettingsSectionDirty('profile')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!mioProfileReady || !isSettingsSectionDirty('profile') || mioProfileBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></SettingsSaveActions></div>
     </section>
 
     <section v-else-if="activeSettingsSection === 'conversation'" class="settings-content-section">
       <div class="settings-section-block"><h2>默认对话</h2><div class="settings-list">
-        <label class="settings-item"><span><strong>默认模型</strong><small>自动模式会按话题难度选择已配置模型</small></span><select v-model="chatSettingsDraft.model_id" @change="handleSettingsModelChange"><option value="auto">自动选择</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></select></label>
-        <label class="settings-item"><span><strong>思考方式</strong><small>只显示当前模型原生支持的档位</small></span><select v-model="chatSettingsDraft.reasoning_level"><option v-for="item in settingsReasoningOptions" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
-        <label class="settings-item"><span><strong>对话语音</strong><small>应用对话气泡的小喇叭统一使用 Mio 音色朗读</small></span><select v-model="chatSettingsDraft.voice_language"><option value="auto">跟随原文</option><option value="zh">中文</option><option value="ja">日语</option></select></label>
+        <label class="settings-item"><span><strong>默认模型</strong><small>自动模式会按话题难度选择已配置模型</small></span><SelectField v-model="chatSettingsDraft.model_id" @change="handleSettingsModelChange"><option value="auto">自动选择</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></SelectField></label>
+        <label class="settings-item"><span><strong>思考方式</strong><small>只显示当前模型原生支持的档位</small></span><SelectField v-model="chatSettingsDraft.reasoning_level"><option v-for="item in settingsReasoningOptions" :key="item.id" :value="item.id">{{ item.label }}</option></SelectField></label>
+        <label class="settings-item"><span><strong>对话语音</strong><small>应用对话气泡的小喇叭统一使用 Mio 音色朗读</small></span><SelectField v-model="chatSettingsDraft.voice_language"><option value="auto">跟随原文</option><option value="zh">中文</option><option value="ja">日语</option></SelectField></label>
         <div class="settings-item"><span><strong>当前上下文</strong><small>接近预算时自动压缩，保留最近消息与长期记忆</small></span><b class="settings-readonly">{{ contextUsageLabel }}</b></div>
       </div></div>
 <template v-if="runtimeSettingsReady">
@@ -237,14 +242,14 @@ export default {
           <label><span>文档视觉/OCR页数</span><input v-model.number="runtimeSettingsDraft.agent_document_vision_max_pages" type="number" min="1" max="50" /></label>
         </div><div class="web-search-test-panel"><div><strong>联网搜索测试</strong><small>保存联网开关后，用真实搜索源检查触发、网络和解析是否正常</small></div><span><input v-model.trim="webSearchTestQuery" type="text" maxlength="160" /><button type="button" :disabled="webSearchTestBusy" @click="testWebSearch"><Wifi :size="14" />{{ webSearchTestBusy ? '正在搜索' : '测试联网' }}</button></span><p v-if="webSearchTestResult" :class="{ success: webSearchTestResult.ok, error: !webSearchTestResult.ok }">{{ webSearchTestResult.message }}<small v-if="webSearchTestResult.engine">搜索源：{{ webSearchTestResult.engine }}</small><small v-for="attempt in webSearchTestResult.attempts || []" :key="attempt">{{ attempt }}</small></p></div></div>
       </template>
-      <div class="settings-savebar"><span>主应用、QQ与桌宠共享默认模型和记忆策略</span><div><button type="button" :disabled="!isSettingsSectionDirty('conversation')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('conversation') || !runtimeSettingsReady || runtimeSettingsBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></div></div>
+      <div class="settings-savebar"><span>主应用、QQ与桌宠共享默认模型和记忆策略</span><SettingsSaveActions><button type="button" :disabled="!isSettingsSectionDirty('conversation')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('conversation') || !runtimeSettingsReady || runtimeSettingsBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></SettingsSaveActions></div>
     </section>
 
     <section v-else-if="activeSettingsSection === 'diary'" class="settings-content-section">
       <template v-if="runtimeSettingsReady">
         <div class="settings-section-block"><h2>自动整理</h2><div class="settings-list">
           <label class="settings-item"><span><strong>自动生成每日成长日记</strong><small>逻辑日结束后生成；启动后逐天补写有记录的漏写日期，保留已有日记</small></span><span class="switch-control"><input v-model="runtimeSettingsDraft.daily_diary_auto_enabled" type="checkbox" /><i /></span></label>
-          <label class="settings-item"><span><strong>日记专用模型</strong><small>日记整理使用此模型；不会更改日常聊天模型</small></span><select v-model="runtimeSettingsDraft.daily_diary_model_id" aria-label="日记专用模型"><option value="">沿用默认模型</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.provider_name || model.provider }} · {{ model.display_name || model.model }}</option></select></label>
+          <label class="settings-item"><span><strong>日记专用模型</strong><small>日记整理使用此模型；不会更改日常聊天模型</small></span><SelectField v-model="runtimeSettingsDraft.daily_diary_model_id" aria-label="日记专用模型"><option value="">沿用默认模型</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.provider_name || model.provider }} · {{ model.display_name || model.model }}</option></SelectField></label>
           <label class="settings-item"><span><strong>检查间隔</strong><small>每次最多补写一天；生成失败时逐步延长重试间隔</small></span><span class="settings-number"><input v-model.number="runtimeSettingsDraft.daily_diary_check_seconds" type="number" min="30" max="3600" /><b>秒</b></span></label>
           <label class="settings-item"><span><strong>凌晨日界线</strong><small>此时间前生成的内容仍归入前一天</small></span><span class="settings-number"><input v-model.number="runtimeSettingsDraft.day_boundary_hour" type="number" min="0" max="23" /><b>时</b></span></label>
           <label class="settings-item"><span><strong>自动生成周记</strong><small>汇总已确认日记和一周成长变化</small></span><span class="switch-control"><input v-model="runtimeSettingsDraft.weekly_review_enabled" type="checkbox" /><i /></span></label>
@@ -271,7 +276,7 @@ export default {
           <label class="settings-item"><span><strong>夜间安静时间</strong><small>至少多久没有新消息才触发收尾</small></span><span class="settings-number"><input v-model.number="runtimeSettingsDraft.night_close_min_quiet_minutes" type="number" min="5" max="720" /><b>分钟</b></span></label>
         </div></div>
       </template>
-      <div class="settings-savebar"><span>取消独立每日回顾，回顾内容已合并进日记结构</span><div><button type="button" :disabled="!isSettingsSectionDirty('diary')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('diary') || runtimeSettingsBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></div></div>
+      <div class="settings-savebar"><span>取消独立每日回顾，回顾内容已合并进日记结构</span><SettingsSaveActions><button type="button" :disabled="!isSettingsSectionDirty('diary')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('diary') || runtimeSettingsBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></SettingsSaveActions></div>
     </section>
 
     <section v-else-if="activeSettingsSection === 'models'" class="settings-content-section">
@@ -315,16 +320,16 @@ export default {
         <label class="settings-item"><span><strong>发送图片给视觉模型</strong><small>关闭时只记录收到图片，不上传图像内容</small></span><span class="switch-control"><input v-model="runtimeSettingsDraft.qq_image_send_to_model" type="checkbox" /><i /></span></label>
         <label class="settings-item"><span><strong>单次图片数量</strong><small>超过后只处理允许范围内的图片</small></span><span class="settings-number"><input v-model.number="runtimeSettingsDraft.qq_image_max_count" type="number" min="1" max="10" /><b>张</b></span></label>
         <label class="settings-item"><span><strong>单张图片上限</strong><small>按字节限制，8 MB 为 8388608</small></span><input v-model.number="runtimeSettingsDraft.qq_image_max_bytes" type="number" min="1048576" max="52428800" step="1048576" /></label>
-        <label class="settings-item"><span><strong>视觉图片细节</strong><small>由供应商视觉模型决定传输细节</small></span><select v-model="runtimeSettingsDraft.qq_image_detail"><option value="low">低</option><option value="auto">自动</option><option value="high">高</option></select></label>
+        <label class="settings-item"><span><strong>视觉图片细节</strong><small>由供应商视觉模型决定传输细节</small></span><SelectField v-model="runtimeSettingsDraft.qq_image_detail"><option value="low">低</option><option value="auto">自动</option><option value="high">高</option></SelectField></label>
       </div></div><div class="settings-section-block"><h2>消息节奏与可靠性</h2><div class="settings-form-grid"><label><span>普通消息合并等待</span><input v-model.number="runtimeSettingsDraft.qq_message_debounce_seconds" type="number" min="0" max="30" step="0.1" /></label><label><span>未说完消息等待</span><input v-model.number="runtimeSettingsDraft.qq_message_incomplete_debounce_seconds" type="number" min="0" max="60" step="0.1" /></label><label><span>首条回复前等待</span><input v-model.number="runtimeSettingsDraft.qq_reply_initial_delay_seconds" type="number" min="0" max="30" step="0.1" /></label><label><span>多条回复间隔</span><input v-model.number="runtimeSettingsDraft.qq_reply_delay_seconds" type="number" min="0" max="30" step="0.1" /></label><label><span>送达确认超时</span><input v-model.number="runtimeSettingsDraft.qq_delivery_ack_timeout_seconds" type="number" min="1" max="30" step="0.5" /></label><label><span>失败重试次数</span><input v-model.number="runtimeSettingsDraft.qq_delivery_max_retries" type="number" min="0" max="3" /></label></div></div></template>
       <div class="settings-section-block"><h2>群聊</h2><div class="settings-list"><label class="settings-item"><span><strong>允许白名单群回复</strong><small>群聊上下文不会进入Agent主对话</small></span><span class="switch-control"><input v-model="groupChatSettings.enabled" type="checkbox" /><i /></span></label><label class="settings-item"><span><strong>必须 @机器人账号</strong><small>按机器人 QQ 账号识别真实 @，与群昵称无关；关闭后白名单群内普通消息也可能触发回复</small></span><span class="switch-control"><input v-model="groupChatSettings.mention_required" type="checkbox" /><i /></span></label><label class="settings-item"><span><strong>群号白名单</strong><small>多个群号用逗号分隔</small></span><input v-model="groupIdsDraft" type="text" /></label></div><div class="settings-actions-row"><button type="button" :disabled="Boolean(qqBusy)" @click="clearGroupChatContext"><Trash2 :size="15" />清空群聊临时上下文</button></div></div>
-      <div class="settings-savebar"><span>启动、登录和重启立即执行；其余配置保存后生效</span><div><button type="button" :disabled="!isSettingsSectionDirty('qq')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('qq') || !runtimeSettingsReady || Boolean(qqBusy) || runtimeSettingsBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></div></div>
+      <div class="settings-savebar"><span>启动、登录和重启立即执行；其余配置保存后生效</span><SettingsSaveActions><button type="button" :disabled="!isSettingsSectionDirty('qq')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('qq') || !runtimeSettingsReady || Boolean(qqBusy) || runtimeSettingsBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></SettingsSaveActions></div>
     </section>
 
     <section v-else-if="activeSettingsSection === 'pet'" class="settings-content-section">
       <div class="settings-tabs"><button type="button" :class="{ active: petSettingsTab === 'appearance' }" @click="petSettingsTab = 'appearance'">形象管理</button><button type="button" :class="{ active: petSettingsTab === 'voice' }" @click="petSettingsTab = 'voice'">语音</button><button type="button" :class="{ active: petSettingsTab === 'observation' }" @click="petSettingsTab = 'observation'">屏幕观察</button><button type="button" :class="{ active: petSettingsTab === 'behavior' }" @click="petSettingsTab = 'behavior'">行为</button></div>
       <template v-if="companionStatusReady">
-        <PetAppearancePanel v-if="petSettingsTab === 'appearance'" class="settings-section-block embedded-pet-panel" :status="companionStatus" :avatar-url="companionAvatarUrl" :busy="Boolean(companionBusy)" management-mode @import-live2d="importLive2DModel" @delete-live2d="deleteLive2DModel" @replace-live2d-preview="replaceLive2DPreview" @preview-motion="previewLive2DMotion" @preview-expression="previewLive2DExpression" @control="controlCompanion" @save="saveCompanionSettings('pet')" @save-size="saveCompanionSize" />
+        <PetAppearancePanel v-if="petSettingsTab === 'appearance'" class="settings-section-block embedded-pet-panel" :status="companionStatus" :avatar-url="companionAvatarUrl" :busy="Boolean(companionBusy)" :control-action="companionBusy" management-mode @import-live2d="importLive2DModel" @delete-live2d="deleteLive2DModel" @replace-live2d-preview="replaceLive2DPreview" @preview-motion="previewLive2DMotion" @preview-expression="previewLive2DExpression" @control="controlCompanion" @save="saveCompanionSettings('pet')" @save-size="saveCompanionSize" />
         <VoiceSettingsPanel
           v-else-if="petSettingsTab === 'voice'"
           :status="companionStatus"
@@ -337,33 +342,33 @@ export default {
           @export-package="exportVoicePackage"
           @import-package="importVoicePackage"
         />
-      <div v-else-if="petSettingsTab === 'observation'" class="settings-section-block"><h2>屏幕观察</h2><div class="settings-list"><div class="settings-item"><span><strong>视觉路线</strong><small>本地不上传画面；云端会发送选定范围</small></span><div class="settings-segment"><button type="button" :class="{ active: companionStatus.pet.settings.screen_vision_route === 'local' }" @click="companionStatus.pet.settings.screen_vision_route = 'local'">本地</button><button type="button" :class="{ active: companionStatus.pet.settings.screen_vision_route === 'cloud' }" @click="companionStatus.pet.settings.screen_vision_route = 'cloud'">云端</button></div></div><label v-if="companionStatus.pet.settings.screen_vision_route === 'cloud'" class="settings-item"><span><strong>云端视觉模型</strong><small>只列出支持图片输入的模型</small></span><select v-model="companionStatus.pet.settings.screen_vision_model_id"><option value="auto-fast">自动选择（优先响应速度）</option><option v-if="['', 'auto'].includes(companionStatus.pet.settings.screen_vision_model_id)" :value="companionStatus.pet.settings.screen_vision_model_id">自动选择（兼容旧设置）</option><option v-else-if="companionStatus.pet.settings.screen_vision_model_id !== 'auto-fast' && !(companionStatus.screen_analysis?.vision_model_options || []).some(item => item.id === companionStatus.pet.settings.screen_vision_model_id)" :value="companionStatus.pet.settings.screen_vision_model_id" disabled>当前模型未连接，请重新选择</option><option v-for="item in (companionStatus.screen_analysis?.vision_model_options || [])" :key="item.id" :value="item.id">{{ item.label }}</option></select></label><div class="settings-item"><span><strong>系统声音观察</strong><small>随视觉观察同时开启和停止；音频只在内存中转写</small></span><b class="settings-readonly">{{ companionStatus.screen.running ? '观察中' : '未启动' }}</b></div><label class="settings-item"><span><strong>由 Mio 判断是否回应</strong><small>游戏对白、选项和剧情推进会更积极；普通桌面仍保持安静</small></span><span class="switch-control"><input v-model="companionStatus.pet.settings.screen_ai_enabled" type="checkbox" /><i /></span></label><label class="settings-item"><span><strong>分析间隔</strong><small>越短越实时，也会增加模型调用</small></span><select v-model.number="companionStatus.pet.settings.screen_analysis_interval_seconds"><option :value="5">5秒</option><option :value="10">10秒</option><option :value="15">15秒</option><option :value="30">30秒</option></select></label><label class="settings-item"><span><strong>回应冷却</strong><small>一次开口后至少等待多久</small></span><select v-model.number="companionStatus.pet.settings.screen_voice_cooldown_seconds"><option :value="5">5秒</option><option :value="10">10秒</option><option :value="15">15秒</option><option :value="30">30秒</option></select></label><label class="settings-item"><span><strong>今日实扣上限</strong><small>达到上限后停止云端观察请求</small></span><span class="settings-number"><input v-model.number="companionStatus.pet.settings.screen_daily_cost_limit_yuan" type="number" min="0.1" max="1000" step="0.1" /><b>元</b></span></label></div><p class="settings-note">当前观察：{{ companionStatus.screen.running ? '运行中' : '未启动' }} · 游戏窗口会自动提高对白变化灵敏度 · 今日实扣 ¥{{ Number(companionStatus.screen_analysis?.budget?.daily?.confirmed_cost_yuan || 0).toFixed(4) }}</p></div>
+      <div v-else-if="petSettingsTab === 'observation'" class="settings-section-block"><h2>屏幕观察</h2><div class="settings-list"><div class="settings-item"><span><strong>视觉路线</strong><small>本地不上传画面；云端会发送选定范围</small></span><div class="settings-segment"><button type="button" :class="{ active: companionStatus.pet.settings.screen_vision_route === 'local' }" @click="companionStatus.pet.settings.screen_vision_route = 'local'">本地</button><button type="button" :class="{ active: companionStatus.pet.settings.screen_vision_route === 'cloud' }" @click="companionStatus.pet.settings.screen_vision_route = 'cloud'">云端</button></div></div><label v-if="companionStatus.pet.settings.screen_vision_route === 'cloud'" class="settings-item"><span><strong>云端视觉模型</strong><small>只列出支持图片输入的模型</small></span><SelectField v-model="companionStatus.pet.settings.screen_vision_model_id"><option value="auto-fast">自动选择（优先响应速度）</option><option v-if="['', 'auto'].includes(companionStatus.pet.settings.screen_vision_model_id)" :value="companionStatus.pet.settings.screen_vision_model_id">自动选择（兼容旧设置）</option><option v-else-if="companionStatus.pet.settings.screen_vision_model_id !== 'auto-fast' && !(companionStatus.screen_analysis?.vision_model_options || []).some(item => item.id === companionStatus.pet.settings.screen_vision_model_id)" :value="companionStatus.pet.settings.screen_vision_model_id" disabled>当前模型未连接，请重新选择</option><option v-for="item in (companionStatus.screen_analysis?.vision_model_options || [])" :key="item.id" :value="item.id">{{ item.label }}</option></SelectField></label><div class="settings-item"><span><strong>系统声音观察</strong><small>随视觉观察同时开启和停止；音频只在内存中转写</small></span><b class="settings-readonly">{{ companionStatus.screen.running ? '观察中' : '未启动' }}</b></div><label class="settings-item"><span><strong>由 Mio 判断是否回应</strong><small>游戏对白、选项和剧情推进会更积极；普通桌面仍保持安静</small></span><span class="switch-control"><input v-model="companionStatus.pet.settings.screen_ai_enabled" type="checkbox" /><i /></span></label><label class="settings-item"><span><strong>分析间隔</strong><small>越短越实时，也会增加模型调用</small></span><SelectField v-model.number="companionStatus.pet.settings.screen_analysis_interval_seconds"><option :value="5">5秒</option><option :value="10">10秒</option><option :value="15">15秒</option><option :value="30">30秒</option></SelectField></label><label class="settings-item"><span><strong>回应冷却</strong><small>一次开口后至少等待多久</small></span><SelectField v-model.number="companionStatus.pet.settings.screen_voice_cooldown_seconds"><option :value="5">5秒</option><option :value="10">10秒</option><option :value="15">15秒</option><option :value="30">30秒</option></SelectField></label><label class="settings-item"><span><strong>今日实扣上限</strong><small>达到上限后停止云端观察请求</small></span><span class="settings-number"><input v-model.number="companionStatus.pet.settings.screen_daily_cost_limit_yuan" type="number" min="0.1" max="1000" step="0.1" /><b>元</b></span></label></div><p class="settings-note">当前观察：{{ companionStatus.screen.running ? '运行中' : '未启动' }} · 游戏窗口会自动提高对白变化灵敏度 · 今日实扣 ¥{{ Number(companionStatus.screen_analysis?.budget?.daily?.confirmed_cost_yuan || 0).toFixed(4) }}</p></div>
         <div v-else class="settings-section-block">
           <h2>桌面行为</h2>
           <div class="settings-list">
             <label class="settings-item">
               <span><strong>桌宠对话模型</strong><small>只控制桌宠独立对话，不影响主应用和 QQ</small></span>
-              <select v-model="companionStatus.pet.settings.pet_chat_model_id" @change="handlePetModelChange"><option value="auto">自动选择</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></select>
+              <SelectField v-model="companionStatus.pet.settings.pet_chat_model_id" @change="handlePetModelChange"><option value="auto">自动选择</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></SelectField>
             </label>
             <label class="settings-item">
               <span><strong>桌宠思考方式</strong><small>只显示当前桌宠模型原生支持的档位</small></span>
-              <select v-model="companionStatus.pet.settings.pet_chat_reasoning_level"><option v-for="item in petReasoningOptions" :key="item.id" :value="item.id">{{ item.label }}</option></select>
+              <SelectField v-model="companionStatus.pet.settings.pet_chat_reasoning_level"><option v-for="item in petReasoningOptions" :key="item.id" :value="item.id">{{ item.label }}</option></SelectField>
             </label>
             <label class="settings-item">
               <span><strong>电话识别模型</strong><small>自动使用固定语料实测最准确的模型，也可切换国内中文模型复验</small></span>
-              <select v-model="companionStatus.pet.settings.pet_call_asr_engine"><option value="auto">自动（实测推荐）</option><option value="whisper">Faster-Whisper</option><option value="sensevoice">SenseVoice 中文</option><option value="paraformer">Paraformer 中文</option></select>
+              <SelectField v-model="companionStatus.pet.settings.pet_call_asr_engine"><option value="auto">自动（实测推荐）</option><option value="whisper">Faster-Whisper</option><option value="sensevoice">SenseVoice 中文</option><option value="paraformer">Paraformer 中文</option></SelectField>
             </label>
             <label class="settings-item">
               <span><strong>电话识别语言</strong><small>中文通话固定按中文识别，避免短句被误判成其他语言</small></span>
-              <select v-model="companionStatus.pet.settings.pet_call_input_language"><option value="zh">中文</option><option value="ja">日语</option></select>
+              <SelectField v-model="companionStatus.pet.settings.pet_call_input_language"><option value="zh">中文</option><option value="ja">日语</option></SelectField>
             </label>
             <label class="settings-item">
               <span><strong>电话断句等待</strong><small>说完后静音多久开始回应，越短越快</small></span>
-              <select v-model.number="companionStatus.pet.settings.pet_call_silence_ms"><option :value="450">0.45秒</option><option :value="650">0.65秒</option><option :value="900">0.9秒</option><option :value="1200">1.2秒</option></select>
+              <SelectField v-model.number="companionStatus.pet.settings.pet_call_silence_ms"><option :value="450">0.45秒</option><option :value="650">0.65秒</option><option :value="900">0.9秒</option><option :value="1200">1.2秒</option></SelectField>
             </label>
             <label class="settings-item">
               <span><strong>麦克风灵敏度</strong><small>环境嘈杂时调低灵敏度可减少误触发</small></span>
-              <select v-model.number="companionStatus.pet.settings.pet_call_voice_threshold"><option :value="0.012">高</option><option :value="0.018">标准</option><option :value="0.028">低</option><option :value="0.04">很低</option></select>
+              <SelectField v-model.number="companionStatus.pet.settings.pet_call_voice_threshold"><option :value="0.012">高</option><option :value="0.018">标准</option><option :value="0.028">低</option><option :value="0.04">很低</option></SelectField>
             </label>
             <label class="settings-item"><span><strong>始终置顶</strong><small>保持桌宠显示在普通窗口上方</small></span><span class="switch-control"><input v-model="companionStatus.pet.settings.live2d_always_on_top" type="checkbox" /><i /></span></label>
             <label class="settings-item"><span><strong>锁定时鼠标穿透</strong><small>固定后可以点击桌宠背后的内容</small></span><span class="switch-control"><input v-model="companionStatus.pet.settings.live2d_click_through_locked" type="checkbox" /><i /></span></label>
@@ -374,7 +379,7 @@ export default {
           </div>
         </div>
       </template><div v-else class="runtime-settings-read-status" :role="companionStatusError ? 'alert' : 'status'"><span>{{ companionStatusError ? `桌宠设置未能读取：${companionStatusError}` : '正在读取桌宠设置' }}</span><button v-if="companionStatusError" type="button" @click="loadCompanionStatus({ quiet: true })"><RefreshCw :size="14" />重新读取桌宠设置</button></div>
-      <div class="settings-savebar"><span>启动、停止和试听立即执行；形象、语音、观察与行为统一保存</span><div><button type="button" :disabled="!isSettingsSectionDirty('pet')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!companionStatusReady || !isSettingsSectionDirty('pet') || Boolean(companionBusy)" @click="saveActiveSettings"><Check :size="15" />保存</button></div></div>
+      <div class="settings-savebar"><span>启动、停止和试听立即执行；形象、语音、观察与行为统一保存</span><SettingsSaveActions><button type="button" :disabled="!isSettingsSectionDirty('pet')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!companionStatusReady || !isSettingsSectionDirty('pet') || Boolean(companionBusy)" @click="saveActiveSettings"><Check :size="15" />保存</button></SettingsSaveActions></div>
     </section>
 
     <section v-else-if="activeSettingsSection === 'data'" class="settings-content-section">
@@ -399,7 +404,7 @@ export default {
     <section v-else class="settings-content-section">
       <div v-if="runtimeSettingsReady" class="settings-section-block"><h2>观察、联网与历史</h2><div class="settings-form-grid"><label><span>屏幕回应超时（秒）</span><input v-model.number="runtimeSettingsDraft.screen_reaction_timeout_seconds" type="number" min="5" max="120" /></label><label><span>联网正文上限</span><input v-model.number="runtimeSettingsDraft.web_page_max_chars" type="number" min="500" max="50000" step="500" /></label><label><span>屏幕历史保留天数</span><input v-model.number="runtimeSettingsDraft.screen_history_retention_days" type="number" min="1" max="365" /></label><label><span>屏幕历史最大行数</span><input v-model.number="runtimeSettingsDraft.screen_history_max_rows" type="number" min="1000" max="200000" step="1000" /></label></div></div>
       <template v-if="runtimeSettingsReady"><div class="settings-section-block"><h2>模型运行</h2><div class="settings-form-grid"><label><span>单次连接超时（秒）</span><input v-model.number="runtimeSettingsDraft.openai_timeout_seconds" type="number" min="5" max="300" /></label><label><span>单次请求最大时限（秒）</span><input v-model.number="runtimeSettingsDraft.openai_request_deadline_seconds" type="number" min="10" max="600" /></label><label><span>聊天温度</span><input v-model.number="runtimeSettingsDraft.chat_temperature" type="number" min="0" max="2" step="0.05" /></label><label><span>行动规划温度</span><input v-model.number="runtimeSettingsDraft.action_planner_temperature" type="number" min="0" max="2" step="0.05" /></label><label><span>说明书最大字数</span><input v-model.number="runtimeSettingsDraft.manual_max_chars" type="number" min="1000" max="50000" step="500" /></label><label><span>时区</span><input v-model.trim="runtimeSettingsDraft.timezone" type="text" /></label></div></div><div class="settings-section-block"><h2>构建与运行身份</h2><div class="settings-list runtime-identity-list"><div class="settings-item"><span><strong>构建</strong><small>{{ runtimeIdentity.app_version || '开发模式' }} · {{ runtimeIdentity.build_id || '尚未生成' }}</small></span><b :class="['connection-label', { online: runtimeIdentity.status === 'ok' }]">{{ runtimeIdentity.status === 'ok' ? '一致' : '需检查' }}</b></div><div class="settings-item"><span><strong>程序</strong><small>{{ runtimeIdentity.exe_path || '尚未报告' }}</small></span><b class="settings-readonly runtime-identity-value">{{ runtimeIdentity.source_mode ? '源码运行' : '正式程序' }}</b></div><div class="settings-item"><span><strong>业务运行根</strong><small>{{ runtimeIdentity.runtime_root || '尚未报告' }}</small></span><b class="settings-readonly runtime-identity-value">运行数据</b></div><div class="settings-item"><span><strong>桌面状态根</strong><small>{{ runtimeIdentity.state_root || '尚未报告' }}</small></span><b class="settings-readonly runtime-identity-value">日志与WebView</b></div><div class="settings-item"><span><strong>数据库</strong><small>{{ runtimeIdentity.database_path || '尚未报告' }}</small></span><b class="settings-readonly runtime-identity-value">SQLite</b></div></div><p v-for="warning in runtimeIdentity.warnings || []" :key="warning" class="runtime-identity-warning">{{ warning }}</p></div><div class="settings-section-block"><div class="settings-section-heading"><div><h2>窗口拓扑</h2><p>用于确认主应用、桌宠和备用窗口是否重复创建</p></div><b class="settings-readonly">活动 {{ companionStatus.window_topology?.active_count || 0 }} · 可见 {{ companionStatus.window_topology?.visible_count || 0 }}</b></div><div v-if="companionStatus.window_topology?.windows?.length" class="settings-list runtime-identity-list"><div v-for="item in companionStatus.window_topology.windows" :key="item.window_id" class="settings-item"><span><strong>{{ item.window_id }}</strong><small>{{ item.source }} · {{ item.runtime }} · PID {{ item.pid || '未知' }} · {{ item.action }}</small></span><b :class="['connection-label', { online: item.visible }]">{{ item.visible ? (item.focused ? '前台' : '可见') : '隐藏' }}</b></div></div><div v-else class="settings-empty-state">还没有窗口身份上报</div></div><div class="settings-section-block"><h2>服务状态</h2><div class="settings-list"><div class="settings-item"><span><strong>Mio后端</strong><small>主应用本地API与调度服务</small></span><b class="connection-label online">在线</b></div><div class="settings-item"><span><strong>QQ通道</strong><small>{{ qqStatus.diagnostic_message || '等待诊断' }}</small></span><b :class="['connection-label', { online: qqConnected }]">{{ qqStatusLabel }}</b></div><div class="settings-item"><span><strong>音色服务</strong><small>GPT-SoVITS本地合成服务</small></span><b :class="['connection-label', { online: companionStatus.voice_runtime?.service_running }]">{{ companionStatus.voice_runtime?.service_running ? '在线' : '未启动' }}</b></div><div class="settings-item"><span><strong>屏幕观察</strong><small>独立捕获进程与视觉分析</small></span><b :class="['connection-label', { online: companionStatus.screen?.running }]">{{ companionStatus.screen?.running ? '运行中' : '未启动' }}</b></div></div></div><div class="settings-section-block"><h2>运行组件路径</h2><div class="settings-form-grid path-settings-grid"><label><span>NapCat目录</span><input v-model.trim="runtimeSettingsDraft.napcat_dir" type="text" /></label><label><span>NapCat WebUI</span><input v-model.trim="runtimeSettingsDraft.napcat_webui_url" type="url" /></label><label><span>Mio音色目录</span><input v-model.trim="runtimeSettingsDraft.voice_training_dir" type="text" /></label><label><span>本地视觉目录</span><input v-model.trim="runtimeSettingsDraft.local_vision_dir" type="text" /></label></div></div><div class="settings-section-block"><h2>日志与诊断</h2><div class="settings-list"><div class="settings-item"><span><strong>桌面日志</strong><small>自动轮转，单文件达到2MB后保留最近3份</small></span><b class="settings-readonly">已启用</b></div><div class="settings-item"><span><strong>服务重启</strong><small>QQ、音色与观察服务可在对应分类中单独重启，避免影响其他功能</small></span><b class="settings-readonly">分服务控制</b></div><div class="settings-item"><span><strong>恢复默认设置</strong><small>当前不提供全局一键恢复，避免覆盖人格、路径和私人配置</small></span><b class="settings-readonly">需逐项修改</b></div></div></div></template>
-      <div class="settings-savebar"><span>路径和部分运行参数可能需要重启应用后完全生效</span><div><button type="button" :disabled="!isSettingsSectionDirty('advanced')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('advanced') || runtimeSettingsBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></div></div>
+      <div class="settings-savebar"><span>路径和部分运行参数可能需要重启应用后完全生效</span><SettingsSaveActions><button type="button" :disabled="!isSettingsSectionDirty('advanced')" @click="resetActiveSettings">取消</button><button class="primary-button" type="button" :disabled="!isSettingsSectionDirty('advanced') || runtimeSettingsBusy" @click="saveActiveSettings"><Check :size="15" />保存</button></SettingsSaveActions></div>
     </section>
   </section>
 </template>

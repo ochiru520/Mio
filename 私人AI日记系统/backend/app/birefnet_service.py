@@ -12,6 +12,8 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
+from .repositories import creation_repository as repository
+
 from . import creation_service as creation, db
 from .config import settings
 
@@ -54,8 +56,8 @@ def create_cutout(arguments: dict, context) -> dict:
                           (("asset_id", ""), ("job_id", ""), ("output_index", 0), ("path", ""))})
     digest = hashlib.sha256(json.dumps(arguments, sort_keys=True).encode()).hexdigest()
     key = f"cutout:{context.task_id or context.run_id}:{context.source_message_id}:{digest}"
-    with db.get_conn() as conn:
-        old = conn.execute("SELECT id FROM creation_jobs WHERE idempotency_key=?", (key,)).fetchone()
+    with repository.transaction() as conn:
+        old = repository.job_id_by_key(conn, (key,)).fetchone()
     if old:
         return {"job": creation.get_job(old[0]), "created": False}
     job_id = "job_" + uuid.uuid4().hex[:24]
@@ -68,17 +70,13 @@ def create_cutout(arguments: dict, context) -> dict:
             "skip_frames": arguments.get("skip_frames", 0), "processed_frames": 0,
             "batch_prompt_ids": [], "quality_status": "not_reviewed", "prompt": "BiRefNet 本地透明抠图"}
     now = db.now_iso()
-    with db.get_conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        old = conn.execute("SELECT * FROM creation_jobs WHERE idempotency_key=?", (key,)).fetchone()
+    with repository.transaction() as conn:
+        repository.begin_immediate(conn)
+        old = repository.birefnet_job_by_key(conn, (key,)).fetchone()
         if old:
             return {"job": creation._job_public(old), "created": False}
         creation.reserve_slot(conn, context.conversation_id)
-        conn.execute("""INSERT INTO creation_jobs(id,conversation_id,source,media_type,backend,workflow_id,
-            provider_id,model_id,status,stage,progress,spec_json,preset_snapshot_json,confirmation_reason,
-            idempotency_key,parent_job_id,created_at,updated_at)
-            VALUES(?,?,?,?,'comfyui',?,'','BiRefNet-portrait','created','created',0,?,'{}','',?,'',?,?)""",
-            (job_id, context.conversation_id, context.source,
+        repository.insert_cutout(conn, (job_id, context.conversation_id, context.source,
              'video' if video else 'image', WORKFLOW_ID,
              json.dumps(spec, ensure_ascii=False), key, now, now))
         provenance.bind(conn, job_id, context.task_id, context.run_id, context.source_message_id)
@@ -98,18 +96,14 @@ def retry_cutout(row: dict, spec: dict) -> dict:
     target = root / "input" / f"mio-{job_id}{source.suffix}"
     clean = {key: value for key, value in spec.items() if key in {"input_kind", "frame_limit", "batch_frames", "skip_frames", "prompt"}}
     clean.update(input=target.name, processed_frames=0, batch_prompt_ids=[], quality_status="not_reviewed")
-    with db.get_conn() as conn:
-        conn.execute('BEGIN IMMEDIATE')
-        child = conn.execute("SELECT * FROM creation_jobs WHERE parent_job_id=? AND status!='cancelled' ORDER BY created_at DESC,rowid DESC LIMIT 1", (row['id'],)).fetchone()
+    with repository.transaction() as conn:
+        repository.begin_immediate(conn)
+        child = repository.latest_child(conn, (row['id'],)).fetchone()
         if child is not None:
             return creation._job_public(child)
         creation.reserve_slot(conn, row["conversation_id"])
         shutil.copyfile(source, target)
-        conn.execute("""INSERT INTO creation_jobs(id,conversation_id,source,media_type,backend,workflow_id,
-            provider_id,model_id,status,stage,spec_json,preset_snapshot_json,confirmation_reason,
-            idempotency_key,parent_job_id,created_at,updated_at)
-            VALUES(?,?,?,?,'comfyui',?,'','BiRefNet-portrait','needs_confirmation','needs_confirmation',?,'{}',?,?,?, ?,?)""",
-            (job_id, row["conversation_id"], row["source"], row["media_type"], WORKFLOW_ID,
+        repository.insert_cutout_retry(conn, (job_id, row["conversation_id"], row["source"], row["media_type"], WORKFLOW_ID,
              json.dumps(clean, ensure_ascii=False), "从原始输入重新抠图，重做全部指定帧，需要确认。",
              f"retry:{row['id']}:{uuid.uuid4().hex}", row["id"], db.now_iso(), db.now_iso()))
         from .agent_task_service import attach_retry

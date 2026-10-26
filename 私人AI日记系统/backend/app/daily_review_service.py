@@ -9,7 +9,7 @@ from . import db
 from .model_runtime import OperationStopped
 from .config import settings
 from .review_service import generate_review_for_date
-from .routes.onebot import send_private_message
+from .onebot_transport_service import send_private_message
 
 
 logger = logging.getLogger(__name__)

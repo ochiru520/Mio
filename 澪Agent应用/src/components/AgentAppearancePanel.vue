@@ -1,6 +1,8 @@
 <script setup>
+import SelectField from './SelectField.vue'
+import * as agentAppearanceApi from '../services/agentAppearanceApi.js'
+
 import { computed, inject, onMounted, ref } from 'vue'
-import { apiRequest } from '../services/api.js'
 
 const context = inject('mio-chat-page', {})
 const labels = { hero: '首页问候图片', personal: '我的空间图片' }
@@ -23,7 +25,7 @@ function applyAppearance(value) {
 }
 async function load() {
   busy.value = true; error.value = ''; notice.value = ''
-  try { applyAppearance(await apiRequest('/api/agent/surface')); ready.value = true }
+  try { applyAppearance(await agentAppearanceApi.loadSurface({})); ready.value = true }
   catch (cause) { error.value = cause.message }
   finally { busy.value = false }
 }
@@ -48,7 +50,7 @@ async function upload(event, kind) {
       reader.onerror = () => reject(new Error('无法读取图片，请重新选择。'))
       reader.readAsDataURL(file)
     })
-    applyAppearance(await apiRequest(`/api/agent/surface/images/${kind}`, { method: 'POST', body: JSON.stringify({ data_url: dataUrl }) }))
+    applyAppearance(await agentAppearanceApi.submitSurfaceImages(kind, { data_url: dataUrl }, {}))
     notice.value = `${labels[kind]}已更新。`; changed()
   } catch (cause) { error.value = cause.message }
   finally { busy.value = false }
@@ -56,7 +58,7 @@ async function upload(event, kind) {
 async function reset(kind) {
   busy.value = true; error.value = ''; notice.value = ''
   try {
-    applyAppearance(await apiRequest(`/api/agent/surface/images/${kind}`, { method: 'DELETE' }))
+    applyAppearance(await agentAppearanceApi.deleteSurfaceImages(kind, {}))
     notice.value = `${labels[kind]}已恢复默认。`; changed()
   } catch (cause) { error.value = cause.message }
   finally { busy.value = false }
@@ -64,7 +66,7 @@ async function reset(kind) {
 async function shape() {
   busy.value = true; error.value = ''; notice.value = ''
   try {
-    applyAppearance(await apiRequest('/api/agent/surface', { method: 'PUT', body: JSON.stringify({ hero_shape: data.value.hero_shape }) }))
+    applyAppearance(await agentAppearanceApi.saveSurface({ hero_shape: data.value.hero_shape }, {}))
     notice.value = '首页图片形状已更新。'; changed()
   } catch (cause) { data.value.hero_shape = savedShape.value; error.value = cause.message }
   finally { busy.value = false }
@@ -94,7 +96,7 @@ onMounted(load)
           <button type="button" :disabled="busy || !ready || !image.custom" @click="reset(image.kind)">恢复默认</button>
           <button v-if="ready && previewErrors[image.kind] === image.url" type="button" :disabled="busy" @click="retryPreview(image.kind)">重试预览</button>
         </div>
-        <label v-if="image.kind === 'hero'" class="appearance-shape">首页图片形状<select aria-label="首页图片形状" v-model="data.hero_shape" :disabled="busy || !ready" @change="shape"><option value="original">保留原图比例</option><option value="circle">圆形</option></select></label>
+        <label v-if="image.kind === 'hero'" class="appearance-shape">首页图片形状<SelectField aria-label="首页图片形状" v-model="data.hero_shape" :disabled="busy || !ready" @change="shape"><option value="original">保留原图比例</option><option value="circle">圆形</option></SelectField></label>
       </div>
     </article>
   </section>

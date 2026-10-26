@@ -100,7 +100,7 @@ def test_privacy_stops_inflight_record_and_no_late_save(kind):
         started = asyncio.Event()
         async def blocked(*args, **kwargs):
             started.set(); await asyncio.Event().wait()
-        with patch.object(module, 'call_chat_completion', new=AsyncMock(side_effect=blocked)), patch('app.routes.onebot.disconnect_all_connections', new=AsyncMock(return_value=0)):
+        with patch.object(module, 'call_chat_completion', new=AsyncMock(side_effect=blocked)), patch('app.onebot_transport_service.disconnect_all_connections', new=AsyncMock(return_value=0)):
             callback = {'weekly': lambda: weekly.generate_weekly_review('2026-08-03'),
                         'monthly': lambda: monthly.generate_monthly_review('2026-08'),
                         'review': lambda: review.generate_review_for_date('2026-08-03')}[kind]
@@ -128,7 +128,7 @@ def test_privacy_stops_proactive_before_delivery_and_keeps_event_resumable():
         started = asyncio.Event()
         async def blocked(*args, **kwargs):
             started.set(); await asyncio.Event().wait()
-        with patch('app.chat_service.generate_qq_proactive_replies', new=AsyncMock(side_effect=blocked)), patch('app.routes.onebot.disconnect_all_connections', new=AsyncMock(return_value=0)):
+        with patch('app.chat_service.generate_qq_proactive_replies', new=AsyncMock(side_effect=blocked)), patch('app.onebot_transport_service.disconnect_all_connections', new=AsyncMock(return_value=0)):
             job = asyncio.create_task(autonomy.process_once(now))
             await asyncio.wait_for(started.wait(), 3)
             await privacy.pause_sensitive_capabilities()
@@ -222,7 +222,7 @@ def test_backup_maintenance_cancels_actual_creation_worker_before_drain():
         async def blocked(*args, **kwargs):
             started.set(); await asyncio.Event().wait()
         app = main.create_app()
-        with patch.object(main, 'initialize_runtime'), patch.object(main, '_start_background_tasks', new_callable=AsyncMock), patch.object(main.onebot, 'disconnect_all_connections', new=AsyncMock(return_value=0)), patch.object(main.companion_service, 'shutdown'), patch.object(creation, '_provider_connection', return_value=connection), patch.object(creation, '_request_remote_image', new=AsyncMock(side_effect=blocked)):
+        with patch.object(main, 'initialize_runtime'), patch.object(main, '_start_background_tasks', new_callable=AsyncMock), patch.object(main.onebot_transport_service, 'disconnect_all_connections', new=AsyncMock(return_value=0)), patch.object(main.companion_service, 'shutdown'), patch.object(creation, '_provider_connection', return_value=connection), patch.object(creation, '_request_remote_image', new=AsyncMock(side_effect=blocked)):
             async with main.app_lifespan(app):
                 creation.confirm_job(job['id'])
                 await asyncio.wait_for(started.wait(), 3)

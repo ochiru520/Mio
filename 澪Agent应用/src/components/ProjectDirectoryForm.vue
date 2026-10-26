@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from 'vue'
-import { FolderOpen } from '@lucide/vue'
+import { FolderOpen } from '../icons/index.js'
 import { selectLocalPath } from '../services/localPicker.js'
 defineProps({ busy: Boolean })
 const emit = defineEmits(['submit','cancel'])

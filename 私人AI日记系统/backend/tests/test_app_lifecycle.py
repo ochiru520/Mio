@@ -103,7 +103,7 @@ class AppLifecycleTests(unittest.IsolatedAsyncioTestCase):
             patch.dict("app.main.BACKGROUND_TASK_FACTORIES", replacements, clear=True),
             patch("app.main.initialize_runtime"),
             patch(
-                "app.main.onebot.disconnect_all_connections",
+                "app.main.onebot_transport_service.disconnect_all_connections",
                 side_effect=RuntimeError("qq cleanup failed"),
             ) as disconnect_qq,
             patch("app.main.companion_service.shutdown") as shutdown,
@@ -138,7 +138,7 @@ class AppLifecycleTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.dict("app.main.BACKGROUND_TASK_FACTORIES", replacements, clear=True),
             patch("app.main.initialize_runtime"),
-            patch("app.main.onebot.disconnect_all_connections") as disconnect_qq,
+            patch("app.main.onebot_transport_service.disconnect_all_connections") as disconnect_qq,
             patch("app.main.companion_service.shutdown"),
         ):
             async with app_lifespan(app):

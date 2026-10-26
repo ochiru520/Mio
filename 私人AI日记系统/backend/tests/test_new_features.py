@@ -20,7 +20,7 @@ from app.proactive_service import (
     start_qq_on_app_startup,
 )
 from app.daily_review_service import _notify_review_ready
-from app.routes.diary import _extract_tags
+from app.diary_operations_service import _extract_tags
 from app.routes.memory import _normalize_follow_up, api_memory
 from app.routes.review import api_reviews_list
 from app.routes.weekly import api_weekly_list

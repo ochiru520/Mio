@@ -1,9 +1,10 @@
 <script setup>
+import * as artifactsApi from '../services/artifactsApi.js'
+
 import { mergeLoadedItems } from '../scrollCollections.js'
 import WorkspacePager from './WorkspacePager.vue'
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { Search, Star, Grid2X2, List, FileText, Image, Film, Music, Archive, RefreshCw } from '@lucide/vue'
-import { apiRequest } from '../services/api.js'
+import { Search, Star, Grid2X2, List, FileText, Image, Film, Music, Archive, RefreshCw } from '../icons/index.js'
 const props = defineProps({ projects: { type: Array, default: () => [] } })
 const emit = defineEmits(['preview', 'open-source', 'tools'])
 const kind = ref(''), projectId = ref(''), query = ref(''), favorite = ref(false), grid = ref(false)
@@ -16,7 +17,7 @@ async function load(reset = false) {
   const n = ++version
   loading.value = true
   const params = new URLSearchParams({ project_id: projectId.value, q: query.value, kind: kind.value, favorite: String(favorite.value), offset: String(offset.value), limit: '40' })
-  try { const data = await apiRequest(`/api/artifacts?${params}`); if (disposed || n !== version) return; items.value = mergeLoadedItems(items.value,data.artifacts,offset.value); hasMore.value = data.has_more; error.value = '' }
+  try { const data = await artifactsApi.loadArtifacts(params, {}); if (disposed || n !== version) return; items.value = mergeLoadedItems(items.value,data.artifacts,offset.value); hasMore.value = data.has_more; error.value = '' }
   catch (cause) { if (!disposed && n === version) { items.value = []; hasMore.value = false; error.value = cause.message } }
   finally { if (n === version) loading.value = false }
 }
@@ -27,7 +28,7 @@ async function mutate(item, operation, body) {
   if (actionBusy.value || loading.value) return
   actionBusy.value = true
   try {
-    await apiRequest(`/api/artifacts/${item.id}/${operation}`, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+    await artifactsApi.mutateArtifact(item.id, operation, body)
     if (!disposed) await load()
   } catch (cause) { if (!disposed) error.value = cause.message }
   finally { actionBusy.value = false }

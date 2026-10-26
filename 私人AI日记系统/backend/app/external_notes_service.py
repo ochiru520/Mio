@@ -4,9 +4,9 @@ from __future__ import annotations
 import hashlib
 import os
 import uuid
-from contextlib import closing
 from pathlib import Path
 
+from .repositories import external_notes_service_repository as repository
 from . import db, workspace_service as workspace
 from . import agent_file_service as files
 
@@ -17,24 +17,8 @@ def _digest(content: str) -> str:
 
 def initialize() -> None:
     workspace.initialize()
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS workspace_external_roots(
-              id TEXT PRIMARY KEY,path TEXT NOT NULL UNIQUE,label TEXT NOT NULL DEFAULT '',
-              created_at TEXT NOT NULL,updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS workspace_external_notes(
-              id TEXT PRIMARY KEY,project_id TEXT NOT NULL,root_id TEXT NOT NULL,
-              relative_path TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,
-              content_sha256 TEXT NOT NULL DEFAULT '',file_mtime_ns INTEGER NOT NULL DEFAULT 0,
-              file_size INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
-              UNIQUE(project_id,root_id,relative_path)
-            );
-            CREATE INDEX IF NOT EXISTS idx_external_notes_project
-              ON workspace_external_notes(project_id,updated_at DESC);
-            """
-        )
+    with repository.transaction() as conn:
+        conn.initialize_initialize_workspace_external_roots()
 
 
 def _safe_root(value: str) -> Path:
@@ -46,8 +30,8 @@ def _safe_root(value: str) -> Path:
 
 def _root_row(root_id: str):
     initialize()
-    with closing(db.get_conn()) as conn:
-        row = conn.execute("SELECT * FROM workspace_external_roots WHERE id=?", (root_id,)).fetchone()
+    with repository.read() as conn:
+        row = conn.root_row_find_workspace_external_roots((root_id,))
     if row is None:
         raise ValueError("外部笔记目录不存在。")
     root = _safe_root(row["path"])
@@ -58,11 +42,8 @@ def _root_row(root_id: str):
 
 def _note_row(project_id: str, note_id: str):
     workspace.require_project(project_id)
-    with closing(db.get_conn()) as conn:
-        row = conn.execute(
-            "SELECT * FROM workspace_external_notes WHERE project_id=? AND id=?",
-            (project_id, note_id),
-        ).fetchone()
+    with repository.read() as conn:
+        row = conn.note_row_find_workspace_external_notes((project_id, note_id))
     if row is None:
         raise ValueError("外部笔记不存在或不属于当前项目。")
     return row
@@ -95,8 +76,8 @@ def _public(row, root: Path, path: Path, *, content: str = "", conflict: bool = 
 
 def roots() -> list[dict]:
     initialize()
-    with closing(db.get_conn()) as conn:
-        rows = conn.execute("SELECT * FROM workspace_external_roots ORDER BY path").fetchall()
+    with repository.read() as conn:
+        rows = conn.roots_find_workspace_external_roots()
     result = []
     for row in rows:
         try:
@@ -112,20 +93,16 @@ def authorize(path: str, label: str = "") -> dict:
     root = _safe_root(path)
     now = db.now_iso()
     root_id = "root_" + uuid.uuid4().hex[:20]
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute(
-            """INSERT INTO workspace_external_roots(id,path,label,created_at,updated_at)
-               VALUES(?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET label=excluded.label,updated_at=excluded.updated_at""",
-            (root_id, str(root), label.strip()[:160], now, now),
-        )
-        row = conn.execute("SELECT * FROM workspace_external_roots WHERE path=?", (str(root),)).fetchone()
+    with repository.transaction() as conn:
+        conn.authorize_insert_workspace_external_roots((root_id, str(root), label.strip()[:160], now, now))
+        row = conn.authorize_find_workspace_external_roots((str(root),))
     return {**dict(row), "available": True}
 
 
 def list_notes(project_id: str) -> list[dict]:
     initialize(); workspace.require_project(project_id)
-    with closing(db.get_conn()) as conn:
-        rows = conn.execute("SELECT * FROM workspace_external_notes WHERE project_id=? ORDER BY updated_at DESC,id", (project_id,)).fetchall()
+    with repository.read() as conn:
+        rows = conn.list_notes_find_workspace_external_notes((project_id,))
     result = []
     for row in rows:
         try:
@@ -146,16 +123,13 @@ def link(project_id: str, root_id: str, relative_path: str) -> dict:
     now = db.now_iso(); digest = _digest(raw)
     title = next((line[1:].strip() for line in raw.splitlines() if line.startswith("# ")), path.stem)
     note_id = "external_" + uuid.uuid4().hex[:20]
-    with closing(db.get_conn()) as conn, conn:
-        existing = conn.execute(
-            "SELECT * FROM workspace_external_notes WHERE project_id=? AND root_id=? AND relative_path=?",
-            (project_id, root_id, str(Path(relative_path))),
-        ).fetchone()
+    with repository.transaction() as conn:
+        existing = conn.link_find_workspace_external_notes((project_id, root_id, str(Path(relative_path))))
         if existing:
             note_id = existing["id"]
-            conn.execute("UPDATE workspace_external_notes SET title=?,content_sha256=?,file_mtime_ns=?,file_size=?,updated_at=? WHERE id=?", (title, digest, path.stat().st_mtime_ns, path.stat().st_size, now, note_id))
+            conn.link_update_workspace_external_notes((title, digest, path.stat().st_mtime_ns, path.stat().st_size, now, note_id))
         else:
-            conn.execute("INSERT INTO workspace_external_notes VALUES(?,?,?,?,?,?,?,?,?,?,?)", (note_id, project_id, root_id, str(Path(relative_path)), title, 1, digest, path.stat().st_mtime_ns, path.stat().st_size, now, now))
+            conn.link_insert_workspace_external_notes((note_id, project_id, root_id, str(Path(relative_path)), title, 1, digest, path.stat().st_mtime_ns, path.stat().st_size, now, now))
     return read(project_id, note_id)
 
 
@@ -172,11 +146,8 @@ def refresh(project_id: str, note_id: str) -> dict:
     row = _note_row(project_id, note_id)
     _, root = _root_row(row["root_id"]); path = _resolve_file(root, row["relative_path"])
     raw = path.read_text(encoding="utf-8-sig"); digest = _digest(raw); now = db.now_iso(); stat = path.stat()
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute(
-            "UPDATE workspace_external_notes SET title=?,revision=revision+1,content_sha256=?,file_mtime_ns=?,file_size=?,updated_at=? WHERE id=?",
-            (next((line[1:].strip() for line in raw.splitlines() if line.startswith('# ')), path.stem), digest, stat.st_mtime_ns, stat.st_size, now, note_id),
-        )
+    with repository.transaction() as conn:
+        conn.refresh_update_workspace_external_notes((next((line[1:].strip() for line in raw.splitlines() if line.startswith('# ')), path.stem), digest, stat.st_mtime_ns, stat.st_size, now, note_id))
     return read(project_id, note_id)
 
 
@@ -201,6 +172,6 @@ def write(project_id: str, note_id: str, content: str, expected_revision: int, e
     finally:
         temporary.unlink(missing_ok=True)
     digest = _digest(content); now = db.now_iso(); stat = path.stat()
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("UPDATE workspace_external_notes SET title=?,revision=revision+1,content_sha256=?,file_mtime_ns=?,file_size=?,updated_at=? WHERE id=?", (next((line[1:].strip() for line in content.splitlines() if line.startswith('# ')), path.stem), digest, stat.st_mtime_ns, stat.st_size, now, note_id))
+    with repository.transaction() as conn:
+        conn.write_update_workspace_external_notes((next((line[1:].strip() for line in content.splitlines() if line.startswith('# ')), path.stem), digest, stat.st_mtime_ns, stat.st_size, now, note_id))
     return read(project_id, note_id)

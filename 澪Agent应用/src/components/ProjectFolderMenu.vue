@@ -1,6 +1,6 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Trash2 } from '@lucide/vue'
+import { Trash2 } from '../icons/index.js'
 const props = defineProps({ project: Object, x: Number, y: Number, busy: Boolean, directoryCreated: Boolean })
 const emit = defineEmits(['close', 'delete', 'delete-directory'])
 const menu = ref(null), left = ref(props.x), top = ref(props.y)

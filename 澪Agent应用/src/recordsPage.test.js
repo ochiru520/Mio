@@ -22,7 +22,8 @@ test('weekly and monthly secondary rails share the diary collapse control', () =
 
 test('monthly records use a persisted monthly summary endpoint', () => {
   assert.match(api, /listMonthlyReviews\s*=\s*\(\)\s*=>\s*apiRequest\('\/api\/monthly'\)/)
-  assert.match(diaries, /request\(`\/api\/monthly\/\$\{month\}\/generate`/)
+  assert.match(diaries, /diaryApi\.submitMonthlyGenerate\(month, \{\}, deps\.request\)/)
+  assert.match(api, /\/api\/monthly\/\$\{month\}\/generate/)
   assert.match(records, /selectedMonthlyReview\?\.markdown_content/)
   assert.match(records, /renderedMarkdown\(context\.selectedMonthlyReview\.markdown_content\)/)
   assert.match(records, /生成月记/)

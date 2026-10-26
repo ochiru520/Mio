@@ -9,12 +9,17 @@ import json
 import logging
 import time
 import uuid
-from contextlib import closing
+import hashlib
 from dataclasses import asdict, dataclass, replace
+from contextlib import asynccontextmanager
 from typing import Literal, Callable
+
+from .repositories import model_runtime_repository as repository
 
 from . import db, maintenance_service
 from .config import SettingsConflictError
+from . import prompt_metrics
+from .repositories import prompt_metrics_repository
 
 Mode = Literal["chat", "agent", "record", "proactive", "vision", "translation", "profile", "memory"]
 MODES = ("chat", "agent", "record", "proactive", "vision", "translation", "profile", "memory")
@@ -46,37 +51,14 @@ _active: dict[str, dict] = {}
 
 
 def initialize() -> None:
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS runtime_operations (
-                id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, request_id TEXT NOT NULL,
-                conversation_id TEXT NOT NULL, task_id TEXT NOT NULL, mode TEXT NOT NULL,
-                purpose TEXT NOT NULL, automatic INTEGER NOT NULL, status TEXT NOT NULL,
-                started_at TEXT NOT NULL, finished_at TEXT NOT NULL DEFAULT '',
-                error_code TEXT NOT NULL DEFAULT ''
-            );
-            CREATE INDEX IF NOT EXISTS idx_runtime_operations_request ON runtime_operations(request_id);
-            CREATE INDEX IF NOT EXISTS idx_runtime_operations_task ON runtime_operations(task_id,started_at);
-            CREATE TABLE IF NOT EXISTS runtime_model_calls (
-                id TEXT PRIMARY KEY, operation_id TEXT NOT NULL, request_id TEXT NOT NULL,
-                task_id TEXT NOT NULL, conversation_id TEXT NOT NULL, mode TEXT NOT NULL,
-                selected_model_id TEXT NOT NULL, actual_model_id TEXT NOT NULL DEFAULT '',
-                provider_id TEXT NOT NULL DEFAULT '', reasoning_level TEXT NOT NULL,
-                status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT NOT NULL DEFAULT '',
-                prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0,
-                cost_yuan REAL, cost_source TEXT NOT NULL DEFAULT '', error_code TEXT NOT NULL DEFAULT '',
-                http_status INTEGER NOT NULL DEFAULT 0, duration_ms REAL
-            );
-            CREATE INDEX IF NOT EXISTS idx_runtime_model_calls_mode ON runtime_model_calls(mode,started_at);
-            CREATE INDEX IF NOT EXISTS idx_runtime_model_calls_request ON runtime_model_calls(request_id);
-            CREATE TABLE IF NOT EXISTS runtime_model_policies (
-                mode TEXT PRIMARY KEY, policy_json TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1
-            );
-        """)
-        if "duration_ms" not in {row[1] for row in conn.execute("PRAGMA table_info(runtime_model_calls)")}:
-            conn.execute("ALTER TABLE runtime_model_calls ADD COLUMN duration_ms REAL")
-        conn.execute("UPDATE runtime_operations SET status='interrupted',finished_at=? WHERE status='running'", (db.now_iso(),))
-        conn.execute("UPDATE runtime_model_calls SET status='unknown',finished_at=?,error_code='interrupted' WHERE status='running'", (db.now_iso(),))
+    with repository.unit_of_work() as conn:
+        conn.ensure_runtime_tables()
+        if "duration_ms" not in {row[1] for row in conn.model_call_columns()}:
+            conn.add_call_duration()
+        prompt_metrics_repository.initialize(conn.connection)
+        prompt_metrics_repository.interrupt_attempts(conn.connection, db.now_iso())
+        conn.interrupt_operations((db.now_iso(),))
+        conn.interrupt_model_calls((db.now_iso(),))
 
 
 def model_policy(mode: Mode) -> dict:
@@ -86,9 +68,9 @@ def model_policy(mode: Mode) -> dict:
     if mode == "record" and db.settings.daily_diary_model_id:
         default.update(selection="fixed", model_id=db.settings.daily_diary_model_id)
     if db.settings.db_path.is_file():
-        with closing(db.get_conn()) as conn:
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='runtime_model_policies'").fetchone():
-                row = conn.execute("SELECT * FROM runtime_model_policies WHERE mode=?", (mode,)).fetchone()
+        with repository.unit_of_work(write=False) as conn:
+            if conn.policies_available():
+                row = conn.stored_policy((mode,))
                 if row:
                     return {"mode": mode, **default, **json.loads(row["policy_json"]), "revision": row["revision"]}
     return {"mode": mode, **default, "revision": 0}
@@ -121,15 +103,14 @@ def save_model_policy(mode: Mode, values: dict, *, expected_revision: int) -> di
         if not policy["model_id"]:
             raise ValueError("请选择固定模型。")
         get_model_profile(str(policy["model_id"]))
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT revision FROM runtime_model_policies WHERE mode=?", (mode,)).fetchone()
+    with repository.unit_of_work() as conn:
+        conn.lock_for_update()
+        row = conn.policy_revision((mode,))
         revision = row[0] if row else 0
         if revision != expected_revision:
             from .config import SettingsConflictError
             raise SettingsConflictError("模型策略已经更新，请重新载入。")
-        conn.execute("INSERT INTO runtime_model_policies VALUES(?,?,?) ON CONFLICT(mode) DO UPDATE SET policy_json=excluded.policy_json,revision=excluded.revision",
-                     (mode, json.dumps(policy, ensure_ascii=False), revision + 1))
+        conn.save_policy((mode, json.dumps(policy, ensure_ascii=False), revision + 1))
     return model_policy(mode)
 
 
@@ -153,6 +134,66 @@ def model_selection(mode: Mode, model_id: str = "", reasoning_level: str = "stan
 
 
 _model_depth: contextvars.ContextVar[int] = contextvars.ContextVar("mio_model_depth", default=0)
+_attempt_context = contextvars.ContextVar('mio_http_attempts', default=None)
+
+
+def record_current_prompt(messages, tools, *, route_budget=None):
+    state = _attempt_context.get()
+    context = current()
+    if not state or context is None or not db.settings.db_path.is_file():
+        return
+    metrics = prompt_metrics.estimate_request(messages, tools)
+    if route_budget:
+        metrics.update(route_budget)
+    from .repositories.context_offload_repository import list_scope
+    serialized = json.dumps(messages, ensure_ascii=False, default=str)
+    metrics['input_references'] = [item for item in list_scope(context.task_id or context.conversation_id or context.request_id) if item['id'] in serialized]
+    with repository.unit_of_work() as conn:
+        prompt_metrics_repository.record_estimate(conn.connection, state['call_id'],
+            category=prompt_metrics.request_category(context.mode, context.purpose, state.get('request_id') or context.request_id, context.automatic),
+            streaming=state.get('streaming', False), metrics=metrics)
+
+
+@asynccontextmanager
+async def transport_attempt(payload, url, route=None):
+    """One record per actual send, including compatibility fallbacks and retries."""
+    state = _attempt_context.get()
+    identifier = 'attempt_' + uuid.uuid4().hex
+    active = False
+    started = time.monotonic()
+    if state and db.settings.db_path.is_file():
+        from .model_registry import get_model_profile
+        try:
+            provider = get_model_profile(state['selected']).provider_id
+        except ValueError:
+            provider = ''
+        with repository.unit_of_work() as conn:
+            route_description = ('responses' if str(url).endswith('/responses') else 'chat_completions')
+            if route is not None:
+                route_description = str(route.label) + ':' + str(route.api_mode) + ':' + hashlib.sha256((str(route.base_url) + '|' + str(route.proxy_url)).encode()).hexdigest()[:12]
+            active = prompt_metrics_repository.start_attempt(conn.connection, state['call_id'], identifier,
+                model_id=str(payload.get('model') or state['selected']), provider_id=provider,
+                protocol_mode='responses' if str(url).endswith('/responses') else 'chat_completions',
+                route=route_description, now=db.now_iso())
+    received = {}
+    try:
+        yield received
+    except BaseException as exc:
+        if active:
+            with repository.unit_of_work() as conn:
+                prompt_metrics_repository.finish_attempt(conn.connection, identifier, now=db.now_iso(),
+                    status='cancelled' if isinstance(exc, asyncio.CancelledError) else 'failed',
+                    http_status=received.get('status', 0), duration_ms=(time.monotonic()-started)*1000,
+                    error_code=type(exc).__name__)
+        raise
+    else:
+        if active:
+            status = int(received.get('status', 0))
+            with repository.unit_of_work() as conn:
+                prompt_metrics_repository.finish_attempt(conn.connection, identifier, now=db.now_iso(),
+                    status='received' if 200 <= status < 300 else 'failed', http_status=status,
+                    duration_ms=(time.monotonic()-started)*1000)
+            state['attempts'].append(identifier)
 
 
 def _call_record(call_id: str, context: OperationContext, values: dict, *, result=None, error=None, duration_ms: float | None = None) -> None:
@@ -163,21 +204,24 @@ def _call_record(call_id: str, context: OperationContext, values: dict, *, resul
             entry["persisted"] = True
     if not db.settings.db_path.is_file():
         return
-    with closing(db.get_conn()) as conn, conn:
-        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='runtime_model_calls'").fetchone():
+    with repository.unit_of_work() as conn:
+        if not conn.calls_available():
             return
         if result is None and error is None:
-            conn.execute("INSERT INTO runtime_model_calls(id,operation_id,request_id,task_id,conversation_id,mode,selected_model_id,reasoning_level,status,started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                         (call_id, context.id, values.get("request_id") or context.request_id, context.task_id,
+            conn.insert_model_call((call_id, context.id, values.get("request_id") or context.request_id, context.task_id,
                           context.conversation_id, context.mode, values.get("model_id") or "auto",
                           values.get("reasoning_level") or "auto", "running", db.now_iso()))
+            prompt_metrics_repository.record_estimate(conn.connection, call_id,
+                category=prompt_metrics.request_category(context.mode, context.purpose,
+                    str(values.get("request_id") or context.request_id), context.automatic),
+                streaming=bool(values.get("_metrics_streaming")),
+                metrics=prompt_metrics.estimate_request(values.get("messages") or [], values.get("tools")))
         elif error is not None:
-            conn.execute("UPDATE runtime_model_calls SET status=?,finished_at=?,error_code=?,http_status=?,duration_ms=? WHERE id=?",
-                         ("cancelled" if isinstance(error, asyncio.CancelledError) else "failed", db.now_iso(), type(error).__name__, int(getattr(error, "http_status", 0) or 0), duration_ms, call_id))
+            conn.fail_model_call(("cancelled" if isinstance(error, asyncio.CancelledError) else "failed", db.now_iso(), type(error).__name__, int(getattr(error, "http_status", 0) or 0), duration_ms, call_id))
         else:
-            conn.execute("UPDATE runtime_model_calls SET status='completed',finished_at=?,actual_model_id=?,provider_id=?,prompt_tokens=?,completion_tokens=?,cost_yuan=?,cost_source=?,http_status=?,duration_ms=? WHERE id=?",
-                         (db.now_iso(), result.profile_id or values.get("model_id") or result.model, result.provider_id,
+            conn.complete_model_call((db.now_iso(), result.profile_id or values.get("model_id") or result.model, result.provider_id,
                           result.prompt_tokens, result.completion_tokens, result.cost_yuan, result.cost_source, result.http_status, duration_ms, call_id))
+            prompt_metrics_repository.record_usage(conn.connection, call_id, result)
 
 
 def model_call(callback):
@@ -192,22 +236,39 @@ def model_call(callback):
             check_allowed(context)
             bound = signature.bind_partial(*args, **kwargs)
             selected, reasoning = model_selection(context.mode, str(bound.arguments.get("model_id") or ""), str(bound.arguments.get("reasoning_level") or "standard"))
+            from .context_input_policy import summary_model_locked
+            locked = summary_model_locked()
+            if locked and selected != locked:
+                raise OperationBlocked('同前缀摘要的模型策略与原路线不同，未跨模型发送原前缀。请使用独立摘要。')
             bound.arguments.update(model_id=selected, reasoning_level=reasoning)
             if "request_id" in signature.parameters and not bound.arguments.get("request_id"):
                 bound.arguments["request_id"] = context.request_id
             call_id = "call_" + uuid.uuid4().hex
             token = _model_depth.set(1)
-            _call_record(call_id, context, bound.arguments)
+            attempt_state = {'call_id': call_id, 'selected': selected, 'attempts': [],
+                'request_id': bound.arguments.get('request_id', ''),
+                'streaming': callback.__name__ == 'call_chat_completion_stream_result'}
+            attempt_token = _attempt_context.set(attempt_state)
             started = time.monotonic()
             try:
+                _call_record(call_id, context, {**bound.arguments,
+                    "_metrics_streaming": callback.__name__ == "call_chat_completion_stream_result"})
                 result = await callback(*bound.args, **bound.kwargs)
                 _call_record(call_id, context, bound.arguments, result=result, duration_ms=(time.monotonic()-started)*1000)
+                if attempt_state['attempts']:
+                    with repository.unit_of_work() as conn:
+                        prompt_metrics_repository.attempt_usage(conn.connection, attempt_state['attempts'][-1], result)
+                        prompt_metrics_repository.finalize_attempts(conn.connection, call_id)
                 return result
             except BaseException as error:
                 _call_record(call_id, context, bound.arguments, error=error, duration_ms=(time.monotonic()-started)*1000)
+                if db.settings.db_path.is_file():
+                    with repository.unit_of_work() as conn:
+                        prompt_metrics_repository.finalize_attempts(conn.connection, call_id, type(error).__name__)
                 raise
             finally:
                 _model_depth.reset(token)
+                _attempt_context.reset(attempt_token)
         if current():
             return await invoke()
         values = signature.bind_partial(*args, **kwargs).arguments
@@ -227,9 +288,9 @@ def bind_task(task_id: str) -> None:
     _context.set(updated)
     if context.id in _active:
         _active[context.id]["task_id"] = task_id
-    with closing(db.get_conn()) as conn, conn:
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='runtime_operations'").fetchone():
-            conn.execute("UPDATE runtime_operations SET task_id=? WHERE id=?", (task_id, context.id))
+    with repository.unit_of_work() as conn:
+        if conn.operations_available():
+            conn.bind_task((task_id, context.id))
 
 
 def protocol_session_id(scope: str = "") -> str:
@@ -260,16 +321,14 @@ def _record(context: OperationContext, status: str, error_code: str = "") -> Non
     # Import-time and isolated library calls need not create a runtime database.
     if not db.settings.db_path.is_file():
         return
-    with closing(db.get_conn()) as conn, conn:
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_operations'").fetchone() is None:
+    with repository.unit_of_work() as conn:
+        if conn.operation_records_available() is None:
             return
         if status == "running":
-            conn.execute("INSERT OR IGNORE INTO runtime_operations(id,parent_id,request_id,conversation_id,task_id,mode,purpose,automatic,status,started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                         (context.id, context.parent_id, context.request_id, context.conversation_id,
+            conn.insert_operation((context.id, context.parent_id, context.request_id, context.conversation_id,
                           context.task_id, context.mode, context.purpose, context.automatic, status, db.now_iso()))
         else:
-            conn.execute("UPDATE runtime_operations SET status=?,finished_at=?,error_code=? WHERE id=?",
-                         (status, db.now_iso(), error_code, context.id))
+            conn.finish_operation((status, db.now_iso(), error_code, context.id))
 
 
 def operation(mode: Mode | Callable[[dict], Mode], *, automatic: bool = False, persist: bool = True):
@@ -296,9 +355,9 @@ def operation(mode: Mode | Callable[[dict], Mode], *, automatic: bool = False, p
             task_id = str(values.get("task_id") or getattr(values.get("agent"), "task_id", "") or (parent.task_id if parent else ""))
             conversation_id = str(values.get("conversation_id") or row.get("conversation_id") or (parent.conversation_id if parent else ""))
             if task_id and not conversation_id:
-                with closing(db.get_conn()) as conn:
-                    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='agent_tasks'").fetchone():
-                        task = conn.execute("SELECT conversation_id FROM agent_tasks WHERE id=?", (task_id,)).fetchone()
+                with repository.unit_of_work(write=False) as conn:
+                    if conn.tasks_available():
+                        task = conn.task_conversation((task_id,))
                         if task:
                             conversation_id = task[0]
             context = OperationContext(

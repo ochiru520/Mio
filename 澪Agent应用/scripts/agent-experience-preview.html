@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent 隔离体验检查</title></head><body><div id="app"></div><script type="module">
+import {createApp,h,ref} from 'vue'
+import Exercise from '../src/components/LearningExercise.vue'
+import Browser from '../src/components/AgentBrowserPanel.vue'
+import Progress from '../src/components/AgentTaskProgress.vue'
+import Files from '../src/components/AgentFilesPreview.vue'
+import References from '../src/components/ComposerReferences.vue'
+import Tasks from '../src/components/AgentTasksPage.vue'
+import Navigator from '../src/components/MessageNavigator.vue'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+import '../src/styles/agent-surface.css'
+const mode=new URLSearchParams(location.search).get('mode') || 'learning'
+createApp({setup(){const visible=ref(true),selection=ref(null),draft=ref(''),refs=ref([]),session=ref(null),key=ref(0),browserTarget=ref({task_id:'t',page_id:'page',auto_control:true}),scroll=ref(null),turns=ref([{id:2,role:'user',content:'集成问题'},{id:3,role:'assistant',content:'不应有AI刻度'}])
+async function reload(){session.value=await (await fetch('/api/workspace/projects/p/learning/s')).json();key.value++}
+if(mode==='learning')void reload()
+async function loadTarget(id){const older=await (await fetch('/api/agent/messages?before_id=2')).json();turns.value=[...older,...turns.value];return turns.value.some(item=>item.id===id)}
+return()=>h('main',{style:'max-width:900px;height:100vh;padding:30px;margin:auto;overflow:auto;color:var(--text);background:var(--surface)'},[
+h('button',{onClick:()=>visible.value=!visible.value},visible.value?'关闭检查组件':'重开检查组件'),
+selection.value?h('pre',{'data-testid':'selection'},JSON.stringify(selection.value)):null,
+visible.value&&mode==='learning'&&session.value?h(Exercise,{key:key.value,projectId:'p',session:session.value,onChanged:reload}):null,
+visible.value&&mode==='browser'?h(Browser,{taskId:'t',conversationId:'c',onSelect:v=>selection.value=v}):null,
+visible.value&&mode==='browser-auto'?h(Browser,{taskId:'t',conversationId:'c',target:browserTarget.value,onActivated:()=>browserTarget.value={...browserTarget.value,auto_control:false}}):null,
+mode==='tasks'?h(Tasks,{conversationId:'c',taskId:'done'}):null,
+mode==='navigator'?h('div',[h('div',{ref:scroll,style:'height:240px;overflow:auto'},turns.value.map(turn=>h('div',{class:'message-row '+turn.role,'data-message-anchor':(turn.role==='user'?'user-':'assistant-')+turn.id,style:'height:250px'},turn.content))),h(Navigator,{scrollElement:scroll.value,turns:turns.value,conversationId:'c',loadTarget})]):null,
+visible.value&&mode==='progress'?h(Progress,{taskId:'t',task:{id:'t',status:'running'},inlineChat:true,onBrowserTarget:v=>selection.value=v}):null,
+visible.value&&mode==='files'?h(Files,{projectId:'p',conversationId:'c',tasks:[{id:'t',conversation_id:'c'}],reviewTarget:{id:'change',kind:'diff',path:'b.py'}}):null,
+mode==='references'?h('div',[h('textarea',{value:draft.value,onInput:e=>draft.value=e.target.value,'aria-label':'测试引用输入'}),h(References,{enabled:true,draft:draft.value,projectId:'p',items:refs.value,onAdd:v=>refs.value.push(v),onRemove:i=>refs.value.splice(i,1),onPreview:v=>selection.value=v,onReplaceMention:()=>draft.value=''})]):null])}}).mount('#app')
+</script></body></html>

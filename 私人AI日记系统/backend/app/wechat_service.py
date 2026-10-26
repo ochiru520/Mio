@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from contextlib import closing
 import hashlib
 import io
 import json
@@ -22,6 +21,7 @@ import qrcode
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
 
+from .repositories import wechat_service_repository as repository
 from . import db, agent_task_service as tasks, maintenance_service
 from .config import settings
 from .secret_store import protect_secret, unprotect_secret
@@ -46,28 +46,22 @@ class ConnectionStopped(RuntimeError):
 
 
 def initialize() -> None:
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript('''
-            CREATE TABLE IF NOT EXISTS wechat_state (key TEXT PRIMARY KEY,value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS wechat_inbox (
-                event_key TEXT PRIMARY KEY, bot_id TEXT NOT NULL, payload TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL
-            );
-        ''')
+    with repository.transaction() as conn:
+        conn.initialize_initialize_wechat_state()
 
 
 def config() -> dict:
     initialize()
-    with closing(db.get_conn()) as conn:
-        row = conn.execute("SELECT value FROM wechat_state WHERE key='session'").fetchone()
+    with repository.read() as conn:
+        row = conn.config_find_wechat_state()
     return json.loads(unprotect_secret(row[0])) if row else {}
 
 
 def save_config(value: dict) -> None:
     initialize()
     encrypted = protect_secret(json.dumps(value, ensure_ascii=False))
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("INSERT OR REPLACE INTO wechat_state VALUES('session',?)", (encrypted,))
+    with repository.transaction() as conn:
+        conn.save_config_insert_wechat_state((encrypted,))
 
 
 def origin_for(value: dict) -> dict:
@@ -226,9 +220,9 @@ async def forget() -> dict:
     _login.clear()
     await set_enabled(False)
     save_config({})
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('DELETE FROM wechat_state')
-        conn.execute('DELETE FROM wechat_inbox')
+    with repository.transaction() as conn:
+        conn.forget_delete_wechat_state()
+        conn.forget_delete_wechat_inbox()
     _state.update(connected=False, message='已解除本机微信绑定')
     return public_status()
 
@@ -252,25 +246,23 @@ async def poll_once(*, conversation_id: str = 'wechat_transport') -> None:
     if not value.get('enabled'):
         return
     bot = value['bot_id']
-    with closing(db.get_conn()) as conn:
-        cursor = conn.execute('SELECT value FROM wechat_state WHERE key=?', ('cursor:' + bot,)).fetchone()
+    with repository.read() as conn:
+        cursor = conn.poll_once_find_wechat_state(('cursor:' + bot,))
     process = asyncio.current_task(); _inflight.add(process)
     try:
         response = await request('getupdates', value=value, body={'get_updates_buf': cursor[0] if cursor else ''})
         if not _same_session(value):
             return
-        with closing(db.get_conn()) as conn, conn:
+        with repository.transaction() as conn:
             for message in response.get('msgs') or []:
                 if not isinstance(message, dict) or not _accept_message(message, value):
                     continue
                 key = 'wechat-' + hashlib.sha256(json.dumps([bot, message['from_user_id'], message.get('message_id', message.get('client_id'))]).encode()).hexdigest()[:40]
-                conn.execute('INSERT OR IGNORE INTO wechat_inbox(event_key,bot_id,payload,created_at) VALUES(?,?,?,?)',
-                             (key, bot, protect_secret(json.dumps(message, ensure_ascii=False)), db.now_iso()))
+                conn.poll_once_insert_wechat_inbox((key, bot, protect_secret(json.dumps(message, ensure_ascii=False)), db.now_iso()))
                 if message.get('context_token'):
-                    conn.execute('INSERT OR REPLACE INTO wechat_state VALUES(?,?)',
-                                 ('context:' + bot, protect_secret(str(message['context_token']))))
+                    conn.poll_once_insert_wechat_state_2(('context:' + bot, protect_secret(str(message['context_token']))))
             if response.get('get_updates_buf'):
-                conn.execute('INSERT OR REPLACE INTO wechat_state VALUES(?,?)', ('cursor:' + bot, str(response['get_updates_buf'])))
+                conn.poll_once_insert_wechat_state(('cursor:' + bot, str(response['get_updates_buf'])))
         _state.update(connected=True, bot_id=bot, last_poll=time.time(), message='微信已连接，仅接收扫码账号的私聊')
     except asyncio.CancelledError:
         if process in _stopping:
@@ -347,8 +339,8 @@ async def deliver(origin: dict, payload: dict, *, client_id: str) -> dict:
     value = config()
     if not authorized(origin) or not _same_session(value):
         raise ApiRejected('微信收件账号已改变或通道已暂停。')
-    with closing(db.get_conn()) as conn:
-        context = conn.execute('SELECT value FROM wechat_state WHERE key=?', ('context:' + value['bot_id'],)).fetchone()
+    with repository.read() as conn:
+        context = conn.deliver_find_wechat_state(('context:' + value['bot_id'],))
     if not context:
         raise ApiRejected('请先从微信向澪发一条消息，再重发结果。')
     process = asyncio.current_task(); _inflight.add(process)
@@ -381,8 +373,8 @@ async def consume_once(*, conversation_id: str = 'wechat_transport', controls: b
     value = config()
     if not value.get('enabled'):
         return False
-    with closing(db.get_conn()) as conn:
-        candidates = conn.execute("SELECT * FROM wechat_inbox WHERE bot_id=? AND status='pending' ORDER BY created_at,rowid LIMIT 100", (value['bot_id'],)).fetchall()
+    with repository.read() as conn:
+        candidates = conn.consume_once_find_wechat_inbox((value['bot_id'],))
     row = None
     for candidate in candidates:
         preview = json.loads(unprotect_secret(candidate['payload']))
@@ -397,13 +389,13 @@ async def consume_once(*, conversation_id: str = 'wechat_transport', controls: b
     message = json.loads(unprotect_secret(row['payload']))
     origin = origin_for(value); key = row['event_key']
     if not _accept_message(message, value):
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE wechat_inbox SET status='ignored',payload='' WHERE event_key=?", (key,))
+        with repository.transaction() as conn:
+            conn.consume_once_update_wechat_inbox_2((key,))
         return True
     mobile.initialize()
     if not mobile.claim_event(key, origin):
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE wechat_inbox SET status='handled',payload='' WHERE event_key=?", (key,))
+        with repository.transaction() as conn:
+            conn.consume_once_update_wechat_inbox_3((key,))
         return True
     process = asyncio.current_task(); _inflight.add(process)
     try:
@@ -438,8 +430,8 @@ async def consume_once(*, conversation_id: str = 'wechat_transport', controls: b
                         raise asyncio.CancelledError()
                     attachment_id = await files.store_document(origin, key + ':' + str(index), name, content)
                     from .wechat_history import archive_document
-                    with closing(db.get_conn()) as conn, conn:
-                        archive_document(conn, conn.execute('SELECT * FROM mobile_task_attachments WHERE id=?', (attachment_id,)).fetchone())
+                    with repository.transaction() as conn:
+                        archive_document(conn.history(), conn.consume_once_find_mobile_task_attachments((attachment_id,)))
                     mobile.queue(origin, f'已收到附件：{name}。请告诉我处理要求，或发送“/任务 补充 要求”。', key=key + ':file:' + str(index))
                 except (ValueError, httpx.HTTPError):
                     unsupported.append('这个附件未能接收；支持 32MB 以内的 DOCX、PDF 和文本文件，请检查文件后重发。')
@@ -474,8 +466,8 @@ async def consume_once(*, conversation_id: str = 'wechat_transport', controls: b
     finally:
         _inflight.discard(process)
         _stopping.discard(process)
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("UPDATE wechat_inbox SET status='handled',payload='' WHERE event_key=?", (key,))
+    with repository.transaction() as conn:
+        conn.consume_once_update_wechat_inbox((key,))
     return True
 
 

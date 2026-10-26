@@ -95,6 +95,22 @@ class WebViewRecoveryTests(unittest.TestCase):
         agent_window.show.assert_called_once_with()
         agent_window.restore.assert_called_once_with()
 
+    def test_workspace_controller_keeps_source_visible_if_target_cannot_open(self):
+        for failed_operation in ("show", "restore"):
+            with self.subTest(failed_operation=failed_operation):
+                controller = launcher.WorkspaceWindowController()
+                main_window = unittest.mock.Mock()
+                agent_window = unittest.mock.Mock()
+                controller.attach("main", main_window)
+                controller.attach("agent", agent_window)
+                getattr(agent_window, failed_operation).side_effect = RuntimeError("target unavailable")
+
+                with self.assertLogs(level="ERROR"):
+                    result = controller.switch("agent")
+
+                self.assertFalse(result["ok"])
+                main_window.hide.assert_not_called()
+
     def test_workspace_controller_closes_each_window_only_once(self):
         controller = launcher.WorkspaceWindowController()
         main_window = unittest.mock.Mock()
@@ -116,6 +132,28 @@ class WebViewRecoveryTests(unittest.TestCase):
 
         self.assertEqual(bridge.switch_workspace("agent"), {"ok": True, "workspace": "agent"})
         controller.switch.assert_called_once_with("agent")
+
+    def test_desktop_bridge_requests_navigation_after_fallback_changes_its_route(self):
+        # Physical window identities outlive frontend reloads: main may now be
+        # showing Agent, or Agent may now be showing main after a failed switch.
+        for physical_workspace in ("main", "agent"):
+            with self.subTest(physical_workspace=physical_workspace):
+                controller = unittest.mock.Mock()
+                bridge = launcher.DesktopBridge(physical_workspace, controller)
+
+                self.assertEqual(bridge.switch_workspace(physical_workspace), {
+                    "ok": True, "workspace": physical_workspace, "navigation_required": True,
+                })
+                controller.switch.assert_not_called()
+
+    def test_desktop_bridge_does_not_treat_invalid_workspace_as_local_navigation(self):
+        controller = unittest.mock.Mock()
+        bridge = launcher.DesktopBridge("main", controller)
+
+        self.assertEqual(bridge.switch_workspace("unknown"), {
+            "ok": False, "error": "不支持的工作区",
+        })
+        controller.switch.assert_not_called()
 
     def test_window_launcher_builds_a_hidden_agent_workspace(self):
         source = Path(launcher.__file__).read_text(encoding="utf-8")

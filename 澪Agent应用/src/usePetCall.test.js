@@ -115,4 +115,3 @@ test('旧AudioContext关闭迟到不会清新会话资源或释放新owner',asyn
  assert.equal(currentAudioOwner(),'pet-call')
  await api.stopPetCall({notifyServer:false})
 })
-

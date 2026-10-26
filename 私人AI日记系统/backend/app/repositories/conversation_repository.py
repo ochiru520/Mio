@@ -44,6 +44,7 @@ class ConversationRepository:
                 SELECT id, role, content, source, conversation_id, created_at,
                        request_id, model_id, provider_model, reasoning_level, prompt_tokens,
                        cached_prompt_tokens, completion_tokens, reasoning_tokens,
+                       cached_tokens_reporting,input_tokens_reported,cache_write_tokens,
                        request_cost_yuan, request_cost_source, attachments_json,
                        emotion, first_token_latency_ms, total_latency_ms
                 FROM messages
@@ -218,6 +219,7 @@ class ConversationRepository:
             ).fetchone()
 
     def list_conversation_attachment_records(self, conversation_id: str) -> list[str]:
+        import json
         with self._connection_factory() as conn:
             rows = conn.execute(
                 """
@@ -227,7 +229,12 @@ class ConversationRepository:
                 """,
                 (conversation_id,),
             ).fetchall()
-        return [str(row["attachments_json"] or "[]") for row in rows]
+            records = [str(row['attachments_json'] or '[]') for row in rows]
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_rewinds'").fetchone():
+                for archived in conn.execute('SELECT archived_messages_json FROM conversation_rewinds WHERE conversation_id=?', (conversation_id,)):
+                    for message in json.loads(archived[0]):
+                        records.append(str(message.get('attachments_json') or '[]'))
+        return records
 
     def list_message_attachment_records(
         self,
@@ -260,6 +267,9 @@ class ConversationRepository:
                 return False
             conn.execute("INSERT OR IGNORE INTO deleted_conversations VALUES(?)", (conversation_id,))
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for table in ('conversation_rewinds', 'conversation_invalidated_messages', 'conversation_invalidated_requests'):
+                if table in tables:
+                    conn.execute(f'DELETE FROM {table} WHERE conversation_id=?', (conversation_id,))
             if "agent_task_runs" in tables:
                 conn.execute("DELETE FROM agent_task_runs WHERE task_id IN (SELECT id FROM agent_tasks WHERE conversation_id=?)", (conversation_id,))
                 conn.execute("DELETE FROM agent_tasks WHERE conversation_id=?", (conversation_id,))

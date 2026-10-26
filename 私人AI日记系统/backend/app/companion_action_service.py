@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from .repositories import companion_action_repository as repository
+
 from . import db, maintenance_service
 from .config import settings
 from .llm import call_chat_completion
@@ -275,6 +277,7 @@ def build_companion_planner_messages(
 - remember_thread 只能用于 user 自己的未来事件，并且必须有明确的 follow_up_after。assistant 随口提出的建议、普通吐槽、没有时间的“之后再说”、以及已经有结果的事情都不能创建待跟进话题。
 - 不要为同一件事反复创建不同措辞的 remember_thread。
 - remember_memory 只记录 user 明确说出的事实，不记录 assistant 的猜测。L0 仅用于身份事实、长期稳定偏好和关系边界；L1 用于最近三周仍有用的状态或计划；L2 用于重要项目、人物和长期经历。
+- 每条 remember_memory 只保存一件独立事实或偏好，不把多个无关话题拼成长记忆；不同事实使用独立的 memory_key。否定、例外、条件和时间限定必须与原事实保存在同一条中，不能为缩短内容拆掉这些约束；重复事实不重复写入。
 - remember_memory 必须区分 occurred_at（事情发生时间）、learned_at（AI 得知时间）、valid_from/valid_until（有效期）、last_confirmed_at（最后确认仍有效时间）和 temporal_status。能从原话确定的时间写 ISO 日期或时间；“昨天、明天、几个月前”必须先按当前消息时间换算为绝对日期，不能原样写入。无法确定 occurred_at 时留空并使用 time_unknown，不能拿写入时间冒充事件时间。
 - remember_memory 置信度 0.55-0.74 时只放入候选箱，不进入上下文；只有确认后才成为 active。无法从用户原话找到证据时不要生成候选。
 - memory_key 使用稳定、简短的英文或中文键表达同一事实槽位，例如 preferred_reply_style、current_project、sleep_schedule。用户纠正旧事实时必须沿用同一个 memory_key，让系统替代旧记录。
@@ -468,7 +471,7 @@ def _update_existing_diary_status(status: str, reason: str = "") -> None:
     markdown_content = _sync_diary_markdown_status(str(diary["markdown_content"]), status, reason)
     if markdown_content != diary["markdown_content"]:
         # 状态变化要真实写回日记正文和磁盘文件，不能只改数据库字段。
-        from .routes.diary import save_diary_markdown
+        from .diary_operations_service import save_diary_markdown
 
         save_diary_markdown(
             diary["date"],
@@ -967,7 +970,7 @@ async def execute_companion_action_primitive(
             content = _clean_text(action.get("instruction"), 800)
             material_id = db.add_diary_material_once(content, source="auto_diary_correction")
             return f"diary_missing_material:{material_id}"
-        from .routes.diary import edit_diary_with_instruction
+        from .diary_operations_service import edit_diary_with_instruction
 
         await edit_diary_with_instruction(db.today_string(), _clean_text(action.get("instruction"), 800))
         return "diary:edited"
@@ -987,8 +990,8 @@ async def execute_companion_action_primitive(
         existing_diary = db.get_diary(today)
         if existing_diary is not None and existing_diary.get("confirmed_at"):
             return "diary:already_confirmed"
-        from .routes.chat import analyze_today_state
-        from .routes.diary import generate_today_diary_payload
+        from .daily_state_analysis_service import analyze_today_state
+        from .diary_operations_service import generate_today_diary_payload
 
         try:
             await analyze_today_state()
@@ -1117,17 +1120,17 @@ async def execute_companion_actions(
 
 async def approve_companion_action(action_id: int) -> dict[str, str]:
     from . import agent_task_service as tasks
-    tasks.initialize()
-    with db.get_conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT * FROM companion_actions WHERE id=?", (action_id,)).fetchone()
+
+    with repository.unit_of_work() as conn:
+        conn.lock_for_update()
+        row = conn.action_for_approval((action_id,))
         if row is None or row["status"] != "needs_confirmation":
             raise ValueError("这个任务当前不需要确认。")
-        db.assert_conversation_writable(row["conversation_id"], conn)
-        parent = conn.execute("SELECT t.* FROM agent_tasks t JOIN agent_task_runs r ON t.id=r.task_id WHERE r.run_id=?", (row["agent_run_id"],)).fetchone()
+        db.assert_conversation_writable(row["conversation_id"], conn.connection)
+        parent = conn.parent_for_run((row["agent_run_id"],))
         if parent is not None and parent["status"] not in {"waiting_confirmation", "running"}:
             raise ValueError("父任务已经停止，确认项已失效。")
-        conn.execute("UPDATE companion_actions SET status='running' WHERE id=? AND status='needs_confirmation'", (action_id,))
+        conn.claim_action((action_id,))
     task_id = parent["id"] if parent else ""
     process = asyncio.current_task()
     if task_id:

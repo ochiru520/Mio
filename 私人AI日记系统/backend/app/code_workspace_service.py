@@ -9,8 +9,9 @@ import stat
 import tempfile
 import threading
 import uuid
-from contextlib import closing
 from pathlib import Path
+
+from .repositories import code_workspace_repository as repository
 
 from . import db, workspace_service as workspace, execution_capability_defaults_service as defaults
 
@@ -28,23 +29,15 @@ def is_link(path):
 def initialize():
     workspace.initialize()
     defaults.initialize()
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript('''
-        CREATE TABLE IF NOT EXISTS code_workspaces(
-          project_id TEXT PRIMARY KEY,root TEXT NOT NULL,read_enabled INTEGER NOT NULL DEFAULT 0,
-          write_enabled INTEGER NOT NULL DEFAULT 0,execute_enabled INTEGER NOT NULL DEFAULT 0,
-          revision INTEGER NOT NULL DEFAULT 1,verification_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS code_changes(
-          id TEXT PRIMARY KEY,project_id TEXT NOT NULL,task_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
-          workspace_revision INTEGER NOT NULL,changes_json TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL);
-        ''')
+    with repository.unit_of_work() as conn:
+        conn.ensure_code_tables()
 
 
 def configuration(project_id):
     initialize()
     project = workspace.require_project(project_id)
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM code_workspaces WHERE project_id=?', (project_id,)).fetchone()
+    with repository.unit_of_work(write=False) as conn:
+        row = conn.project_binding((project_id,))
     if not row:
         capability = defaults.configuration()
         root = project.get('directory', '')
@@ -77,11 +70,11 @@ def configure(project_id, root, read_enabled=False, write_enabled=False, execute
     if any(key not in {'test', 'build', 'lint', 'typecheck'} or not isinstance(value, str) or len(value) > 8000
            for key, value in commands.items()):
         raise ValueError('验证命令仅支持 test/build/lint/typecheck。')
-    with _lock, closing(db.get_conn()) as conn, conn:
-        conn.execute('BEGIN IMMEDIATE')
-        previous = conn.execute('SELECT root,revision FROM code_workspaces WHERE project_id=?', (project_id,)).fetchone()
+    with _lock, repository.unit_of_work() as conn:
+        conn.lock_for_update()
+        previous = conn.binding_for_update((project_id,))
         revision = int(previous['revision']) if previous else 0
-        inherited = defaults.inherited_revision(project_id, 'code', project.get('directory', ''), defaults.configuration(conn))
+        inherited = defaults.inherited_revision(project_id, 'code', project.get('directory', ''), defaults.configuration(conn.connection))
         accepted = {revision} if previous else {0, inherited}
         if expected_revision is not None and expected_revision not in accepted:
             raise ValueError('项目授权已改变，请重新读取。')
@@ -90,17 +83,12 @@ def configure(project_id, root, read_enabled=False, write_enabled=False, execute
             old_path = Path(previous_root).expanduser().resolve()
             if old_path != path and (read_enabled or write_enabled or execute_enabled):
                 raise ValueError('更换项目目录时不能沿用旧目录授权，请先保存新目录，再单独授予权限。')
-        conn.execute('INSERT OR REPLACE INTO code_workspaces VALUES(?,?,?,?,?,?,?,?)',
-                     (project_id, str(path), int(read_enabled), int(write_enabled), int(execute_enabled),
+        conn.save_binding((project_id, str(path), int(read_enabled), int(write_enabled), int(execute_enabled),
                       revision + 1, workspace.encode(commands), db.now_iso()))
         # Code authorization can bind an existing directory, but must not
         # erase provenance when the project already points at a Mio-created
         # folder.  A changed root is user-selected and therefore unowned.
-        conn.execute('''INSERT INTO workspace_project_directories(project_id,path,created_by_mio)
-            VALUES(?,?,COALESCE((SELECT created_by_mio FROM workspace_project_directories
-                                 WHERE project_id=? AND path=?),0))
-            ON CONFLICT(project_id) DO UPDATE SET path=excluded.path,created_by_mio=excluded.created_by_mio''',
-                     (project_id, str(path), project_id, str(path)))
+        conn.bind_project_directory((project_id, str(path), project_id, str(path)))
     return configuration(project_id)
 
 
@@ -114,7 +102,7 @@ def project_context(context, permission='read', expected_revision=None):
     if tasks.automatic_work_paused():
         raise ValueError('本机执行能力已暂停。')
     task = tasks.get(context.task_id) if context.task_id else None
-    if context.task_id and (not task or task['conversation_id'] != context.conversation_id or task.get('source') not in {'desktop', 'agent', 'agent_task'}):
+    if context.task_id and (not task or task['conversation_id'] != context.conversation_id or task.get('source') not in {'desktop', 'agent', 'agent_task', 'workspace'}):
         raise ValueError('手机和远程渠道任务不能取得本机执行权限。')
     project = workspace.project_for_conversation(context.conversation_id)
     if not project or project['archived']:
@@ -298,9 +286,8 @@ def apply_patch(context, changes, workspace_revision):
             records.append({'path': path, 'before_sha256': hashlib.sha256(old).hexdigest(),
                             'after_sha256': hashlib.sha256(new).hexdigest(), 'existed': exists,
                             'backup': str(backup / str(index)), 'diff': diff})
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute('INSERT INTO code_changes VALUES(?,?,?,?,?,?,?,?)',
-                         (change_id, config['project_id'], context.task_id, context.conversation_id,
+        with repository.unit_of_work() as conn:
+            conn.insert_change((change_id, config['project_id'], context.task_id, context.conversation_id,
                           config['revision'], workspace.encode(records), 'prepared', db.now_iso()))
         written = []
         try:
@@ -315,19 +302,19 @@ def apply_patch(context, changes, workspace_revision):
             for target, old, new, exists in reversed(written):
                 if target.read_bytes() == new:
                     _atomic(target, old) if exists else target.unlink()
-            with closing(db.get_conn()) as conn, conn:
-                conn.execute("UPDATE code_changes SET status='failed' WHERE id=?", (change_id,))
+            with repository.unit_of_work() as conn:
+                conn.mark_change_failed((change_id,))
             raise
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE code_changes SET status='applied' WHERE id=?", (change_id,))
+        with repository.unit_of_work() as conn:
+            conn.mark_change_applied((change_id,))
         return {'change_id': change_id, 'status': 'applied', 'files': [{k: v for k, v in row.items() if k != 'backup'} for row in records],
                 'workspace_revision': config['revision']}
 
 
 def change_detail(context, change_id):
     config = project_context(context)
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM code_changes WHERE id=?', (change_id,)).fetchone()
+    with repository.unit_of_work(write=False) as conn:
+        row = conn.change_by_id((change_id,))
     if not row or row['project_id'] != config['project_id'] or row['conversation_id'] != context.conversation_id:
         raise ValueError('修改记录不属于当前对话项目。')
     result = dict(row)
@@ -371,6 +358,6 @@ def restore(context, change_id, workspace_revision):
                 if (existed and target.exists() and target.read_bytes() == old) or (not existed and not target.exists()):
                     _atomic(target, new)
             raise
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE code_changes SET status='restored' WHERE id=?", (change_id,))
+        with repository.unit_of_work() as conn:
+            conn.mark_change_restored((change_id,))
         return {'change_id': change_id, 'status': 'restored'}

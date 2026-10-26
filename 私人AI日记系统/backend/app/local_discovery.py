@@ -126,9 +126,9 @@ def discover_workflows(query: str = '', limit: int = 100) -> dict:
 
 
 async def import_local_workflow(path: str, label: str = '') -> dict:
-    from .routes.creation import creation_preview_workflow
+    from .workflow_import_service import preview_workflow
     source = await asyncio.to_thread(read_workflow, path)
-    prepared = await creation_preview_workflow(creation_custom.WorkflowPreview(prompt=source['prompt']))
+    prepared = await preview_workflow(source['prompt'])
     payload = creation_custom.WorkflowImport(label=label or Path(source['name']).stem,
         media_type=prepared['media_type'], prompt=prepared['prompt'], bindings=prepared['bindings'])
     result = creation_custom.import_workflow(payload)

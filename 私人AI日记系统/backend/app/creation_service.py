@@ -23,6 +23,8 @@ import httpx
 import websockets
 from PIL import Image
 
+from .repositories import creation_repository as repository
+
 from . import db, maintenance_service
 from .config import settings
 from .creation_models import CreationJobRequest, CreationPresetRequest
@@ -165,8 +167,8 @@ def _asset_public(row: object | None) -> dict[str, Any] | None:
 
 
 def get_job(job_id: str) -> dict[str, Any] | None:
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT * FROM creation_jobs WHERE id = ?", (job_id,)).fetchone()
+    with repository.transaction() as conn:
+        row = repository.job(conn, (job_id,)).fetchone()
     return _job_public(row)
 
 
@@ -186,27 +188,21 @@ def workflow_source_file(job_id: str) -> tuple[Path, str]:
 
 
 def _get_job_row(job_id: str) -> dict[str, Any] | None:
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT * FROM creation_jobs WHERE id = ?", (job_id,)).fetchone()
+    with repository.transaction() as conn:
+        row = repository.job(conn, (job_id,)).fetchone()
     return _row_dict(row)
 
 
 def list_jobs(limit: int = 40) -> list[dict[str, Any]]:
-    with db.get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM creation_jobs ORDER BY created_at DESC LIMIT ?",
-            (max(1, min(200, int(limit))),),
-        ).fetchall()
+    with repository.transaction() as conn:
+        rows = repository.list_jobs(conn, (max(1, min(200, int(limit))),)).fetchall()
     return [item for row in rows if (item := _job_public(row)) is not None]
 
 
 def save_job_output_as_asset(job_id: str, index: int = 0) -> dict[str, Any]:
     """Copy a verified generated image into the reusable creation asset store."""
-    with db.get_conn() as conn:
-        row = conn.execute(
-            "SELECT media_type, status, outputs_json FROM creation_jobs WHERE id = ?",
-            (str(job_id),),
-        ).fetchone()
+    with repository.transaction() as conn:
+        row = repository.output_source(conn, (str(job_id),)).fetchone()
     if row is None or str(row["status"] or "") != "completed":
         raise ValueError("上一项图片任务尚未完成，不能用于图片转视频。")
     if str(row["media_type"] or "") != "image":
@@ -233,11 +229,8 @@ def save_job_output_as_asset(job_id: str, index: int = 0) -> dict[str, Any]:
     recorded_digest = str(output.get("sha256") or "")
     if recorded_digest and digest != recorded_digest:
         raise ValueError("上一项任务的图片输出校验失败。")
-    with db.get_conn() as conn:
-        existing = conn.execute(
-            "SELECT * FROM creation_assets WHERE sha256 = ? ORDER BY created_at DESC LIMIT 1",
-            (digest,),
-        ).fetchone()
+    with repository.transaction() as conn:
+        existing = repository.asset_by_hash(conn, (digest,)).fetchone()
     if existing is not None:
         return _asset_public(existing) or {}
     mime_type = str(output.get("mime_type") or mimetypes.guess_type(path.name)[0] or "image/png")
@@ -255,17 +248,13 @@ def _update_job(job_id: str, **changes: object) -> None:
     if not selected:
         return
     selected["updated_at"] = db.now_iso()
-    assignment = ", ".join(f"{key} = ?" for key in selected)
-    with db.get_conn() as conn:
-        conn.execute(
-            f"UPDATE creation_jobs SET {assignment} WHERE id = ?",
-            (*selected.values(), job_id),
-        )
+    with repository.transaction() as conn:
+        repository.update_job(conn, job_id, selected)
 
 
 def _require_asset_row(asset_id: str) -> dict[str, Any]:
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT * FROM creation_assets WHERE id = ?", (asset_id,)).fetchone()
+    with repository.transaction() as conn:
+        row = repository.asset(conn, (asset_id,)).fetchone()
     item = _row_dict(row)
     if item is None:
         raise ValueError(f"找不到创作素材：{asset_id}")
@@ -290,11 +279,8 @@ def asset_file(asset_id: str) -> tuple[Path, str, str]:
 
 
 def list_assets(limit: int = 100) -> list[dict[str, Any]]:
-    with db.get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM creation_assets ORDER BY created_at DESC LIMIT ?",
-            (max(1, min(500, int(limit))),),
-        ).fetchall()
+    with repository.transaction() as conn:
+        rows = repository.list_assets(conn, (max(1, min(500, int(limit))),)).fetchall()
     return [item for row in rows if (item := _asset_public(row)) is not None]
 
 
@@ -329,14 +315,8 @@ def save_asset(name: str, mime_type: str, data_url: str) -> dict[str, Any]:
     path.write_bytes(content)
     digest = hashlib.sha256(content).hexdigest()
     timestamp = db.now_iso()
-    with db.get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO creation_assets(id, original_name, mime_type, path, size, sha256, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (asset_id, _clean_name(name, f"素材{suffix}"), actual_mime, str(path), len(content), digest, timestamp),
-        )
+    with repository.transaction() as conn:
+        repository.insert_asset(conn, (asset_id, _clean_name(name, f"素材{suffix}"), actual_mime, str(path), len(content), digest, timestamp))
     return get_asset(asset_id) or {}
 
 
@@ -344,14 +324,11 @@ def list_presets(kind: str = "") -> list[dict[str, Any]]:
     clean_kind = str(kind or "").strip()
     if clean_kind and clean_kind not in PRESET_KINDS:
         raise ValueError("不支持这个预设类型。")
-    with db.get_conn() as conn:
+    with repository.transaction() as conn:
         if clean_kind:
-            rows = conn.execute(
-                "SELECT * FROM creation_presets WHERE kind = ? ORDER BY updated_at DESC",
-                (clean_kind,),
-            ).fetchall()
+            rows = repository.presets_by_kind(conn, (clean_kind,)).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM creation_presets ORDER BY kind, updated_at DESC").fetchall()
+            rows = repository.list_presets(conn).fetchall()
     return [item for row in rows if (item := _preset_public(row)) is not None]
 
 
@@ -360,33 +337,20 @@ def save_preset(payload: CreationPresetRequest, preset_id: str = "") -> dict[str
         _require_asset_row(asset_id)
     clean_id = str(preset_id or "").strip() or f"preset_{uuid.uuid4().hex[:24]}"
     timestamp = db.now_iso()
-    with db.get_conn() as conn:
-        existing = conn.execute("SELECT id, created_at FROM creation_presets WHERE id = ?", (clean_id,)).fetchone()
+    with repository.transaction() as conn:
+        existing = repository.preset_identity(conn, (clean_id,)).fetchone()
         created_at = str(existing["created_at"]) if existing else timestamp
-        conn.execute(
-            """
-            INSERT INTO creation_presets(
-                id, kind, name, content, negative_prompt, params_json,
-                reference_asset_ids_json, approved, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                kind=excluded.kind, name=excluded.name, content=excluded.content,
-                negative_prompt=excluded.negative_prompt, params_json=excluded.params_json,
-                reference_asset_ids_json=excluded.reference_asset_ids_json,
-                approved=1, updated_at=excluded.updated_at
-            """,
-            (
+        repository.upsert_preset(conn, (
                 clean_id, payload.kind, payload.name, payload.content, payload.negative_prompt,
                 _json(payload.params), _json(payload.reference_asset_ids), created_at, timestamp,
-            ),
-        )
-        row = conn.execute("SELECT * FROM creation_presets WHERE id = ?", (clean_id,)).fetchone()
+            ))
+        row = repository.preset(conn, (clean_id,)).fetchone()
     return _preset_public(row) or {}
 
 
 def delete_preset(preset_id: str) -> bool:
-    with db.get_conn() as conn:
-        cursor = conn.execute("DELETE FROM creation_presets WHERE id = ?", (preset_id,))
+    with repository.transaction() as conn:
+        cursor = repository.delete_preset(conn, (preset_id,))
     return cursor.rowcount > 0
 
 
@@ -397,11 +361,11 @@ def _preset_snapshot(spec: Mapping[str, Any]) -> dict[str, Any]:
         "project": str(spec.get("project_preset_id") or ""),
     }
     result: dict[str, Any] = {}
-    with db.get_conn() as conn:
+    with repository.transaction() as conn:
         for kind, preset_id in mapping.items():
             if not preset_id:
                 continue
-            row = conn.execute("SELECT * FROM creation_presets WHERE id = ?", (preset_id,)).fetchone()
+            row = repository.preset(conn, (preset_id,)).fetchone()
             preset = _preset_public(row)
             if preset is None or preset.get("kind") != kind or not preset.get("approved"):
                 raise ValueError(f"{kind} 预设不存在、类型不符或尚未确认。")
@@ -478,19 +442,16 @@ def remote_providers() -> list[dict[str, object]]:
 
 
 def _active_job_exists(excluding: str = "") -> bool:
-    with db.get_conn() as conn:
-        row = conn.execute(
-            "SELECT id FROM creation_jobs WHERE status IN ('created','submitted','queued','running','cancel_requested') AND id != ? LIMIT 1",
-            (excluding,),
-        ).fetchone()
+    with repository.transaction() as conn:
+        row = repository.active_job(conn, (excluding,)).fetchone()
     return row is not None
 
 
 def reserve_slot(conn, conversation_id: str = "", excluding: str = "") -> None:
     if not conn.in_transaction:
-        conn.execute("BEGIN IMMEDIATE")
+        repository.begin_immediate(conn)
     db.assert_conversation_writable(conversation_id, conn)
-    if conn.execute("SELECT 1 FROM creation_jobs WHERE status IN ('created','submitted','queued','running','cancel_requested') AND id!=? LIMIT 1", (excluding,)).fetchone():
+    if repository.creation_active_job(conn, (excluding,)).fetchone():
         raise ValueError("已有一项创作任务正在运行，请等待完成或先取消。")
 
 
@@ -533,8 +494,8 @@ def create_job(
     key = str(spec.get("idempotency_key") or "").strip()
     if not key:
         key = f"creation:{uuid.uuid4().hex}"
-    with db.get_conn() as conn:
-        existing = conn.execute("SELECT * FROM creation_jobs WHERE idempotency_key = ?", (key,)).fetchone()
+    with repository.transaction() as conn:
+        existing = repository.job_by_key(conn, (key,)).fetchone()
     if existing is not None:
         provenance.validate_reuse(existing, conversation_id, task_id)
         return _job_public(existing) or {}, False
@@ -552,37 +513,27 @@ def create_job(
         confirmation_reason = "批量生成会增加耗时和资源消耗，需要先确认。"
     job_id = f"job_{uuid.uuid4().hex[:24]}"
     timestamp = db.now_iso()
-    with db.get_conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    with repository.transaction() as conn:
+        repository.begin_immediate(conn)
         if parent_job_id:
             # A double click or concurrent retry request must reuse the same attempt.
-            child = conn.execute("SELECT * FROM creation_jobs WHERE parent_job_id=? AND status!='cancelled' ORDER BY created_at DESC,rowid DESC LIMIT 1", (parent_job_id,)).fetchone()
+            child = repository.latest_child(conn, (parent_job_id,)).fetchone()
             if child is not None:
                 provenance.validate_reuse(child, conversation_id, task_id)
                 return _job_public(child) or {}, False
-        existing = conn.execute("SELECT * FROM creation_jobs WHERE idempotency_key=?", (key,)).fetchone()
+        existing = repository.creation_job_by_key(conn, (key,)).fetchone()
         if existing is not None:
             provenance.validate_reuse(existing, conversation_id, task_id)
             return _job_public(existing) or {}, False
         reserve_slot(conn, conversation_id)
-        conn.execute(
-            """
-            INSERT INTO creation_jobs(
-                id, conversation_id, source, media_type, backend, workflow_id,
-                provider_id, model_id, status, stage, progress, spec_json,
-                preset_snapshot_json, confirmation_reason, idempotency_key,
-                parent_job_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
+        repository.insert_job(conn, (
                 job_id, conversation_id, source, spec["media_type"], backend, workflow_id,
                 str(spec.get("provider_id") or ""), str(spec.get("model_id") or ""),
                 "needs_confirmation" if needs_confirmation else "created",
                 "needs_confirmation" if needs_confirmation else "created",
                 _json(spec), _json(snapshot), confirmation_reason, key, parent_job_id,
                 timestamp, timestamp,
-            ),
-        )
+            ))
         provenance.bind(conn, job_id, task_id, run_id, source_message_id)
         if parent_job_id:
             from .agent_task_service import attach_retry
@@ -601,8 +552,8 @@ def current_attempt(job_id: str) -> dict[str, Any] | None:
         current = get_job(current['parent_job_id'])
     while current and current['id'] not in seen:
         seen.add(current['id'])
-        with db.get_conn() as conn:
-            child = conn.execute("SELECT id FROM creation_jobs WHERE parent_job_id=? AND status!='cancelled' ORDER BY created_at DESC,rowid DESC LIMIT 1", (current['id'],)).fetchone()
+        with repository.transaction() as conn:
+            child = repository.latest_child_id(conn, (current['id'],)).fetchone()
         if child is None:
             break
         current = get_job(child['id'])
@@ -652,9 +603,9 @@ def confirm_job(job_id: str) -> dict[str, Any]:
         raise ValueError("这个任务当前不需要确认。")
     if _active_job_exists(excluding=job_id):
         raise ValueError("已有一项创作任务正在运行。")
-    with db.get_conn() as conn:
+    with repository.transaction() as conn:
         reserve_slot(conn, str(row.get("conversation_id") or ""), job_id)
-        changed = conn.execute("UPDATE creation_jobs SET status='created',stage='confirmed',confirmation_reason='',updated_at=? WHERE id=? AND status='needs_confirmation'", (db.now_iso(), job_id))
+        changed = repository.confirm_job(conn, (db.now_iso(), job_id))
         if not changed.rowcount:
             raise ValueError("任务状态已改变，请刷新。")
     schedule_job(job_id)
@@ -676,10 +627,8 @@ def schedule_job(job_id: str) -> None:
 
 async def resume_active_jobs() -> None:
     try:
-        with db.get_conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM creation_jobs WHERE status IN ('created','submitted','queued','running','cancel_requested') ORDER BY created_at"
-            ).fetchall()
+        with repository.transaction() as conn:
+            rows = repository.active_jobs(conn).fetchall()
     except sqlite3.OperationalError as exc:
         # The lifespan unit tests intentionally replace initialize_runtime().
         # A missing optional table must not make application cleanup untestable,
@@ -1557,9 +1506,9 @@ def reconcile_job(job_id: str, *, outcome: str, receipt: str, note: str) -> dict
         raise ValueError('核对结果不受支持。')
     if not receipt.strip() or not note.strip():
         raise ValueError('请填写供应商回执编号和核对说明。')
-    with db.get_conn() as conn:
-        conn.execute('BEGIN IMMEDIATE')
-        row = conn.execute('SELECT * FROM creation_jobs WHERE id=?', (job_id,)).fetchone()
+    with repository.transaction() as conn:
+        repository.begin_immediate(conn)
+        row = repository.creation_job(conn, (job_id,)).fetchone()
         if row is None or row['status'] != 'unknown':
             raise ValueError('只有结果待核对的任务可登记回执，请刷新状态。')
         spec = _loads(row['spec_json'], {})
@@ -1572,8 +1521,7 @@ def reconcile_job(job_id: str, *, outcome: str, receipt: str, note: str) -> dict
         message = {'not_completed': '用户核对供应商记录：未完成。重新提交仍需确认。',
                    'completed_external': '用户核对供应商记录：远端已完成，结果尚未导入校验。不要重复生成。',
                    'still_unknown': '已记录核对过程，远程结果仍未知，禁止自动重发。'}[outcome]
-        conn.execute('UPDATE creation_jobs SET status=?,stage=?,spec_json=?,error=?,updated_at=? WHERE id=?',
-                     (status, 'reconciled_' + outcome, _json(spec), message, db.now_iso(), job_id))
+        repository.record_reconciliation(conn, (status, 'reconciled_' + outcome, _json(spec), message, db.now_iso(), job_id))
     return get_job(job_id) or {}
 
 

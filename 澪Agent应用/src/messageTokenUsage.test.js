@@ -15,8 +15,8 @@ test('cache share uses input only and keeps cache and reasoning within their par
 test('zero or missing cache usage does not claim an actual cache miss', () => {
   for (const cached_prompt_tokens of [0, null, undefined]) {
     const title = messageTokenUsageTitle({ prompt_tokens: 1000, cached_prompt_tokens })
-    assert.match(title, /上游报告缓存：0 token（占输入 0\.0%，实际命中率待确认）/)
-    assert.match(title, /上游未报告，不能据此确认实际未命中/)
+    assert.match(title, /上游缓存：未知/)
+    assert.match(title, /供应商未报告，旧记录也无法补推/)
   }
 })
 
@@ -34,7 +34,7 @@ test('zero, absent and impossible cache usage stays unconfirmed in visible label
     { prompt_tokens: 100, cached_prompt_tokens: 101 },
     { prompt_tokens: Infinity, cached_prompt_tokens: 100 },
     { prompt_tokens: 100, cached_prompt_tokens: -1 }]) {
-    assert.equal(messageCacheRateLabel(usage), '缓存 —')
+    assert.equal(messageCacheRateLabel(usage), '缓存 未知')
   }
   assert.match(messageTokenUsageTitle({ prompt_tokens: 100, cached_prompt_tokens: 200 }), /占输入比例未知/)
 })
@@ -53,4 +53,14 @@ test('missing or invalid input leaves the cache share unknown', () => {
     assert.match(title, /占输入比例未知/)
     assert.doesNotMatch(title, /NaN|Infinity|0\.0%/)
   }
+})
+
+
+test('confirmed zero and incomplete cache coverage remain distinct from unknown', () => {
+  const zero = { prompt_tokens: 1000, cached_prompt_tokens: 0, cached_tokens_reporting: 'reported_zero' }
+  assert.equal(messageCacheRateLabel(zero), '缓存 0.0%')
+  assert.match(messageTokenUsageTitle(zero), /上游报告缓存：0 token（占输入 0\.0%）/)
+  assert.equal(messageCacheRateLabel({ prompt_tokens: 10000, cached_prompt_tokens: 800, cache_hit_ratio: .8 }), '缓存 80.0%')
+  assert.match(messageTokenUsageTitle({ cache_hit_ratio: .8, cache_reporting_coverage: .5, unknown_cost_calls: 2 }), /覆盖率：50.0%/)
+  assert.match(messageTokenUsageTitle({ unknown_cost_calls: 2 }), /2 次费用未知/)
 })

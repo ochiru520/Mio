@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app import companion_runtime_service as companion_runtime
 
 import asyncio
 import base64
@@ -2726,15 +2727,15 @@ class CompanionConfigTests(unittest.TestCase):
             patch("app.routes.companion.system_audio_service.stop") as audio_stop,
             patch("app.routes.companion.screen_observation_service.end_session"),
         ):
-            companion_routes._pet_call_resource_owner = ""
-            started = companion_routes._start_observation_runtime(
+            companion_runtime._pet_call_resource_owner = ""
+            started = companion_runtime.start_observation_runtime(
                 interval_ms=1000,
                 capture_only=False,
                 screen_scope="primary",
             )
-            companion_routes._pet_call_resource_owner = "call-active"
-            stopped = companion_routes._stop_observation_runtime()
-            companion_routes._pet_call_resource_owner = ""
+            companion_runtime._pet_call_resource_owner = "call-active"
+            stopped = companion_runtime.stop_observation_runtime()
+            companion_runtime._pet_call_resource_owner = ""
 
         self.assertTrue(started["running"])
         self.assertFalse(stopped["running"])
@@ -3324,7 +3325,7 @@ class CompanionConfigTests(unittest.TestCase):
             patch("app.routes.companion.companion_service.window_observer.start") as start_capture,
             patch("app.routes.companion.screen_observation_service.set_capture_only") as set_capture_only,
             patch("app.routes.companion.screen_observation_service.analyze_once", return_value=True),
-            patch("app.routes.companion._ensure_call_asr_ready", return_value={"ready": True}) as ensure_asr,
+            patch("app.companion_runtime_service.ensure_call_asr_ready", return_value={"ready": True}) as ensure_asr,
             patch("app.routes.companion.companion_service.warm_voice_runtime_async") as warm_voice,
         ):
             response = asyncio.run(companion_call_start())
@@ -3341,7 +3342,7 @@ class CompanionConfigTests(unittest.TestCase):
             patch("app.routes.companion.companion_service.window_observer.status", return_value={"running": True}),
             patch("app.routes.companion.screen_observation_service.analyze_once", return_value=True),
             patch(
-                "app.routes.companion._ensure_call_asr_ready",
+                "app.companion_runtime_service.ensure_call_asr_ready",
                 return_value={"ready": False, "running": False, "last_error": "模型文件损坏"},
             ),
         ):
@@ -3411,7 +3412,7 @@ class CompanionConfigTests(unittest.TestCase):
             patch("app.routes.companion.companion_service.load_config", return_value={"screen_audio_enabled": True, "screen_audio_model": "base"}),
             patch("app.routes.companion.system_audio_service.start", return_value={"ready": True}) as start,
         ):
-            result = companion_route._ensure_call_asr_ready()
+            result = companion_runtime.ensure_call_asr_ready()
 
         self.assertTrue(result["ready"])
         self.assertEqual(start.call_args.args[0]["asr_engine"], "whisper")
@@ -3420,11 +3421,11 @@ class CompanionConfigTests(unittest.TestCase):
     def test_desktop_pet_call_start_failure_releases_its_observer_and_audio(self) -> None:
         from app.routes import companion as companion_route
 
-        companion_route._pet_call_started_observer = False
-        companion_route._pet_call_previous_audio_model = ""
+        companion_runtime._pet_call_started_observer = False
+        companion_runtime._pet_call_previous_audio_model = ""
         with (
             patch("app.routes.companion.system_audio_service.status", return_value={"running": False}),
-            patch("app.routes.companion._ensure_call_asr_ready", return_value={
+            patch("app.companion_runtime_service.ensure_call_asr_ready", return_value={
                 "ready": False,
                 "running": False,
                 "last_error": "模型加载失败",
@@ -3443,8 +3444,8 @@ class CompanionConfigTests(unittest.TestCase):
                 asyncio.run(companion_call_start())
 
         self.assertFalse(call_session_service.manager.status()["active"])
-        self.assertFalse(companion_route._pet_call_started_observer)
-        self.assertEqual(companion_route._pet_call_previous_audio_model, "")
+        self.assertFalse(companion_runtime._pet_call_started_observer)
+        self.assertEqual(companion_runtime._pet_call_previous_audio_model, "")
         stop_observer.assert_called_once()
         end_session.assert_called_once()
         stop_audio.assert_called_once()
@@ -3647,7 +3648,7 @@ class CompanionConfigTests(unittest.TestCase):
                 )),
                 patch("app.routes.companion._pet_call_screen_context", return_value=""),
                 patch("app.chat_service._chat_with_ai_unlocked", side_effect=cooperative_model),
-                patch("app.routes.companion._release_call_resources", new=AsyncMock()),
+                patch("app.companion_runtime_service.release_call_resources", new=AsyncMock()),
                 patch("app.routes.companion.pet_event_service.publish"),
                 patch("app.routes.companion.persist_generated_chat_result") as persist_result,
             ):
@@ -3702,7 +3703,7 @@ class CompanionConfigTests(unittest.TestCase):
                 )),
                 patch("app.routes.companion._pet_call_screen_context", return_value=""),
                 patch("app.chat_service._chat_with_ai_unlocked", side_effect=cancellation_ignoring_model),
-                patch("app.routes.companion._release_call_resources", new=AsyncMock()),
+                patch("app.companion_runtime_service.release_call_resources", new=AsyncMock()),
                 patch("app.routes.companion.pet_event_service.publish"),
                 patch("app.routes.companion.persist_generated_chat_result") as persist_result,
             ):
@@ -3737,8 +3738,8 @@ class CompanionConfigTests(unittest.TestCase):
             first_token_latency_ms=123.0,
         )
         with (
-            patch("app.routes.companion._prepare_call_runtime", return_value={"ready": True}),
-            patch("app.routes.companion._ensure_call_asr_ready", return_value={"ready": True}),
+            patch("app.companion_runtime_service.prepare_call_runtime", return_value={"ready": True}),
+            patch("app.companion_runtime_service.ensure_call_asr_ready", return_value={"ready": True}),
             patch("app.routes.companion.system_audio_service.status", return_value={"ready": True}),
             patch(
                 "app.routes.companion.system_audio_service.transcribe_wav_for_quality",
@@ -3753,7 +3754,7 @@ class CompanionConfigTests(unittest.TestCase):
             )),
             patch("app.routes.companion._pet_call_screen_context", return_value=""),
             patch("app.routes.companion.chat_with_ai", new=AsyncMock(return_value=generated)),
-            patch("app.routes.companion._release_call_resources", new=AsyncMock()),
+            patch("app.companion_runtime_service.release_call_resources", new=AsyncMock()),
             patch("app.routes.companion.pet_event_service.publish"),
         ):
             with TestClient(app) as client:
@@ -3802,10 +3803,10 @@ class CompanionConfigTests(unittest.TestCase):
         from app.routes import companion as companion_route
 
         session = call_session_service.manager.start()
-        companion_route._pet_call_started_observer = False
-        companion_route._pet_call_previous_audio_model = "base"
-        companion_route._pet_call_previous_audio_engine = "whisper"
-        companion_route._pet_call_resource_owner = session["call_session_id"]
+        companion_runtime._pet_call_started_observer = False
+        companion_runtime._pet_call_previous_audio_model = "base"
+        companion_runtime._pet_call_previous_audio_engine = "whisper"
+        companion_runtime._pet_call_resource_owner = session["call_session_id"]
         with (
             patch("app.routes.companion.pet_event_service.publish"),
             patch("app.routes.companion.companion_service.window_observer.status", return_value={"running": True}),

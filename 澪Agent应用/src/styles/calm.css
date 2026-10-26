@@ -1,0 +1,374 @@
+/* ============================================================================
+ * 晴窗 / 夜窗 —— 结构层
+ *
+ * 颜色全部来自 tokens.css 里 [data-theme="calm-day|calm-night"] 的令牌。
+ * 这里只做三件事：
+ *   1. 让「背景」和「界面」分得清：背景是安静的整块底色，界面是比它亮一档的面板，
+ *      两者之间只靠明度差和一条细线区分，不用阴影、不用渐变。
+ *   2. 强调色只出现在两处：当前所在的位置，和每页唯一的主按钮。
+ *   3. 悬停不再出现背景块或边框，只让文字与图标变色。
+ * 不使用图片和动画，只作用于这两个主题。
+ * ========================================================================== */
+
+/* ---- 舞台：一整块底色，顶部有一小片淡淡的天光 ---------------------------- */
+.app-shell.integrated-shell[data-theme^="calm-"],
+[data-theme^="calm-"] .mio-agent-surface {
+  background:
+    radial-gradient(60% 40% at 50% -10%, var(--sky-glow), transparent 70%),
+    radial-gradient(40% 40% at 100% 0%, var(--lavender-glow), transparent 70%),
+    var(--bg) !important;
+}
+[data-theme^="calm-"] :is(.window-titlebar, .mio-agent-titlebar) {
+  background: transparent !important;
+  border-bottom: 0 !important;
+  backdrop-filter: none !important;
+}
+[data-theme^="calm-"] .workspace,
+[data-theme^="calm-"] :is(.home-page, .chat-layout, .page-layout) {
+  background: transparent !important;
+}
+
+/* ---- 侧栏与右栏：比底色亮一档的实色，和内容之间一条细线 ------------------- */
+[data-theme^="calm-"] :is(.integrated-sidebar, .integrated-right-rail, .mio-agent-iconbar, .mio-agent-project-sidebar, .mio-agent-preview, .mio-settings-sidebar) {
+  background: var(--sidebar-bg) !important;
+  border-color: var(--border) !important;
+  backdrop-filter: none !important;
+}
+[data-theme^="calm-"] .integrated-sidebar.expanded { box-shadow: 0 0 0 1px var(--border), 0 12px 32px var(--shadow-tint) !important; }
+[data-theme^="calm-"] .integrated-right-rail > section {
+  background: transparent !important;
+  border-color: var(--border) !important;
+}
+
+/* ---- 悬停：没有背景块，没有边框 ------------------------------------------ */
+[data-theme^="calm-"] :is(
+  .nav-item, .mio-agent-iconbar > button, .mio-agent-project-sidebar button,
+  .agent-content-sidebar button, .mio-agent-titlebar button, .window-titlebar button,
+  .integrated-right-rail button, .mio-settings-sidebar nav button, .sidebar-pin,
+  .home-records-list button, .memory-view-tabs button, .record-mode-tabs button
+):hover {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--accent) !important;
+}
+
+/* ---- 当前所在：左侧一条细线，文字与图标用强调色，不填底色 ----------------- */
+[data-theme^="calm-"] :is(.integrated-sidebar .nav-item.active, .mio-agent-iconbar .selected, .mio-agent-project-sidebar .selected, .mio-settings-sidebar nav button.active, .mio-settings-sidebar nav button[aria-current="page"]) {
+  color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  border-radius: 10px;
+  box-shadow: inset 2px 0 0 var(--accent) !important;
+}
+[data-theme^="calm-"] .mio-agent-titlebar nav .selected {
+  color: var(--accent) !important;
+  border-bottom-color: var(--accent) !important;
+}
+[data-theme^="calm-"] :is(.memory-view-tabs, .record-mode-tabs) button.active {
+  color: var(--accent) !important;
+  background: transparent !important;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* ---- 内容面板：白色面板 + 一圈细线，没有阴影 ------------------------------- */
+[data-theme^="calm-"] :is(.home-focus-primary, .composer, .task-filter-bar, .tasks-empty) {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 16px !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+[data-theme^="calm-"] .mio-agent-main { background: var(--surface) !important; border-left: 1px solid var(--border); }
+[data-theme^="calm-"] .mio-agent-main .composer { border-color: var(--border-strong) !important; }
+[data-theme^="calm-"] :is(.home-attention-panel, .home-activity-section, .home-records-section) {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* ---- 首页版式 -------------------------------------------------------------- */
+[data-theme^="calm-"] .home-page { padding-inline: clamp(8px, 3vw, 40px); }
+[data-theme^="calm-"] .home-today-header { padding: 18px 0 28px; }
+[data-theme^="calm-"] .home-today-header > span {
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  letter-spacing: 0.1em;
+}
+[data-theme^="calm-"] .home-today-header h1 {
+  margin: 10px 0 8px;
+  font-size: calc(40px * var(--fs));
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text);
+}
+[data-theme^="calm-"] .home-today-header p { color: var(--text-muted); font-size: var(--text-lg); }
+[data-theme^="calm-"] .home-focus-grid { gap: 40px; align-items: stretch; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.8fr); }
+[data-theme^="calm-"] .home-focus-primary { min-height: 0; padding: 30px 32px; border-top-width: 1px; }
+[data-theme^="calm-"] .home-focus-primary h2 { margin: 10px 0 8px; font-size: calc(26px * var(--fs)); font-weight: 600; }
+[data-theme^="calm-"] .home-focus-primary p { margin-bottom: 26px; }
+[data-theme^="calm-"] :is(.home-focus-primary, .home-attention-panel) > span { color: var(--text-muted); font-weight: 600; }
+[data-theme^="calm-"] .home-attention-panel { padding: 8px 0 0; }
+[data-theme^="calm-"] .home-attention-panel > div { border-color: var(--border) !important; }
+[data-theme^="calm-"] :is(.home-activity-section, .home-records-section) { margin-top: 44px; padding: 0; }
+[data-theme^="calm-"] :is(.home-activity-section, .home-records-section) > header {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+[data-theme^="calm-"] :is(.home-activity-section, .home-records-section) header svg { color: var(--text-muted); }
+[data-theme^="calm-"] .home-activity-section header button { color: var(--accent) !important; background: transparent !important; border: 0 !important; font-weight: 600; }
+[data-theme^="calm-"] .home-activity-list { gap: 0; margin-top: 6px; background: transparent; border: 0; }
+[data-theme^="calm-"] .home-activity-list article { min-height: 0; padding: 18px 24px 8px 0; background: transparent !important; border: 0; border-radius: 0; }
+[data-theme^="calm-"] .home-activity-list article + article { padding-left: 24px; border-left: 1px solid var(--border); }
+[data-theme^="calm-"] .home-records-list { gap: 0; margin-top: 4px; }
+[data-theme^="calm-"] .home-records-list button {
+  min-height: 52px;
+  padding-inline: 4px;
+  border: 0 !important;
+  border-bottom: 1px solid var(--border) !important;
+  border-radius: 0;
+  background: transparent !important;
+}
+@media (max-width: 960px) {
+  [data-theme^="calm-"] .home-focus-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  [data-theme^="calm-"] .home-focus-primary { padding: 24px; }
+  [data-theme^="calm-"] .home-today-header h1 { font-size: calc(32px * var(--fs)); }
+  [data-theme^="calm-"] .home-activity-list { grid-template-columns: minmax(0, 1fr); }
+  [data-theme^="calm-"] .home-activity-list article + article { padding-left: 0; border-left: 0; border-top: 1px solid var(--border); }
+}
+
+/* ---- 按钮：每页只有一个实心主按钮；其余都是看得清的中性描边 -------------- */
+[data-theme^="calm-"] :is(.home-focus-primary button, .primary-button, .send-button, .settings-savebar .primary-button) {
+  color: var(--accent-contrast) !important;
+  font-weight: 600;
+  background: var(--accent) !important;
+  border: 0 !important;
+  border-radius: var(--radius-pill) !important;
+  box-shadow: none !important;
+}
+[data-theme^="calm-"] :is(.home-focus-primary button, .primary-button, .send-button):hover:not(:disabled) { background: var(--accent-hover) !important; color: var(--accent-contrast) !important; }
+[data-theme^="calm-"] .home-focus-primary button { height: 42px !important; padding: 0 26px !important; }
+[data-theme^="calm-"] .primary-button:disabled { color: var(--text-muted) !important; background: var(--surface-sunken) !important; opacity: 1; }
+
+/* 次要按钮：近白底 + 清楚的边 + 正文色文字。「返回应用」「取消」等都属于这一类 */
+[data-theme^="calm-"] :is(.mio-settings-return, .settings-page-header button:not(.primary-button), .settings-savebar button:not(.primary-button), .app-dialog > footer button:not(.primary-button):not(.danger-button), .text-button) {
+  color: var(--text) !important;
+  font-weight: 500;
+  background: var(--surface) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-pill) !important;
+}
+[data-theme^="calm-"] :is(.mio-settings-return, .settings-savebar button:not(.primary-button), .text-button):hover {
+  color: var(--accent) !important;
+  background: var(--surface) !important;
+  border-color: var(--accent) !important;
+}
+[data-theme^="calm-"] .mio-settings-return { min-height: 36px; padding: 0 14px; }
+
+/* ---- 表单：只作用于设置页与对话框里的表单控件 ------------------------------
+   输入框、下拉框在对话输入区里本来就是「无框」的（外面已经有一圈输入区的边），
+   所以这里不能写成全局规则，否则会在输入区里再套一层框。 */
+[data-theme^="calm-"] :is(.mio-settings-content, .app-dialog, .provider-modal, .settings-page) :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
+  color: var(--text);
+  background: var(--surface) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 12px !important;
+}
+[data-theme^="calm-"] :is(.mio-settings-content, .app-dialog, .provider-modal, .settings-page) select { padding-block: 0 !important; min-height: 36px; line-height: 1.4; }
+[data-theme^="calm-"] :is(.mio-settings-content, .app-dialog, .provider-modal, .settings-page) :is(input, select, textarea):focus-visible {
+  border-color: var(--accent) !important;
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+/* 对话输入区：保持原来的「无框」，外面那一圈就是输入区自己的边 */
+[data-theme^="calm-"] .composer :is(.composer-input, textarea, select) {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+}
+[data-theme^="calm-"] .switch-control {
+  background: var(--surface-sunken) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-pill) !important;
+}
+[data-theme^="calm-"] .switch-control:has(input:checked) {
+  background: var(--accent) !important;
+  border-color: transparent !important;
+}
+
+/* 设置页：「重新读取」和保存条原来都绝对定位在右上角，会重叠；读取按钮放到标题下面 */
+[data-theme^="calm-"] .mio-settings-content .settings-page-header { flex-wrap: wrap; padding-bottom: 20px; }
+[data-theme^="calm-"] .mio-settings-content .settings-header-actions {
+  flex: 0 0 100%;
+  order: 3;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  margin-top: 14px;
+}
+[data-theme^="calm-"] .mio-settings-content .settings-header-actions .text-button { min-height: 30px; padding: 0 14px; }
+
+/* 主题选择卡片：圆角方块，选中项只换边框与淡底 */
+[data-theme^="calm-"] .theme-picker-option {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 14px !important;
+  overflow: hidden;
+}
+[data-theme^="calm-"] .theme-picker-option:hover { border-color: var(--border-strong) !important; background: var(--surface) !important; }
+[data-theme^="calm-"] .theme-picker-option.active {
+  border-color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+[data-theme^="calm-"] .theme-picker-option > i { height: 22px; border-radius: 8px; }
+
+/* ---- 记忆页 ---------------------------------------------------------------- */
+[data-theme^="calm-"] .memory-center-heading { padding-inline: clamp(8px, 3vw, 40px); }
+[data-theme^="calm-"] .memory-understanding {
+  background: transparent !important;
+  border: 0 !important;
+  border-left: 2px solid var(--accent) !important;
+  border-radius: 0;
+  padding: 4px 0 4px 18px;
+}
+[data-theme^="calm-"] .memory-understanding span { color: var(--text-muted); font-weight: 600; }
+[data-theme^="calm-"] .memory-understanding p { font-size: var(--text-md); color: var(--text); }
+[data-theme^="calm-"] .memory-natural-add button {
+  padding-inline: 20px;
+  color: var(--accent-contrast) !important;
+  font-weight: 600;
+  background: var(--accent) !important;
+  border-radius: var(--radius-pill) !important;
+}
+[data-theme^="calm-"] .memory-category-grid { gap: 36px 48px; margin-top: 36px; }
+[data-theme^="calm-"] .memory-category-grid > section { padding: 0; background: transparent !important; border: 0 !important; border-radius: 0; }
+[data-theme^="calm-"] .memory-category-grid > section > header { padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+[data-theme^="calm-"] .memory-category-grid article { padding: 16px 0; border-color: var(--border) !important; }
+[data-theme^="calm-"] .memory-category-grid p { font-size: var(--text-md); font-weight: 500; color: var(--text); }
+[data-theme^="calm-"] .memory-item-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 8px; }
+[data-theme^="calm-"] .memory-item-actions button {
+  flex: none;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  background: transparent !important;
+  border: 0 !important;
+}
+[data-theme^="calm-"] .memory-item-actions button:hover { color: var(--accent); }
+[data-theme^="calm-"] .memory-item-actions .danger:hover { color: var(--danger); }
+
+/* ---- 对话 ------------------------------------------------------------------ */
+[data-theme^="calm-"] .message-row.user .message-bubble {
+  background: var(--accent-soft) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+[data-theme^="calm-"] :is(.record-mode-tabs, .record-date-rail, .memory-view-tabs) {
+  background: transparent !important;
+  border-color: var(--border) !important;
+  backdrop-filter: none !important;
+}
+[data-theme^="calm-"] .record-search {
+  background: var(--surface) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-pill) !important;
+}
+
+/* 左下角桌宠按钮：旧样式用的是暖黄，换成中性描边 */
+[data-theme^="calm-"] .pet-launcher > button {
+  color: var(--text-muted) !important;
+  background: transparent !important;
+  border: 1px solid var(--border-strong) !important;
+}
+[data-theme^="calm-"] .pet-launcher > button:hover { color: var(--accent) !important; border-color: var(--accent) !important; }
+[data-theme^="calm-"] .pet-launcher i { background: var(--success) !important; }
+
+/* 右栏底部的小块：和侧栏一样，选中才有强调色 */
+[data-theme^="calm-"] .integrated-right-rail > section:last-of-type {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: inset 2px 0 0 var(--accent) !important;
+}
+
+/* ---- 悬停总则 ---------------------------------------------------------------
+   旧样式里有一百多条规则会在悬停时给按钮、列表项加底色或边框，这就是
+   「鼠标放上去出现灰色方块」的来源。这里统一规定：在这两个主题里，悬停只改变
+   文字与图标的颜色，不出现底色和边框。需要保留反馈的控件（主按钮、输入框、
+   主题卡片、开关、描边按钮）在上面各自声明过，选择器更具体，不受影响。 */
+[data-theme^="calm-"] :is(
+  button:not(.primary-button):not(.theme-picker-option):not(.mio-settings-return):not(.text-button):not([class*="send"]),
+  [role="button"], [role="menuitem"], [role="tab"], summary, a
+):hover:not(:disabled) {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--accent);
+}
+/* 列表中的整行条目：悬停不出现块，只让标题变色 */
+[data-theme^="calm-"] :is(.home-records-list button, .conversation-item, .sidebar-list-item, .task-item, .agent-suggestions button):hover {
+  background: transparent !important;
+}
+/* 带描边的次要按钮悬停时描边变强调色，保持原有的边（上面已声明） */
+[data-theme^="calm-"] :is(.mio-settings-return, .text-button):hover:not(:disabled) {
+  background: var(--surface) !important;
+  border-color: var(--accent) !important;
+}
+
+/* ---- 看得清：每个按钮在静止状态下都必须和背景分得开 -------------------------
+   规则：有底色的按钮，底色和背后的面板至少拉开一档；没有底色的按钮，图标至少是
+   次要文字色（对比度 4.5 以上）。「停用」只让它变淡，不能让它消失。 */
+
+/* 发送键：能发送时是实心强调色；暂时不能发送时是描边圆，图标仍然看得清 */
+[data-theme^="calm-"] .send-button {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  color: var(--accent-contrast) !important;
+  background: var(--accent) !important;
+}
+[data-theme^="calm-"] .send-button:disabled {
+  color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  border: 1px solid var(--accent) !important;
+  opacity: 1;
+}
+
+/* 输入区里的小按钮（添加文件、选择项目、模型）：图标用次要文字色，不再比背景淡 */
+[data-theme^="calm-"] .composer :is(.icon-button, .reference-trigger, .model-picker-trigger, button) {
+  color: var(--text-muted);
+}
+[data-theme^="calm-"] .composer :is(.icon-button, .model-picker-trigger):hover { color: var(--accent); }
+[data-theme^="calm-"] .composer .icon-button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-pill);
+}
+
+/* 「新对话」：原来字是白色，底也是近白，等于看不见 */
+[data-theme^="calm-"] .agent-new-conversation {
+  color: var(--text) !important;
+  font-weight: 500;
+  background: var(--surface) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-pill) !important;
+}
+[data-theme^="calm-"] .agent-new-conversation:hover { color: var(--accent) !important; border-color: var(--accent) !important; }
+
+/* 选中项：底色拉开一档，左侧一条强调色细线 */
+[data-theme^="calm-"] :is(.mio-agent-iconbar .selected, .mio-agent-project-sidebar .selected, .agent-content-sidebar .selected) {
+  color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  box-shadow: inset 2px 0 0 var(--accent) !important;
+}
+[data-theme^="calm-"] .mio-agent-titlebar nav .selected { font-weight: 600; }
+
+/* Agent 工作区的顶栏标签：未选中的也要是正文色，不是淡灰 */
+[data-theme^="calm-"] .mio-agent-titlebar nav button { color: var(--text-muted); }
+[data-theme^="calm-"] .mio-agent-titlebar button { color: var(--text-muted); }

@@ -80,7 +80,7 @@
   .period-record-layout time .period-date-full { display: none; }
   .period-record-layout time .period-date-short { display: inline; }
   .period-record-layout > aside > button { min-height: 48px; padding: 8px 3px; }
-  .period-record-layout > aside > button time { width: 100%; overflow: hidden; font-size: calc(10px * var(--fs, 1)); text-overflow: ellipsis; }
+  .period-record-layout > aside > button time { width: 100%; overflow: hidden; font-size: calc(12px * var(--fs, 1)); text-overflow: ellipsis; }
   .period-record-layout > aside > button span { display: none; }
   .agent-home { padding: 20px 16px; }
   .agent-home-header { padding: 20px; align-items: stretch; }

@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from app.routes.models import (
-    ModelDiscoveryRequest,
+from app.routes.models import (ModelDiscoveryRequest, discover_models, test_model_profile as _test_model_profile)
+from app.model_provider_service import (
     _chat_response_is_valid,
     _models_endpoint_candidates,
     _normalize_provider_request,
@@ -17,10 +17,8 @@ from app.routes.models import (
     _provider_http_error_detail,
     _provider_chat_error_detail,
     _request_chat_endpoint,
-    _request_chat_via_routes,
+    request_chat_probe,
     _request_models_endpoint,
-    discover_models,
-    test_model_profile as _test_model_profile,
 )
 from app.provider_compat import completion_endpoint_candidates
 from app.provider_compat import response_is_json
@@ -49,16 +47,16 @@ class ModelProviderDiscoveryTests(unittest.TestCase):
             json={"choices": [{"message": {"content": "OK"}}]},
         )
         with (
-            patch("app.routes.models.get_model_profile", return_value=profile),
+            patch("app.model_provider_service.get_model_profile", return_value=profile),
             patch(
-                "app.routes.models._request_models_via_routes",
+                "app.model_provider_service.request_model_catalog",
                 new=AsyncMock(return_value=(catalog, str(catalog.request.url), ["catalog"], "bearer", "直连")),
             ),
             patch(
-                "app.routes.models._request_chat_via_routes",
+                "app.model_provider_service.request_chat_probe",
                 new=AsyncMock(return_value=(completion, str(completion.request.url), ["chat"], "bearer", "直连")),
             ),
-            patch("app.routes.models.onboarding_service.record_model_verification") as record,
+            patch("app.model_provider_service.onboarding_service.record_model_verification") as record,
         ):
             result = asyncio.run(_test_model_profile(profile.id))
 
@@ -108,7 +106,7 @@ class ModelProviderDiscoveryTests(unittest.TestCase):
                     preset_id=str(preset["id"]),
                 )
                 with patch(
-                    "app.routes.models._request_models_via_routes",
+                    "app.model_provider_service.request_model_catalog",
                     new=request_models,
                 ):
                     result = asyncio.run(discover_models(payload))
@@ -150,10 +148,10 @@ class ModelProviderDiscoveryTests(unittest.TestCase):
 
         with (
             patch(
-                "app.routes.models._request_models_via_routes",
+                "app.model_provider_service.request_model_catalog",
                 new=AsyncMock(return_value=(response, endpoint, ["catalog"], "bearer", "直连")),
             ),
-            patch("app.routes.models.httpx.AsyncClient", return_value=pricing_client),
+            patch("app.model_provider_service.httpx.AsyncClient", return_value=pricing_client),
         ):
             result = asyncio.run(discover_models(payload))
 
@@ -444,13 +442,13 @@ class ModelProviderDiscoveryTests(unittest.TestCase):
         ))
         with (
             patch(
-                "app.routes.models._provider_client_routes",
+                "app.model_provider_service._provider_client_routes",
                 return_value=[("直连", ""), ("应用代理", "http://127.0.0.1:7897")],
             ),
-            patch("app.routes.models._request_chat_endpoint", new=request),
+            patch("app.model_provider_service._request_chat_endpoint", new=request),
         ):
             result = asyncio.run(
-                _request_chat_via_routes(
+                request_chat_probe(
                     "https://chat.ekti.cc/v1",
                     "test-key",
                     "gpt-5.6-sol",
@@ -463,7 +461,7 @@ class ModelProviderDiscoveryTests(unittest.TestCase):
 
     def test_provider_routes_follow_proxy_mode(self) -> None:
         with patch(
-            "app.routes.models.settings",
+            "app.model_provider_service.settings",
             SimpleNamespace(
                 openai_proxy_mode="auto",
                 openai_proxy_url="http://127.0.0.1:7897",
@@ -481,14 +479,14 @@ class ModelProviderDiscoveryTests(unittest.TestCase):
             json={"choices": [{"message": {"content": "OK"}}]},
         )
         with patch(
-            "app.routes.models._provider_client_routes",
+            "app.model_provider_service._provider_client_routes",
             return_value=[("直连", ""), ("应用代理", "http://127.0.0.1:7897")],
         ), patch(
-            "app.routes.models._request_chat_endpoint",
+            "app.model_provider_service._request_chat_endpoint",
             new=AsyncMock(side_effect=[httpx.ConnectTimeout("timeout"), (valid, str(valid.request.url), ["ok"], "bearer")]),
         ):
             response, _endpoint, attempts, auth_scheme, route_label = asyncio.run(
-                _request_chat_via_routes("https://relay.example/v1", "test-key", "model-a")
+                request_chat_probe("https://relay.example/v1", "test-key", "model-a")
             )
 
         self.assertTrue(_chat_response_is_valid(response))

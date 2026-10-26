@@ -232,7 +232,7 @@ async def pause_sensitive_capabilities() -> dict[str, Any]:
             await callback()
         except Exception as exc:
             failures.append({"action": action, "label": PAUSE_ACTION_LABELS[action], "error": str(exc)[:500]})
-    from .routes.onebot import disconnect_all_connections
+    from .onebot_transport_service import disconnect_all_connections
 
     disconnected_connections = 0
     try:

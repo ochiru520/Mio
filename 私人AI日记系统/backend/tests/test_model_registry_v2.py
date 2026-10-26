@@ -319,8 +319,8 @@ class ModelRegistryV2Tests(unittest.TestCase):
             return {**config, **changes}
 
         with (
-            patch("app.routes.models.companion_service.load_config", return_value=config),
-            patch("app.routes.models.companion_service.save_config", side_effect=save_config),
+            patch("app.model_provider_service.companion_service.load_config", return_value=config),
+            patch("app.model_provider_service.companion_service.save_config", side_effect=save_config),
         ):
             result = asyncio.run(remove_provider(provider_id))
 
@@ -333,12 +333,12 @@ class ModelRegistryV2Tests(unittest.TestCase):
         provider_id, model_ids = self._create_provider(21)
         before = db.settings.model_profiles_path.read_bytes()
         with (
-            patch("app.routes.models.companion_service.load_config", return_value={
+            patch("app.model_provider_service.companion_service.load_config", return_value={
                 "chat_model_id": model_ids[0],
                 "pet_chat_model_id": "auto",
                 "screen_vision_model_id": "auto-fast",
             }),
-            patch("app.routes.models.companion_service.save_config", side_effect=OSError("写入失败")),
+            patch("app.model_provider_service.companion_service.save_config", side_effect=OSError("写入失败")),
         ):
             with self.assertRaises(HTTPException):
                 asyncio.run(remove_provider(provider_id))

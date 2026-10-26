@@ -81,5 +81,3 @@ class ToolDefinition:
                 "parameters": self.arguments_model.model_json_schema(),
             },
         }
-
-

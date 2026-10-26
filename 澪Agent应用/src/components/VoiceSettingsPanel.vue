@@ -1,6 +1,7 @@
 <script setup>
+import SelectField from './SelectField.vue'
 import { computed, ref, watch } from 'vue'
-import { Check, Cloud, Download, Eraser, KeyRound, PhoneCall, Play, Power, Trash2, Upload, Volume2 } from '@lucide/vue'
+import { Check, Cloud, Download, Eraser, KeyRound, PhoneCall, Play, Power, Trash2, Upload, Volume2 } from '../icons/index.js'
 import { removeVoiceProfile } from '../voiceProfiles.js'
 import RealtimeVoiceModal from './RealtimeVoiceModal.vue'
 
@@ -173,9 +174,9 @@ function makeSelectedDefault() {
         </label>
         <label>
           <span>音色</span>
-          <select v-model="settings.cloud_tts_speaker">
+          <SelectField v-model="settings.cloud_tts_speaker">
             <option v-for="item in CLOUD_SPEAKERS" :key="item.id" :value="item.id">{{ item.name }}</option>
-          </select>
+          </SelectField>
         </label>
         <label>
           <span>语速</span>
@@ -239,21 +240,21 @@ function makeSelectedDefault() {
               <template v-if="selectedIsThirdParty">
                 <label><span>引擎</span><input type="text" value="So-VITS-SVC 4.1（基础 TTS → 音色转换）" readonly /></label>
                 <label><span>说话人</span><input v-model.trim="selectedProfile.so_vits_svc_speaker" type="text" maxlength="80" /></label>
-                <label><span>基础 TTS 音色</span><select v-model="selectedProfile.so_vits_svc_base_profile_id"><option v-for="([id, profile]) in baseProfileEntries" :key="id" :value="id">{{ profile.name || id }}</option></select></label>
+                <label><span>基础 TTS 音色</span><SelectField v-model="selectedProfile.so_vits_svc_base_profile_id"><option v-for="([id, profile]) in baseProfileEntries" :key="id" :value="id">{{ profile.name || id }}</option></SelectField></label>
                 <label><span>音高</span><input v-model.number="selectedProfile.so_vits_svc_pitch" type="range" min="-12" max="12" step="1" :style="rangeInputStyle(selectedProfile.so_vits_svc_pitch, -12, 12)" /><small>{{ selectedProfile.so_vits_svc_pitch || 0 }} 半音</small></label>
                 <label class="toggle-row"><input v-model="selectedProfile.so_vits_svc_auto_predict_f0" type="checkbox" /><span>语音自动预测音高</span></label>
                 <label class="voice-profile-wide"><span>主模型</span><input :value="selectedProfile.so_vits_svc_model_path" type="text" readonly /></label>
                 <label class="voice-profile-wide"><span>来源与许可</span><textarea :value="`${selectedProfile.source_package_name || '未知包'} · ${selectedProfile.source_license || '未声明'}`" rows="2" readonly /></label>
               </template>
               <template v-else>
-                <label><span>参考音频原文语言</span><select v-model="selectedProfile.gpt_sovits_prompt_language"><option value="zh">中文</option><option value="ja">日语</option><option value="en">英语</option><option value="yue">粤语</option></select></label>
+                <label><span>参考音频原文语言</span><SelectField v-model="selectedProfile.gpt_sovits_prompt_language"><option value="zh">中文</option><option value="ja">日语</option><option value="en">英语</option><option value="yue">粤语</option></SelectField></label>
                 <label class="voice-profile-wide"><span>参考音频准确原文</span><textarea v-model.trim="selectedProfile.gpt_sovits_prompt_text" rows="3" maxlength="1000" placeholder="必须与参考音频逐字一致" /></label>
                 <template v-if="runtime.local_voice_runtime === 'genie'">
                   <label class="voice-profile-wide"><span>当前 Mio 音色模型</span><input :value="runtime.model_dir || '尚未安装 Mio 本地原声音色'" type="text" readonly /><small>{{ runtime.model_ready ? 'GPT-SoVITS V2 已转换为 Genie ONNX，中文和日语都使用这套角色音色' : '模型文件不完整，请在环境与模型中心重新安装 Mio 本地原声音色' }}</small></label>
                 </template>
                 <template v-else>
-                  <label><span>GPT 权重</span><select v-model="selectedProfile.gpt_sovits_gpt_weights"><option value="">未选择</option><option v-for="item in runtime.weights?.gpt || []" :key="item.path" :value="item.path">{{ item.name }}</option></select></label>
-                  <label><span>SoVITS 权重</span><select v-model="selectedProfile.gpt_sovits_sovits_weights"><option value="">未选择</option><option v-for="item in runtime.weights?.sovits || []" :key="item.path" :value="item.path">{{ item.name }}</option></select></label>
+                  <label><span>GPT 权重</span><SelectField v-model="selectedProfile.gpt_sovits_gpt_weights"><option value="">未选择</option><option v-for="item in runtime.weights?.gpt || []" :key="item.path" :value="item.path">{{ item.name }}</option></SelectField></label>
+                  <label><span>SoVITS 权重</span><SelectField v-model="selectedProfile.gpt_sovits_sovits_weights"><option value="">未选择</option><option v-for="item in runtime.weights?.sovits || []" :key="item.path" :value="item.path">{{ item.name }}</option></SelectField></label>
                 </template>
                 <label class="toggle-row"><input v-model="selectedProfile.use_emotion_references" type="checkbox" /><span>使用可用的情绪参考音频</span></label>
                 <label class="voice-reference-upload">
@@ -272,13 +273,13 @@ function makeSelectedDefault() {
     <div class="settings-list voice-general-settings">
       <label class="settings-item"><span><strong>回复时朗读</strong><small>桌宠与主应用可播放模型回复</small></span><span class="switch-control"><input v-model="settings.voice_enabled" type="checkbox" /><i /></span></label>
       <label v-if="engine === 'gpt_sovits'" class="settings-item"><span><strong>打开 Mio 时启动音色引擎</strong><small>启动后在后台预热本地音色；关闭时仍会在第一次试听或朗读时按需启动</small></span><span class="switch-control"><input v-model="settings.voice_startup_enabled" type="checkbox" /><i /></span></label>
-      <label v-if="engine === 'gpt_sovits'" class="settings-item"><span><strong>空闲后释放音色内存</strong><small>释放后可回收约数 GB 内存；下一次说话需要重新加载一次</small></span><select v-model.number="settings.voice_idle_timeout_seconds"><option :value="60">1 分钟</option><option :value="180">3 分钟（推荐）</option><option :value="600">10 分钟</option><option :value="0">始终保留，优先速度</option></select></label>
+      <label v-if="engine === 'gpt_sovits'" class="settings-item"><span><strong>空闲后释放音色内存</strong><small>释放后可回收约数 GB 内存；下一次说话需要重新加载一次</small></span><SelectField v-model.number="settings.voice_idle_timeout_seconds"><option :value="60">1 分钟</option><option :value="180">3 分钟（推荐）</option><option :value="600">10 分钟</option><option :value="0">始终保留，优先速度</option></SelectField></label>
       <label class="settings-item"><span><strong>主动消息也朗读</strong><small>屏幕观察和主动联系产生的消息可以直接出声</small></span><span class="switch-control"><input v-model="settings.speak_proactive" type="checkbox" /><i /></span></label>
       <label v-if="engine !== 'indextts2'" class="settings-item"><span><strong>流式语音</strong><small>分段合成并尽快开始播放，降低等待时间（本地音色）</small></span><span class="switch-control"><input v-model="settings.voice_streaming_enabled" type="checkbox" /><i /></span></label>
-      <label class="settings-item"><span><strong>QQ 语音</strong><small>群聊和私聊使用同一套判断规则</small></span><select v-model="settings.qq_voice_mode"><option value="explicit">仅明确要求</option><option value="adaptive">由 Agent 判断</option><option value="always">始终语音</option></select></label>
+      <label class="settings-item"><span><strong>QQ 语音</strong><small>群聊和私聊使用同一套判断规则</small></span><SelectField v-model="settings.qq_voice_mode"><option value="explicit">仅明确要求</option><option value="adaptive">由 Agent 判断</option><option value="always">始终语音</option></SelectField></label>
       <label class="settings-item"><span><strong>音量</strong><small>{{ settings.voice_volume }}%</small></span><input v-model.number="settings.voice_volume" type="range" min="0" max="100" :style="rangeInputStyle(settings.voice_volume, 0, 100)" /></label>
-      <label v-if="engine !== 'indextts2'" class="settings-item"><span><strong>桌宠开口语言</strong><small>控制朗读使用中文还是日语，气泡继续显示原回复</small></span><select v-model="settings.pet_speech_language"><option value="zh">中文</option><option value="ja">日语</option></select></label>
-      <label v-if="engine !== 'indextts2'" class="settings-item"><span><strong>语音翻译模型</strong><small>只负责中日语音翻译，不跟随主对话或桌宠模型</small></span><select v-model="settings.speech_translation_model_id" :disabled="!modelOptions.length"><option v-if="translationModelUnavailable" :value="settings.speech_translation_model_id" disabled>{{ modelOptions.length ? '当前模型未连接，请重新选择' : '没有已连接的模型' }}</option><option v-else-if="!settings.speech_translation_model_id" value="" disabled>{{ modelOptions.length ? '请选择已连接的模型' : '没有已连接的模型' }}</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></select></label>
+      <label v-if="engine !== 'indextts2'" class="settings-item"><span><strong>桌宠开口语言</strong><small>控制朗读使用中文还是日语，气泡继续显示原回复</small></span><SelectField v-model="settings.pet_speech_language"><option value="zh">中文</option><option value="ja">日语</option></SelectField></label>
+      <label v-if="engine !== 'indextts2'" class="settings-item"><span><strong>语音翻译模型</strong><small>只负责中日语音翻译，不跟随主对话或桌宠模型</small></span><SelectField v-model="settings.speech_translation_model_id" :disabled="!modelOptions.length"><option v-if="translationModelUnavailable" :value="settings.speech_translation_model_id" disabled>{{ modelOptions.length ? '当前模型未连接，请重新选择' : '没有已连接的模型' }}</option><option v-else-if="!settings.speech_translation_model_id" value="" disabled>{{ modelOptions.length ? '请选择已连接的模型' : '没有已连接的模型' }}</option><option v-for="model in modelOptions" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></SelectField></label>
     </div>
 
     <template v-if="engine === 'gpt_sovits'">

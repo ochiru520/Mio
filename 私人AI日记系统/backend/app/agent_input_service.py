@@ -1,21 +1,21 @@
 """Durable user amendments consumed at planning boundaries, never by cancelling writes."""
-from contextlib import closing
 import hashlib
 import json
 import uuid
 
+from .repositories import agent_input_repository as repository
+
 from . import db, agent_task_service as tasks
 
 
+class InputChanged(ValueError):
+    pass
+
+
 def initialize():
-    tasks.initialize()
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript('''CREATE TABLE IF NOT EXISTS agent_task_inputs(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,task_id TEXT NOT NULL,version INTEGER NOT NULL,
-            request_key TEXT NOT NULL,content TEXT NOT NULL,fingerprint TEXT NOT NULL,created_at TEXT NOT NULL,
-            consumed_run_id TEXT NOT NULL DEFAULT '',consumed_round INTEGER,consumed_at TEXT NOT NULL DEFAULT '',
-            UNIQUE(task_id,version),UNIQUE(task_id,request_key));
-            CREATE INDEX IF NOT EXISTS idx_task_inputs_pending ON agent_task_inputs(task_id,consumed_run_id,version);''')
+
+    with repository.unit_of_work() as conn:
+        conn.ensure_inputs_table()
 
 
 def append(task_id,content,request_key=''):
@@ -24,40 +24,34 @@ def append(task_id,content,request_key=''):
     if not content or len(content)>12000: raise ValueError('补充内容需要 1–12000 字符。')
     request_key=request_key or uuid.uuid4().hex
     fingerprint=hashlib.sha256(content.encode()).hexdigest()
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('BEGIN IMMEDIATE')
-        task=conn.execute('SELECT * FROM agent_tasks WHERE id=?',(task_id,)).fetchone()
+    with repository.unit_of_work() as conn:
+        conn.lock_for_update()
+        task=conn.task_for_amendment((task_id,))
         if task is None or task['status']=='cancelled': raise ValueError('任务不存在或已取消，不能补充。')
-        existing=conn.execute('SELECT * FROM agent_task_inputs WHERE task_id=? AND request_key=?',(task_id,request_key)).fetchone()
+        db.assert_conversation_writable(task['conversation_id'], conn.connection)
+        existing=conn.input_for_request((task_id,request_key))
         if existing:
-            if existing['fingerprint']!=fingerprint: raise ValueError('相同请求标识不能对应不同补充内容。')
+            if existing['request_fingerprint']!=fingerprint: raise ValueError('相同请求标识不能对应不同补充内容。')
             value=dict(existing)
         else:
-            version=conn.execute('SELECT COALESCE(MAX(version),0)+1 FROM agent_task_inputs WHERE task_id=?',(task_id,)).fetchone()[0]
-            cursor=conn.execute('INSERT INTO agent_task_inputs(task_id,version,request_key,content,fingerprint,created_at) VALUES(?,?,?,?,?,?)',
-                (task_id,version,request_key,content,fingerprint,db.now_iso()))
-            value=dict(conn.execute('SELECT * FROM agent_task_inputs WHERE id=?',(cursor.lastrowid,)).fetchone())
+            version=conn.next_input_version((task_id,))[0]
+            cursor=conn.insert_input((task_id,version,request_key,content,fingerprint,fingerprint,db.now_iso()))
+            value=dict(conn.input_by_id((cursor,)))
             snapshot=json.loads(task['snapshot_json']); snapshot['input_version']=version
             snapshot['updates']=[*snapshot.get('updates',[task['original_goal']]),content][-30:]
-            conn.execute('UPDATE agent_tasks SET snapshot_json=?,revision=revision+1,updated_at=? WHERE id=?',
-                (tasks._json(snapshot),db.now_iso(),task_id))
+            conn.update_task_snapshot((tasks._json(snapshot),db.now_iso(),task_id))
             # Claiming an approval and accepting an amendment serialize on the
             # same SQLite write lock. Already-running actions finish normally.
-            run_ids = 'SELECT run_id FROM agent_task_runs WHERE task_id=?'
-            for table, column in (('companion_actions', 'agent_run_id'),
-                                  ('agent_run_steps', 'run_id'),
-                                  ('tool_execution_receipts', 'agent_run_id')):
-                conn.execute(f"UPDATE {table} SET status='cancelled' WHERE {column} IN ({run_ids}) AND status='needs_confirmation'", (task_id,))
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspace_browser_pending'").fetchone():
-                conn.execute("UPDATE workspace_browser_pending SET status='expired' WHERE task_id=? AND status='pending'", (task_id,))
-    db.save_message('user',content,source='workspace',conversation_id=task['conversation_id'],delivery_key=f'task-input:{value["id"]}')
+            conn.invalidate_unclaimed_approvals(task_id)
+        conn.publish_input(value, task['conversation_id'], value['created_at'])
+        value=dict(conn.input_by_id((value['id'],)))
     return value
 
 
 def recent_context(task_id):
     initialize()
-    with closing(db.get_conn()) as conn:
-        rows=conn.execute('SELECT * FROM agent_task_inputs WHERE task_id=? ORDER BY version DESC LIMIT 20',(task_id,)).fetchall()
+    with repository.unit_of_work(write=False) as conn:
+        rows=conn.recent_inputs((task_id,))
     items=[]; used=0
     for row in rows:
         item=dict(row); used+=len(item['content'])
@@ -73,10 +67,8 @@ def read(task_id,*,after_version=0,limit=20,max_chars=20000,pending_only=False):
     initialize()
     if tasks.get(task_id) is None: raise ValueError('任务不存在。')
     limit=max(1,min(50,int(limit))); max_chars=max(12000,min(60000,int(max_chars)))
-    with closing(db.get_conn()) as conn:
-        rows=conn.execute('''SELECT * FROM agent_task_inputs WHERE task_id=? AND version>?
-            AND (?=0 OR consumed_run_id='') ORDER BY version LIMIT ?''',
-            (task_id,max(0,int(after_version)),bool(pending_only),limit+1)).fetchall()
+    with repository.unit_of_work(write=False) as conn:
+        rows=conn.read_inputs((task_id,max(0,int(after_version)),bool(pending_only),limit+1))
     items=[]; used=0
     for row in rows[:limit]:
         if items and used+len(row['content'])>max_chars: break
@@ -87,19 +79,45 @@ def read(task_id,*,after_version=0,limit=20,max_chars=20000,pending_only=False):
 
 def has_pending(task_id):
     initialize()
-    with closing(db.get_conn()) as conn:
-        return bool(conn.execute("SELECT 1 FROM agent_task_inputs WHERE task_id=? AND consumed_run_id='' LIMIT 1",(task_id,)).fetchone())
+    with repository.unit_of_work(write=False) as conn:
+        return bool(conn.has_pending_input((task_id,)))
 
 
 def consume(task_id,inputs,run_id,round_index):
     if not inputs: return
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('BEGIN IMMEDIATE')
-        if not conn.execute('SELECT 1 FROM agent_task_runs WHERE task_id=? AND run_id=?',(task_id,run_id)).fetchone():
+    with repository.unit_of_work() as conn:
+        conn.lock_for_update()
+        if not conn.task_owns_run((task_id,run_id)):
             raise ValueError('消费轮次不属于当前任务。')
         for item in inputs:
-            conn.execute("UPDATE agent_task_inputs SET consumed_run_id=?,consumed_round=?,consumed_at=? WHERE task_id=? AND id=? AND consumed_run_id=''",
-                (run_id,round_index,db.now_iso(),task_id,item['id']))
+            current = conn.input_by_id((item['id'],))
+            if not current or current['revision'] != item['revision'] or current['state'] != 'received':
+                raise InputChanged('补充要求已被编辑或撤回，请重新规划。')
+            conn.consume_input((run_id,round_index,db.now_iso(),task_id,item['id'],item['revision']))
+
+
+def revise(task_id, input_id, *, expected_revision, content=None, withdraw=False):
+    """Only unadopted input can change; serialize against planner consumption."""
+    initialize()
+    if not withdraw and (not content or not content.strip() or len(content) > 12000):
+        raise ValueError('补充内容需要 1–12000 字符。')
+    with repository.unit_of_work() as conn:
+        conn.lock_for_update()
+        task = conn.task_for_amendment((task_id,))
+        previous = conn.input_by_id((input_id,))
+        if not task or not previous or previous['task_id'] != task_id:
+            raise ValueError('补充要求不属于此任务。')
+        db.assert_conversation_writable(task['conversation_id'], conn.connection)
+        value = previous['content'] if withdraw else content.strip()
+        if not conn.revise_input(task_id, input_id, expected_revision, value, hashlib.sha256(value.encode()).hexdigest(), 'withdrawn' if withdraw else 'received', db.now_iso()):
+            raise ValueError('补充已采用、已撤回或版本发生变化，无法修改。')
+        conn.revise_message(previous, task['conversation_id'], value, withdraw, db.now_iso(), uuid.uuid4().hex)
+        snapshot = json.loads(task['snapshot_json'])
+        snapshot['updates'] = [task['original_goal'], *[row['content'] for row in conn.active_inputs(task_id)]][-30:]
+        snapshot['input_revision'] = int(snapshot.get('input_revision', 0)) + 1
+        conn.update_task_snapshot((tasks._json(snapshot), db.now_iso(), task_id))
+        conn.invalidate_unclaimed_approvals(task_id)
+        return dict(conn.input_by_id((input_id,)))
 
 
 def context(task_id):

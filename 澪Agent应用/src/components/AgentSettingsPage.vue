@@ -1,6 +1,7 @@
 <script setup>
+import SelectField from './SelectField.vue'
 import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ArrowLeft, Bot, FolderKey, Gauge, PanelsTopLeft, Save, Search, Workflow, Wrench, X } from '@lucide/vue'
+import { ArrowLeft, Bot, FolderKey, Gauge, PanelsTopLeft, Save, Search, Workflow, Wrench, X } from '../icons/index.js'
 import AgentTaskSettings from './AgentTaskSettings.vue'
 import AgentCreationSettings from './AgentCreationSettings.vue'
 import ModelStrategyPanel from './ModelStrategyPanel.vue'
@@ -83,8 +84,8 @@ function save() {
           <section v-show="category === 'model'" class="agent-settings-section">
             <p v-if="notice" role="status" class="agent-settings-message">{{ notice }}</p>
             <div class="agent-settings-group">
-              <label class="agent-setting-row"><span>Agent 模型</span><select v-model="draft.model" aria-label="Agent 模型"><option value="auto">自动选择</option><optgroup v-for="group in context.modelGroups" :key="group.provider_id" :label="group.provider"><option v-for="model in group.models" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></optgroup></select></label>
-              <label class="agent-setting-row"><span>推理强度</span><select v-model="draft.reasoning" aria-label="推理强度" :disabled="!reasoningOptions.length"><option v-if="!reasoningOptions.length" value="">当前模型不支持</option><option v-for="item in reasoningOptions" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
+              <label class="agent-setting-row"><span>Agent 模型</span><SelectField v-model="draft.model" aria-label="Agent 模型"><option value="auto">自动选择</option><optgroup v-for="group in context.modelGroups" :key="group.provider_id" :label="group.provider"><option v-for="model in group.models" :key="model.id" :value="model.id">{{ model.display_name || model.model }}</option></optgroup></SelectField></label>
+              <label class="agent-setting-row"><span>推理强度</span><SelectField v-model="draft.reasoning" aria-label="推理强度" :disabled="!reasoningOptions.length"><option v-if="!reasoningOptions.length" value="">当前模型不支持</option><option v-for="item in reasoningOptions" :key="item.id" :value="item.id">{{ item.label }}</option></SelectField></label>
             </div>
             <ModelStrategyPanel :modes="['agent']" />
           </section>

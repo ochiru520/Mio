@@ -57,17 +57,17 @@ def main():
         db.create_agent_conversation('desktop_agent_candidate_preview', '候选界面预览（合成数据）')
     onboarding_service._write_state({'version': onboarding_service.ONBOARDING_VERSION,
         'completed': True, 'mode': 'synthetic_candidate_preview', 'completed_at': db.now_iso(), 'existing_data': []})
-    with db.get_conn() as conn:
-        if conn.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
-            raise RuntimeError('候选合成数据库未通过完整性核对。')
+    from app.repositories import database_health_repository
+    if database_health_repository.quick_check() != 'ok':
+        raise RuntimeError('候选合成数据库未通过完整性核对。')
     from app.main import app
-    from app.routes import agent as agent_routes
+    from app import qq_status_service
     async def offline_qq_status():
         return {'enabled': False, 'connected': False, 'logged_in': False, 'diagnostic_code': 'candidate_preview',
                 'diagnostic_message': '候选预览关闭QQ连接。', 'group_chat': {'enabled': False, 'group_ids': []}}
     # Real bootstrap otherwise probes a local NapCat endpoint. Use a clearly
     # synthetic offline status, while exercising all other built bootstrap code.
-    agent_routes._qq_status = offline_qq_status
+    qq_status_service.status = offline_qq_status
     from starlette.responses import JSONResponse
 
     @app.middleware('http')

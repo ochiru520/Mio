@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ..repositories import creation_environment_repository as repository
 
 import asyncio
 
@@ -7,7 +8,7 @@ from fastapi.responses import FileResponse
 
 from .. import creation_service
 from ..creation_models import CreationAssetRequest, CreationJobRequest, CreationPresetRequest
-from .. import creation_custom
+from .. import creation_custom, workflow_import_service
 from ..creation_custom import EnvironmentConfig, WorkflowDefaults, WorkflowImport
 
 
@@ -27,8 +28,8 @@ async def creation_configuration():
 async def creation_save_environment(payload: EnvironmentConfig):
     try:
         from .. import db
-        with db.get_conn() as conn:
-            pending = conn.execute("SELECT 1 FROM creation_jobs WHERE status IN ('created','needs_confirmation','submitted','queued','running','cancel_requested') LIMIT 1").fetchone()
+        with repository.transaction() as conn:
+            pending = conn.has_pending_job().fetchone()
         if pending:
             raise ValueError("请在当前创作任务结束后修改 ComfyUI 连接。")
         return {"environment": creation_custom.save_environment(payload)}
@@ -75,15 +76,7 @@ async def creation_import_workflow(payload: WorkflowImport):
 @router.post("/workflows/preview")
 async def creation_preview_workflow(payload: creation_custom.WorkflowPreview):
     try:
-        info = None
-        if isinstance(payload.prompt.get("nodes"), list):
-            import httpx
-            async with httpx.AsyncClient(**creation_service._client_kwargs(15)) as client:
-                try:
-                    info = await creation_service._object_info(client)
-                except httpx.HTTPError as exc:
-                    raise ValueError("无法连接 ComfyUI，请先在创作环境中启动并连接，再选择工作流。") from exc
-        return creation_custom.prepare_import(payload.prompt, info)
+        return await workflow_import_service.preview_workflow(payload.prompt)
     except ValueError as exc:
         raise _bad_request(exc) from exc
 

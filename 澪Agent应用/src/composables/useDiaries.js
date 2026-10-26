@@ -1,3 +1,5 @@
+
+import * as chatApi from '../services/chatApi.js'
 /** Diaries operations. Reactive values and cross-domain callbacks are explicitly injected.
  * This module owns behavior, not application-global mutable state.
  * Dependencies are accessors so async callbacks see the latest state.
@@ -7,7 +9,7 @@ import * as diaryApi from '../services/diaryApi.js'
 export function useDiaries(deps) {
   async function refreshReviewVersions() {
     const [daily, weekly, monthly] = await Promise.all([
-      deps.request('/api/reviews'), deps.request('/api/weekly'), deps.request('/api/monthly'),
+      diaryApi.loadReviews({}, deps.request), diaryApi.loadWeekly({}, deps.request), diaryApi.loadMonthly({}, deps.request),
     ])
     deps.dailyReviews.value = daily; deps.weeklyReviews.value = weekly; deps.monthlyReviews.value = monthly
   }
@@ -16,7 +18,7 @@ export function useDiaries(deps) {
     deps.statsLoading.value = true
     deps.statsError.value = ''
     try {
-      deps.statsData.value = await deps.request(`/api/agent/stats?year=${year}&month=${month}`)
+      deps.statsData.value = await chatApi.loadStatsByYearMonth(year, month, {}, deps.request)
       deps.statsLoaded.value = true
     } catch (error) {
       deps.statsError.value = error.message
@@ -36,13 +38,13 @@ export function useDiaries(deps) {
     const requestId = ++deps.diarySearchRequestId
     const query = deps.diarySearch.value.trim()
     try {
-      const loadedDiaries = await deps.request(`/api/diaries?q=${encodeURIComponent(query)}`)
+      const loadedDiaries = await diaryApi.loadDiariesByQ(query, {}, deps.request)
       if (requestId !== deps.diarySearchRequestId || query !== deps.diarySearch.value.trim()) return
       deps.diaries.value = loadedDiaries
       if (!loadedDiaries.length) {
         deps.selectedDiary.value = null
       } else if (!deps.selectedDiary.value || !loadedDiaries.some((item) => item.date === deps.selectedDiary.value.date)) {
-        const firstDiary = await deps.request(`/api/diaries/${loadedDiaries[0].date}`)
+        const firstDiary = await diaryApi.loadDiary(loadedDiaries[0].date, {}, deps.request)
         if (requestId !== deps.diarySearchRequestId || query !== deps.diarySearch.value.trim()) return
         deps.selectedDiary.value = firstDiary
       }
@@ -60,7 +62,7 @@ export function useDiaries(deps) {
   async function openDiary(date) {
     deps.activeView.value = 'diaries'
     try {
-      deps.selectedDiary.value = await deps.request(`/api/diaries/${date}`)
+      deps.selectedDiary.value = await diaryApi.loadDiary(date, {}, deps.request)
     } catch (error) {
       deps.errorMessage.value = error.message
     }
@@ -82,10 +84,7 @@ export function useDiaries(deps) {
     if (!deps.selectedDiary.value) return
     deps.diaryBusy.value = 'confirm'
     try {
-      await deps.request(`/api/diaries/${deps.selectedDiary.value.date}/confirm`, {
-        method: 'POST',
-        body: JSON.stringify({ confirmed: true }),
-      })
+      await diaryApi.submitDiaryConfirm(deps.selectedDiary.value.date, { confirmed: true }, {}, deps.request)
       await openDiary(deps.selectedDiary.value.date)
       await refreshReviewVersions()
       await loadDiaries()
@@ -100,10 +99,7 @@ export function useDiaries(deps) {
   async function updateDiary(date, payload) {
     deps.diaryBusy.value = 'edit'
     try {
-      await deps.request(`/api/diaries/${date}`, {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-      })
+      await diaryApi.saveDiary(date, payload, {}, deps.request)
       await loadDiaries()
       await openDiary(date)
       await refreshReviewVersions()
@@ -129,7 +125,7 @@ export function useDiaries(deps) {
     deps.reviewBusy.value = 'daily'
     deps.errorMessage.value = ''
     try {
-      await deps.request(`/api/reviews/${date}/generate`, { method: 'POST', body: '{}' })
+      await diaryApi.submitReviewsGenerate(date, {}, deps.request)
       await refreshReviewVersions()
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -143,7 +139,7 @@ export function useDiaries(deps) {
     deps.reviewBusy.value = 'weekly'
     deps.errorMessage.value = ''
     try {
-      await deps.request(`/api/weekly/${start}/generate`, { method: 'POST', body: '{}' })
+      await diaryApi.submitWeeklyGenerate(start, {}, deps.request)
       await refreshReviewVersions()
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -157,7 +153,7 @@ export function useDiaries(deps) {
     deps.reviewBusy.value = 'monthly'
     deps.errorMessage.value = ''
     try {
-      await deps.request(`/api/monthly/${month}/generate`, { method: 'POST', body: '{}' })
+      await diaryApi.submitMonthlyGenerate(month, {}, deps.request)
       await refreshReviewVersions()
     } catch (error) {
       deps.errorMessage.value = error.message

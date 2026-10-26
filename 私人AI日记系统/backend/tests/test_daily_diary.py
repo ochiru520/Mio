@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from app import db
 from app.config import settings
 from app.daily_diary_service import run_daily_diary_once
-from app.routes.diary import generate_diary_for_date_payload
+from app.diary_operations_service import generate_diary_for_date_payload
 
 
 class DailyDiaryServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -95,10 +95,10 @@ class DailyDiaryServiceTests(unittest.IsolatedAsyncioTestCase):
         markdown = "# 测试日记\n\n## 今日事件\n做完了一个功能。"
 
         with patch(
-            "app.routes.diary.call_chat_completion",
+            "app.diary_operations_service.call_chat_completion",
             new=AsyncMock(return_value=markdown),
         ) as completion, patch(
-            "app.routes.diary._diary_model_id",
+            "app.diary_operations_service._diary_model_id",
             return_value="default-diary-model",
         ):
             result = await generate_diary_for_date_payload(target_date, overwrite=False)

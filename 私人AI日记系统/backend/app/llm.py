@@ -13,7 +13,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from .config import settings
-from .model_runtime import model_call
+from .model_runtime import model_call, transport_attempt
+from .context_input_policy import guarded_request, route_budget
 from .model_registry import (
     ModelProfile,
     get_model_profile,
@@ -49,6 +50,10 @@ class ModelRequestError(RuntimeError):
         upstream_code: str = "",
         upstream_message: str = "",
     ) -> None:
+        from .model_input_errors import image_input_unsupported
+        self.image_input_unsupported = image_input_unsupported(int(http_status or 0), f'{message} {upstream_message}')
+        if self.image_input_unsupported:
+            message = f'供应商“{profile.provider_name}”的模型“{profile.model}”或当前接口不支持图片输入。请换用支持视觉的模型，或移除图片后重试。'
         super().__init__(message)
         self.profile_id = profile.id
         self.provider_id = profile.provider_id
@@ -63,7 +68,7 @@ class ModelRequestError(RuntimeError):
 
     def public_detail(self) -> dict[str, object]:
         return {
-            "code": "model_request_failed",
+            "code": "model_image_input_unsupported" if self.image_input_unsupported else "model_request_failed",
             "message": str(self),
             "request_id": self.request_id,
             "model_id": self.profile_id,
@@ -139,6 +144,10 @@ class CompletionResult:
     protocol_message: dict[str, Any] | None = None
     protocol_items: tuple[dict[str, Any], ...] = ()
     reasoning_text: str = ''
+    # None denotes legacy/unknown; zero cache is meaningful only when reported.
+    cached_tokens_reporting: str = 'unknown'
+    input_tokens_reported: bool = False
+    cache_write_tokens: int | None = None
 
 
 StreamDeltaCallback = Callable[[str, str], Awaitable[None] | None]
@@ -247,6 +256,18 @@ def _usage_token_count(*values: object) -> int:
 def _normalize_usage(usage: dict[str, Any]) -> dict[str, Any]:
     """Keep provider metadata and expose Chat/Responses usage consistently."""
     normalized = dict(usage)
+    def reported(value):
+        try:
+            return value is not None and not isinstance(value, bool) and int(value) >= 0
+        except (TypeError, ValueError, OverflowError):
+            return False
+    cache_values = [usage.get('prompt_cache_hit_tokens')]
+    cache_values.extend(value.get('cached_tokens') for value in
+                        (usage.get('prompt_tokens_details'), usage.get('input_tokens_details')) if isinstance(value, dict))
+    normalized['input_tokens_reported'] = usage.get('input_tokens_reported', any(reported(usage.get(key)) for key in ('prompt_tokens', 'input_tokens')))
+    normalized['cached_tokens_reporting'] = usage.get('cached_tokens_reporting', 'reported' if any(reported(value) for value in cache_values) else 'unknown')
+    write_tokens = usage.get('cache_write_tokens', usage.get('cache_creation_input_tokens'))
+    normalized['cache_write_tokens'] = int(write_tokens) if reported(write_tokens) else None
     prompt_tokens = _usage_token_count(usage.get("prompt_tokens"), usage.get("input_tokens"))
     completion_tokens = _usage_token_count(usage.get("completion_tokens"), usage.get("output_tokens"))
     prompt_details = usage.get("prompt_tokens_details")
@@ -303,6 +324,8 @@ def _usage_cost_yuan(
     )
     if not any(price > 0 for price in prices):
         return None, cached_tokens, "unavailable"
+    if not usage['input_tokens_reported']:
+        return None, cached_tokens, 'unavailable'
     cached_input_price = (
         profile.cached_input_price_cny_per_million
         if profile.cached_input_price_cny_per_million > 0
@@ -498,7 +521,8 @@ def _responses_request_payload(
     tools: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     from .agent_protocol_history import responses_input
-    payload: dict[str, Any] = {"model": profile.model, "input": responses_input(messages)}
+    payload: dict[str, Any] = {"model": profile.model, "input": responses_input(messages),
+                               "max_output_tokens": route_budget(profile)['output_reserved_tokens']}
     normalized = normalize_model_reasoning(profile.model, reasoning_level)
     if str(model_reasoning_config(profile.model)["parameter"]) == "reasoning_effort":
         payload["reasoning"] = {"effort": normalized, "summary": "auto"}
@@ -530,17 +554,29 @@ async def _rejected_summary_payload(response, payload):
     return {**payload, 'reasoning': {k:v for k,v in payload['reasoning'].items() if k!='summary'}}
 
 
-async def _completion_post(client, url, *, headers, json):
-    response=await client.post(url,headers=headers,json=json)
+async def _completion_post(client, url, *, headers, json, route=None):
+    async with transport_attempt(json, url, route) as attempt:
+        response=await client.post(url,headers=headers,json=json)
+        attempt['status'] = response.status_code
     fallback=await _rejected_summary_payload(response,json)
     if fallback is not None:
-        response=await client.post(url,headers=headers,json=fallback)
+        async with transport_attempt(fallback, url, route) as attempt:
+            response=await client.post(url,headers=headers,json=fallback)
+            attempt['status'] = response.status_code
     return response
 
 
 @asynccontextmanager
-async def _completion_stream(client, method, url, *, headers, json):
-    async with client.stream(method,url,headers=headers,json=json) as response:
+async def _tracked_stream(client, method, url, *, headers, json, route=None):
+    async with transport_attempt(json, url, route) as attempt:
+        async with client.stream(method, url, headers=headers, json=json) as response:
+            attempt['status'] = response.status_code
+            yield response
+
+
+@asynccontextmanager
+async def _completion_stream(client, method, url, *, headers, json, route=None):
+    async with _tracked_stream(client, method, url, headers=headers, json=json, route=route) as response:
         fallback=await _rejected_summary_payload(response,json)
         if fallback is None and response.status_code in {400, 422} and 'stream_options' in json:
             await response.aread()
@@ -556,9 +592,11 @@ async def _completion_stream(client, method, url, *, headers, json):
                     fallback = {key: value for key, value in json.items() if key != 'stream_options'}
         if fallback is None:
             yield response
-        else:
-            async with client.stream(method,url,headers=headers,json=fallback) as retried:
-                yield retried
+            return
+    # Finish the rejected attempt before starting the compatibility request so
+    # the final result/usage is attached to the actual successful HTTP attempt.
+    async with _tracked_stream(client, method, url, headers=headers, json=fallback, route=route) as retried:
+        yield retried
 
 
 async def _completion_lines(response: httpx.Response):
@@ -626,7 +664,8 @@ def _completion_routes(profile: ModelProfile) -> list[CompletionRoute]:
     if profile.api_mode == "responses":
         add_routes("chat_completions")
 
-    return routes
+    from .context_input_policy import restrict_summary_routes
+    return restrict_summary_routes(profile, routes)
 
 
 def _route_error_text(route: CompletionRoute, exc: Exception | httpx.Response) -> str:
@@ -636,6 +675,25 @@ def _route_error_text(route: CompletionRoute, exc: Exception | httpx.Response) -
     if isinstance(exc, httpx.Response):
         return f"{target} -> HTTP {exc.status_code}，{exc.text[:500]}"
     return f"{target} -> {exc}"
+
+
+def _check_context_overflow(response, profile, request_id, route):
+    from .context_input_policy import context_window_error
+    if response.status_code not in {400, 413, 422}:
+        return
+    try:
+        body = response.json()
+        error = body.get('error', {}) if isinstance(body, dict) else {}
+    except ValueError:
+        error = {}
+    detail = str(error.get('message') or response.text) if isinstance(error, dict) else str(error)
+    if profile.api_key:
+        detail = detail.replace(profile.api_key, '[已隐藏]')
+    exception = ModelRequestError('模型输入超出供应商上下文预算。', profile=profile, request_id=request_id,
+        http_status=response.status_code, route=_route_name(route),
+        upstream_code=str(error.get('code') or '') if isinstance(error, dict) else '', upstream_message=detail[:500])
+    if context_window_error(exception):
+        raise exception
 
 
 def _route_name(route: CompletionRoute) -> str:
@@ -662,6 +720,7 @@ def _remaining_request_seconds(deadline: float) -> float:
 
 
 @model_call
+@guarded_request
 async def call_chat_completion_result(
     messages: list[dict[str, Any]],
     temperature: float = 0.7,
@@ -679,11 +738,14 @@ async def call_chat_completion_result(
     if profile.api_mode == "messages":
         raise LLMConfigError("这个模型使用 Anthropic /messages，当前版本尚未接入。")
     responses_payload = _responses_request_payload(profile, messages, reasoning_level, tools)
+    if tools and tool_choice is not None:
+        responses_payload['tool_choice'] = tool_choice
     from .agent_protocol_history import chat_messages
     chat_payload: dict[str, Any] = {
         "model": profile.model,
         "messages": chat_messages(messages),
         "temperature": temperature,
+        "max_tokens": route_budget(profile)['output_reserved_tokens'],
     }
     if tools:
         chat_payload["tools"] = tools
@@ -727,6 +789,7 @@ async def call_chat_completion_result(
                             base_url=route.base_url,
                         ),
                         json=request_payload,
+                        route=route,
                     )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_error = exc
@@ -753,6 +816,7 @@ async def call_chat_completion_result(
             continue
 
         if response.status_code >= 400:
+            _check_context_overflow(response, profile, request_id, route)
             errors.append(_route_error_text(route, response))
             attempt_records.append(_attempt_record(route, response))
             if response.status_code in {401, 403, 404}:
@@ -866,6 +930,9 @@ async def call_chat_completion_result(
             model=str(data.get("model") or profile.model),
             prompt_tokens=prompt_tokens,
             cached_prompt_tokens=cached_prompt_tokens,
+            cached_tokens_reporting=usage["cached_tokens_reporting"],
+            input_tokens_reported=usage["input_tokens_reported"],
+            cache_write_tokens=usage["cache_write_tokens"],
             completion_tokens=completion_tokens,
             reasoning_tokens=reasoning_tokens,
             cost_yuan=cost_yuan,
@@ -909,6 +976,7 @@ async def call_chat_completion_result(
 
 
 @model_call
+@guarded_request
 async def call_chat_completion_stream_result(
     messages: list[dict[str, Any]],
     temperature: float = 0.7,
@@ -934,6 +1002,7 @@ async def call_chat_completion_stream_result(
         "temperature": temperature,
         "stream": True,
         "stream_options": {"include_usage": True},
+        "max_tokens": route_budget(profile)['output_reserved_tokens'],
     }
     _apply_reasoning_parameters(payload, profile.model, reasoning_level)
     if tools:
@@ -952,6 +1021,8 @@ async def call_chat_completion_stream_result(
             break
         request_payload=({**_responses_request_payload(profile,messages,reasoning_level,tools),'stream':True}
                          if route.api_mode=='responses' else payload)
+        if tools and tool_choice is not None:
+            request_payload['tool_choice'] = tool_choice
         provider_idempotency_key=_provider_idempotency_key(request_id,request_payload)
         for attempt in range(max_attempts):
             remaining = _remaining_request_seconds(deadline)
@@ -988,10 +1059,12 @@ async def call_chat_completion_stream_result(
                             base_url=route.base_url,
                         ),
                         json=request_payload,
+                        route=route,
                     ) as response:
                         response_headers = httpx.Headers(response.headers)
                         if response.status_code >= 400:
                             await response.aread()
+                            _check_context_overflow(response, profile, request_id, route)
                             if response.status_code in {400,422}:
                                 try:
                                     error=response.json().get('error',{})
@@ -1175,6 +1248,9 @@ async def call_chat_completion_stream_result(
                 model=response_model,
                 prompt_tokens=prompt_tokens,
                 cached_prompt_tokens=cached_prompt_tokens,
+            cached_tokens_reporting=usage["cached_tokens_reporting"],
+            input_tokens_reported=usage["input_tokens_reported"],
+            cache_write_tokens=usage["cache_write_tokens"],
                 completion_tokens=completion_tokens,
                 reasoning_tokens=reasoning_tokens,
                 cost_yuan=cost_yuan,
@@ -1224,11 +1300,17 @@ async def call_chat_completion(
     temperature: float = 0.7,
     model_id: str = "",
     reasoning_level: str = "standard",
+    *, tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> str:
     result = await call_chat_completion_result(
         messages,
         temperature=temperature,
         model_id=model_id,
         reasoning_level=reasoning_level,
+        **({'tools': tools, 'tool_choice': tool_choice} if tools else {}),
     )
+    if result.tool_calls:
+        raise ModelRequestError('文本请求返回工具调用，未执行工具。', profile=get_model_profile(resolve_model_id(model_id)),
+                                upstream_code='unexpected_tool_call')
     return result.content

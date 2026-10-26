@@ -1,3 +1,4 @@
+import { selectOperation } from './apiOperations.js'
 import { apiRequest } from './api.js'
 
 export const loadCreationWorkflows = () => apiRequest('/api/creation/workflows')
@@ -22,3 +23,7 @@ export const cancelCreationJob = (id) => apiRequest(`/api/creation/jobs/${encode
 export const uploadCreationAsset = (payload) => apiRequest('/api/creation/assets', { method: 'POST', body: JSON.stringify(payload), deadlineClass: 'mutation' })
 export const saveCreationPreset = (payload) => apiRequest('/api/creation/presets', { method: 'POST', body: JSON.stringify(payload), deadlineClass: 'mutation' })
 export const deleteCreationPreset = (id) => apiRequest(`/api/creation/presets/${encodeURIComponent(id)}`, { method: 'DELETE', deadlineClass: 'mutation' })
+
+export const submitJob = (id, command, payload, options = {}, transport = apiRequest) => transport(`/api/creation/jobs/${encodeURIComponent(id)}/${selectOperation(command, ['reconcile', 'retry', 'confirm', 'cancel'])}`, { ...options, method: 'POST', body: JSON.stringify(payload) })
+
+export const submitJobConfirm = (job_id, options = {}, transport = apiRequest) => transport(`/api/creation/jobs/${job_id}/confirm`, { ...options, method: 'POST' })

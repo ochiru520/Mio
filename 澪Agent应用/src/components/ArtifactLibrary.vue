@@ -1,9 +1,10 @@
 <script setup>
+import * as artifactsApi from '../services/artifactsApi.js'
+
 import { mergeLoadedItems } from '../scrollCollections.js'
 import WorkspacePager from './WorkspacePager.vue'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Archive, RefreshCw } from '@lucide/vue'
-import { apiRequest } from '../services/api.js'
+import { Archive, RefreshCw } from '../icons/index.js'
 const props = defineProps({ projectId: { type: String, default: '' }, mobile: Boolean })
 const emit = defineEmits(['changed', 'expired', 'open-task'])
 const artifacts = ref([]), offset = ref(0), hasMore = ref(false), busy = ref(false), notes = ref({})
@@ -12,8 +13,8 @@ const error = ref('')
 let timer, version = 0, disposed = false
 const quality = status => ({ not_reviewed: '尚未评价', user_approved: '已认可', user_rejected: '需改进' }[status] || '尚未评价')
 const integrity = status => ({ verified: '文件完整', failed: '文件校验失败', unknown: '文件待核验' }[status] || '文件待核验')
-async function api(url, method = 'GET', body) {
-  try { return await apiRequest(url, { method, headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {}, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) }
+async function withSession(operation) {
+  try { return await operation }
   catch (cause) { if (cause.status === 401 && props.mobile) emit('expired'); throw cause }
 }
 function sizeLabel(value) { const bytes = Number(value || 0); return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB` }
@@ -22,7 +23,7 @@ async function load() {
   const current = () => !disposed && requestVersion === version && projectId === props.projectId && pageOffset === offset.value
   loading.value = true
   try {
-    const data = await api(`/api/artifacts?project_id=${encodeURIComponent(projectId)}&limit=30&offset=${pageOffset}`)
+    const data = await withSession(artifactsApi.loadArtifactsByProjectIdLimit30Offset(projectId, pageOffset, { headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} }))
     if (!current()) return
     artifacts.value = mergeLoadedItems(artifacts.value,data.artifacts || [],pageOffset); hasMore.value = !!data.has_more; error.value = ''
     for (const item of artifacts.value) if (!(item.id in notes.value)) notes.value[item.id] = item.quality_note || ''
@@ -36,7 +37,7 @@ async function mutate(item, operation, status) {
   ++version; loading.value = false; busy.value = true; error.value = ''
   const projectId = props.projectId
   try {
-    const updated = await api(`/api/artifacts/${item.id}/${operation}`, 'POST', operation === 'review' ? { status, note: status === 'not_reviewed' ? '' : notes.value[item.id] || '' } : undefined)
+    const updated = await withSession(artifactsApi.mutateArtifact(item.id, operation, operation === 'review' ? { status, note: status === 'not_reviewed' ? '' : notes.value[item.id] || '' } : undefined, { headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} }))
     if (disposed || projectId !== props.projectId) return
     artifacts.value = artifacts.value.map(row => row.id === updated.id ? updated : row)
     notes.value[updated.id] = updated.quality_note || ''; emit('changed')
@@ -62,7 +63,7 @@ onBeforeUnmount(() => { disposed = true; ++version; window.clearInterval(timer) 
 </template>
 
 <style scoped>
-.artifact-library{padding:18px 0;border-top:1px solid var(--border)}.artifact-library>header{display:flex;justify-content:space-between;align-items:center}.artifact-library h3{display:flex;align-items:center;gap:7px;margin:0;font-size:calc(15px * var(--fs, 1))}.artifact-library header small{display:block;color:var(--text-muted);margin-top:4px}.artifact-library header button{display:flex;border:1px solid var(--border);background:var(--surface);border-radius:5px;padding:6px;cursor:pointer}.artifact-list{display:grid;gap:6px;margin-top:12px}.artifact-list article{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px;border-bottom:1px solid var(--border)}.artifact-list article div{min-width:0}.artifact-list strong,.artifact-list small{display:block;overflow-wrap:anywhere}.artifact-list small{color:var(--text-muted);margin-top:3px;font-size:calc(11px * var(--fs, 1))}.artifact-list a{color:var(--success);font-size:calc(12px * var(--fs, 1));white-space:nowrap}.artifact-error{color:var(--danger)}.artifact-empty{color:var(--text-muted);font-size:calc(12px * var(--fs, 1))}
+.artifact-library{padding:18px 0;border-top:1px solid var(--border)}.artifact-library>header{display:flex;justify-content:space-between;align-items:center}.artifact-library h3{display:flex;align-items:center;gap:7px;margin:0;font-size:calc(15px * var(--fs, 1))}.artifact-library header small{display:block;color:var(--text-muted);margin-top:4px}.artifact-library header button{display:flex;border:1px solid var(--border);background:var(--surface);border-radius:5px;padding:6px;cursor:pointer}.artifact-list{display:grid;gap:6px;margin-top:12px}.artifact-list article{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px;border-bottom:1px solid var(--border)}.artifact-list article div{min-width:0}.artifact-list strong,.artifact-list small{display:block;overflow-wrap:anywhere}.artifact-list small{color:var(--text-muted);margin-top:3px;font-size:calc(12px * var(--fs, 1))}.artifact-list a{color:var(--success);font-size:calc(12px * var(--fs, 1));white-space:nowrap}.artifact-error{color:var(--danger)}.artifact-empty{color:var(--text-muted);font-size:calc(12px * var(--fs, 1))}
 </style>
 <style scoped>
 .artifact-library{color:inherit}.artifact-library>header{gap:12px}.artifact-library header small,.artifact-list small{color:var(--muted,var(--text-muted))}.artifact-list article{display:block;border:1px solid var(--line,var(--border));border-radius:8px;padding:14px}.artifact-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}.artifact-pages{justify-content:flex-end}.artifact-library button{font:inherit;border:1px solid var(--line,var(--border));border-radius:6px;padding:6px 10px;background:var(--surface);color:inherit;cursor:pointer;min-height:36px}.artifact-library button:disabled{opacity:.5;cursor:default}.artifact-list details{margin-top:10px;overflow-wrap:anywhere}.artifact-list summary{cursor:pointer}.artifact-list label{display:grid;gap:5px;margin-top:10px}.artifact-list textarea{width:100%;box-sizing:border-box;resize:vertical;color:inherit;background:var(--surface);border:1px solid var(--line,var(--border));border-radius:6px;padding:8px;font:inherit}.artifact-list a{color:var(--accent,var(--success))}@media(max-width:640px){.artifact-list textarea{font-size:16px}.artifact-library button{min-height:40px}}

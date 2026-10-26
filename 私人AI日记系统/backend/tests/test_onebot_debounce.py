@@ -551,7 +551,7 @@ class OneBotDeliveryTests(unittest.IsolatedAsyncioTestCase):
             qq_delivery_ack_timeout_seconds=0.01,
             qq_delivery_max_retries=2,
         )
-        with patch("app.routes.onebot.settings", test_settings):
+        with patch("app.onebot_transport_service.settings", test_settings):
             with self.assertRaises(asyncio.TimeoutError):
                 await _enqueue_connection(self.connection, {"echo": "timeout"})
 
@@ -578,7 +578,7 @@ class OneBotDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_disconnect_failure_finishes_queued_requests(self) -> None:
         test_settings = replace(settings, qq_delivery_max_retries=0)
-        with patch("app.routes.onebot.settings", test_settings):
+        with patch("app.onebot_transport_service.settings", test_settings):
             first = asyncio.create_task(
                 _enqueue_connection(self.connection, {"echo": "first"})
             )
@@ -625,7 +625,7 @@ class OneBotDeliveryTests(unittest.IsolatedAsyncioTestCase):
         _active_connections[connection_key] = self.connection
 
         with (
-            patch("app.routes.onebot._enqueue_connection", new=AsyncMock(side_effect=asyncio.TimeoutError)),
+            patch("app.onebot_transport_service._enqueue_connection", new=AsyncMock(side_effect=asyncio.TimeoutError)),
             patch("app.proactive_service.note_qq_connection_state") as note_state,
         ):
             sent = await send_private_message("42", "测试消息")

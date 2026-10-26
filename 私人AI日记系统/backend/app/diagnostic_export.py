@@ -1,6 +1,7 @@
 """Allowlisted diagnostics: no user content, paths, provider addresses or errors."""
 from __future__ import annotations
 from datetime import datetime
+from .repositories import diagnostic_export_repository as repository
 from . import db, dependency_installer
 from . import local_vision_service
 
@@ -26,8 +27,8 @@ def snapshot() -> dict:
                              'verification_level': 'model_load' if verification.get('verification_level') == 'model_load' else 'unverified',
                              'error_code': code if code in safe_codes else '',
                              'has_error': bool(item.get('last_error') or verification.get('ok') is False or item.get('status') == 'degraded')})
-    with db.get_conn() as conn:
-        jobs = {r[0]: r[1] for r in conn.execute('SELECT status,COUNT(*) FROM creation_jobs GROUP BY status')}
+    with repository.transaction() as conn:
+        jobs = {r[0]: r[1] for r in conn.snapshot_find_creation_jobs()}
     vision = local_vision_service.passive_status()
     return {'schema_version': 1, 'checked_at': db.now_iso(), 'dependencies': dependencies,
             'capabilities': capability_snapshot()['capabilities'],
@@ -49,10 +50,10 @@ def behavior_baseline() -> dict:
         'learning_sessions', 'learning_items',
     )
     counts = {}
-    with db.get_conn() as conn:
+    with repository.transaction() as conn:
         for table in tables:
-            exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
-            counts[table] = int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]) if exists else 0
+            exists = conn.behavior_baseline_find_sqlite_master((table,))
+            counts[table] = int(conn.behavior_baseline_f_schema(table)[0]) if exists else 0
     capabilities = capability_snapshot().get('capabilities') or []
     return {
         'schema_version': 1,

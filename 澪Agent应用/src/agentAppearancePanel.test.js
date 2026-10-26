@@ -3,12 +3,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { parse, compileScript } from '@vue/compiler-sfc'
 import * as Vue from 'vue'
+import * as appearanceApi from './services/agentAppearanceApi.js'
 
 const { descriptor } = parse(fs.readFileSync(new URL('./components/AgentAppearancePanel.vue', import.meta.url), 'utf8'))
 const compiled = compileScript(descriptor, { id: 'appearance-test', inlineTemplate: true, genDefaultAs: 'component' }).content
   .replace(/import \{([^}]+)\} from ['"]vue['"]/g, (_, names) => `const {${names.replace(/\bas\b/g, ':')}} = Vue`)
-  .replace(/import \{ apiRequest \} from ['"][^'"]+['"]/, '')
-const createComponent = new Function('Vue', 'apiRequest', 'localStorage', 'window', 'FileReader', 'Event', `${compiled}; return component`)
+  .replace(/import SelectField from ['"][^'"]+['"]/g, `const SelectField = 'select'`)
+  .replace(/import \* as agentAppearanceApi from ['"][^'"]+['"]/, '')
+const createComponent = new Function('Vue', 'agentAppearanceApi', 'localStorage', 'window', 'FileReader', 'Event', `${compiled}; return component`)
 
 function mountPanel({ preferences = {}, context = {}, failure = '' } = {}) {
   const state = { preferences: { hero_shape: 'original', ...preferences }, failure, requests: [], events: [], reads: 0 }
@@ -44,7 +46,8 @@ function mountPanel({ preferences = {}, context = {}, failure = '' } = {}) {
   class Reader {
     readAsDataURL() { state.reads++; this.result = 'data:image/png;base64,test'; this.onload() }
   }
-  const component = createComponent({ ...Vue, vModelSelect: {} }, api, { setItem() {} }, { dispatchEvent: event => state.events.push(event.type) }, Reader, class { constructor(type) { this.type = type } })
+  const domainApi = Object.fromEntries(Object.entries(appearanceApi).map(([name, operation]) => [name, (...args) => operation(...args, api)]))
+  const component = createComponent({ ...Vue, vModelSelect: {} }, domainApi, { setItem() {} }, { dispatchEvent: event => state.events.push(event.type) }, Reader, class { constructor(type) { this.type = type } })
   const root = makeNode('root')
   const chat = Vue.reactive({ avatarUrl: '/api/settings/avatar?v=7', ...context })
   const app = renderer.createApp(component).provide('mio-chat-page', chat)

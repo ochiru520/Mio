@@ -14,6 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, W
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .. import companion_runtime_service as companion_runtime
 from .. import (
     call_session_service,
     companion_service,
@@ -43,11 +44,6 @@ from ..image_service import image_attachment_from_data_url
 
 router = APIRouter(prefix="/api/companion")
 DESKTOP_PET_CONVERSATION_ID = "desktop_pet"
-_pet_call_started_observer = False
-_pet_call_previous_audio_model = ""
-_pet_call_previous_audio_engine = ""
-_pet_call_resource_owner = ""
-CALL_ASR_MODEL = "large-v3-turbo"
 PHONE_TOOL_INTENT_RE = re.compile(
     r"(查一下|搜索|联网|提醒|记住|写进|创建|删除|修改|打开|关闭|设置|"
     r"看(?:看|一下)?(?:屏幕|画面|窗口)|(?:看到|看见).*(?:什么|啥)|现在.*(?:状态|正常|能力)|"
@@ -372,17 +368,8 @@ def _status_payload() -> dict[str, object]:
         "game": window_status,
         "voice_training": companion_service.voice_training_status(),
         "voice_runtime": companion_service.voice_runtime_status(),
-        "call": call_runtime_status(),
+        "call": companion_runtime.call_runtime_status(),
         "window_topology": window_topology_service.snapshot(),
-    }
-
-
-def call_runtime_status() -> dict[str, object]:
-    return {
-        **call_session_service.manager.status(),
-        "started_observer": _pet_call_started_observer,
-        "previous_audio_model": _pet_call_previous_audio_model,
-        "asr": system_audio_service.status(),
     }
 
 
@@ -423,63 +410,6 @@ def _pet_call_screen_context() -> str:
         parts.append(f"画面摘要时间：{last_analyzed_at}")
     parts.append("像电话聊天一样直接回答，优先一到三句自然短句。只有与当前话题有关时才提到屏幕内容。")
     return "\n".join(parts)
-
-
-def _ensure_call_asr_ready() -> dict[str, object]:
-    config = companion_service.load_config()
-    requested_engine = str(config.get("pet_call_asr_engine") or "auto").strip().lower()
-    resolved_engine = "whisper" if requested_engine == "auto" else requested_engine
-    if resolved_engine == "paraformer" and config.get("pet_call_input_language") == "ja":
-        return {
-            **system_audio_service.status(),
-            "ready": False,
-            "last_error": "Paraformer 中文模型不支持日语电话识别，请改用自动、Faster-Whisper 或 SenseVoice。",
-        }
-    forced = dict(config)
-    forced["screen_audio_enabled"] = True
-    forced["asr_engine"] = resolved_engine
-    if resolved_engine == "whisper":
-        forced["asr_model"] = CALL_ASR_MODEL
-    if (not config.get("screen_audio_enabled", True)
-            or not companion_service.window_observer.status().get("running")):
-        current = system_audio_service.start(forced, transcription_only=True)
-    else:
-        current = system_audio_service.start(forced)
-    return current
-
-
-def _release_call_resources_sync(call_session_id: str = "") -> None:
-    global _pet_call_started_observer, _pet_call_previous_audio_model
-    global _pet_call_previous_audio_engine, _pet_call_resource_owner
-
-    if (
-        call_session_id
-        and _pet_call_resource_owner
-        and call_session_id != _pet_call_resource_owner
-    ):
-        return
-
-    if _pet_call_started_observer:
-        companion_service.window_observer.stop()
-        screen_observation_service.end_session()
-    _pet_call_started_observer = False
-
-    config = companion_service.load_config()
-    if not companion_service.window_observer.status().get("running") or not config.get("screen_audio_enabled", True):
-        system_audio_service.stop()
-    else:
-        restored = dict(config)
-        restored["asr_engine"] = _pet_call_previous_audio_engine or "whisper"
-        if _pet_call_previous_audio_model in {"tiny", "base", "small"}:
-            restored["screen_audio_model"] = _pet_call_previous_audio_model
-        system_audio_service.start(restored)
-    _pet_call_previous_audio_model = ""
-    _pet_call_previous_audio_engine = ""
-    _pet_call_resource_owner = ""
-
-
-async def _release_call_resources(call_session_id: str = "") -> None:
-    await asyncio.to_thread(_release_call_resources_sync, call_session_id)
 
 
 def _preview_response(not_found_detail: str) -> Response:
@@ -600,63 +530,6 @@ def _apply_companion_settings(changes: dict[str, object]) -> None:
         saved_config = companion_service.load_config()
         if saved_config["screen_audio_enabled"]:
             system_audio_service.start(saved_config)
-
-
-def _start_observation_runtime(
-    *,
-    interval_ms: int,
-    capture_only: bool,
-    hwnd: int | None = None,
-    screen_scope: str = "",
-) -> dict[str, object]:
-    screen_observation_service.set_capture_only(capture_only)
-    observer = companion_service.window_observer
-    if screen_scope:
-        observer.select_screen(screen_scope)
-    elif hwnd:
-        observer.select(hwnd)
-    result = observer.start(interval_ms)
-    if not capture_only:
-        companion_service.save_config({"screen_audio_enabled": True})
-        if not _pet_call_resource_owner:
-            system_audio_service.start(companion_service.load_config())
-        else:
-            _ensure_call_asr_ready()
-    return result
-
-
-def _stop_observation_runtime() -> dict[str, object]:
-    result = companion_service.window_observer.stop()
-    screen_observation_service.end_session()
-    companion_service.save_config({"screen_audio_enabled": False})
-    if not _pet_call_resource_owner:
-        system_audio_service.stop()
-    else:
-        _ensure_call_asr_ready()
-    return result
-
-
-def _prepare_call_runtime(call_session_id: str) -> dict[str, object]:
-    global _pet_call_started_observer, _pet_call_previous_audio_model
-    global _pet_call_previous_audio_engine, _pet_call_resource_owner
-    audio_status = system_audio_service.status()
-    _pet_call_resource_owner = call_session_id
-    _pet_call_previous_audio_model = (
-        str(audio_status.get("model") or "") if audio_status.get("running") else ""
-    )
-    previous_engine = str(audio_status.get("requested_engine") or audio_status.get("engine") or "")
-    _pet_call_previous_audio_engine = {
-        "faster-whisper": "whisper",
-        "sensevoice-small": "sensevoice",
-        "paraformer-zh": "paraformer",
-    }.get(previous_engine, previous_engine)
-    observer_was_running = bool(companion_service.window_observer.status().get("running"))
-    _pet_call_started_observer = not observer_was_running
-    if _pet_call_started_observer:
-        companion_service.window_observer.select_screen("primary")
-        companion_service.window_observer.start(1000)
-        screen_observation_service.set_capture_only(False)
-    return audio_status
 
 
 def _normalized_echo_text(text: str) -> str:
@@ -1228,14 +1101,14 @@ async def companion_call_start():
                 "speech_interrupt",
                 {"reason": "call_ended", "response_id": previous_response_id},
             )
-        await _release_call_resources(str(previous.get("call_session_id") or ""))
+        await companion_runtime.release_call_resources(str(previous.get("call_session_id") or ""))
     session = call_session_service.manager.start()
     call_session_id = str(session["call_session_id"])
-    await asyncio.to_thread(_prepare_call_runtime, call_session_id)
+    await asyncio.to_thread(companion_runtime.prepare_call_runtime, call_session_id)
     if not call_session_service.manager.is_active_session(call_session_id):
         raise HTTPException(status_code=409, detail="电话会话在启动期间已被新会话替换。")
     asyncio.create_task(screen_observation_service.analyze_once(force=True))
-    asr = await asyncio.to_thread(_ensure_call_asr_ready)
+    asr = await asyncio.to_thread(companion_runtime.ensure_call_asr_ready)
     deadline = time.monotonic() + 25
     while not asr.get("ready") and asr.get("running") and time.monotonic() < deadline:
         await asyncio.sleep(0.1)
@@ -1245,7 +1118,7 @@ async def companion_call_start():
     if not asr.get("ready"):
         reason = str(asr.get("last_error") or "本地语音识别加载超时")
         if call_session_service.manager.fail_start(call_session_id, reason):
-            await _release_call_resources(call_session_id)
+            await companion_runtime.release_call_resources(call_session_id)
         raise HTTPException(status_code=503, detail=f"语音识别启动失败：{reason}")
     call_config = await asyncio.to_thread(companion_service.load_config)
     if call_config.get("voice_enabled", True):
@@ -1293,7 +1166,7 @@ async def companion_call_stop(payload: CompanionCallControlRequest | None = None
             "speech_interrupt",
             {"reason": "call_ended", "response_id": response_id},
         )
-    await _release_call_resources(str(current.get("call_session_id") or ""))
+    await companion_runtime.release_call_resources(str(current.get("call_session_id") or ""))
     return {
         "active": False,
         "stopped": True,
@@ -1337,7 +1210,7 @@ async def companion_call_device(payload: CompanionCallDeviceRequest):
 
 @router.get("/call/status")
 async def companion_call_status():
-    return call_runtime_status()
+    return companion_runtime.call_runtime_status()
 
 
 @router.post("/call/turn")
@@ -1362,7 +1235,7 @@ async def companion_call_turn(payload: CompanionCallTurnRequest):
     asr_started = time.monotonic()
     asr_status = system_audio_service.status()
     if not asr_status.get("ready"):
-        await asyncio.to_thread(_ensure_call_asr_ready)
+        await asyncio.to_thread(companion_runtime.ensure_call_asr_ready)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and not system_audio_service.status().get("ready"):
             await asyncio.sleep(0.1)
@@ -1741,7 +1614,6 @@ async def companion_voice_stream(payload: SpeechRequest):
     )
 
 
-
 @router.post("/voice/training/{action}")
 async def companion_voice_training(action: str):
     try:
@@ -1841,7 +1713,7 @@ async def companion_game_start(payload: WindowObservationRequest):
         await asyncio.to_thread(local_vision_service.unload_model)
         status = companion_service.game_observer.status()
         return await asyncio.to_thread(
-            _start_observation_runtime,
+            companion_runtime.start_observation_runtime,
             interval_ms=payload.interval_ms,
             capture_only=payload.capture_only,
             hwnd=int(status.get("hwnd") or 0),
@@ -1856,7 +1728,7 @@ async def companion_window_start(payload: WindowObservationRequest):
     try:
         status = companion_service.window_observer.status()
         return await asyncio.to_thread(
-            _start_observation_runtime,
+            companion_runtime.start_observation_runtime,
             interval_ms=payload.interval_ms,
             capture_only=payload.capture_only,
             hwnd=int(status.get("hwnd") or 0),
@@ -1868,14 +1740,14 @@ async def companion_window_start(payload: WindowObservationRequest):
 
 @router.post("/game/stop")
 async def companion_game_stop():
-    result = await asyncio.to_thread(_stop_observation_runtime)
+    result = await asyncio.to_thread(companion_runtime.stop_observation_runtime)
     await asyncio.to_thread(local_vision_service.unload_model)
     return result
 
 
 @router.post("/window/stop")
 async def companion_window_stop():
-    result = await asyncio.to_thread(_stop_observation_runtime)
+    result = await asyncio.to_thread(companion_runtime.stop_observation_runtime)
     await asyncio.to_thread(local_vision_service.unload_model)
     return result
 
@@ -1915,7 +1787,7 @@ async def companion_screen_start(payload: ScreenObservationRequest):
             else:
                 await asyncio.to_thread(local_vision_service.unload_model)
         return await asyncio.to_thread(
-            _start_observation_runtime,
+            companion_runtime.start_observation_runtime,
             interval_ms=payload.interval_ms,
             capture_only=payload.capture_only,
             screen_scope=payload.scope,
@@ -1964,7 +1836,7 @@ async def companion_screen_analyze(payload: ScreenObservationRequest):
 
 @router.post("/screen/stop")
 async def companion_screen_stop():
-    result = await asyncio.to_thread(_stop_observation_runtime)
+    result = await asyncio.to_thread(companion_runtime.stop_observation_runtime)
     await asyncio.to_thread(local_vision_service.unload_model)
     return result
 

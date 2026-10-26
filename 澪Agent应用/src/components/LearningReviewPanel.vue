@@ -1,6 +1,7 @@
 <script setup>
+import * as workspaceApi from '../services/workspaceApi.js'
+
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { apiRequest } from '../services/api.js'
 
 const props = defineProps({ projectId: { type: String, required: true }, mobile: Boolean })
 const emit = defineEmits(['expired'])
@@ -11,7 +12,7 @@ async function load() {
   const requestVersion = ++version, project = props.projectId
   const current = () => !disposed && version === requestVersion && props.projectId === project
   busy.value = true; error.value = ''
-  try { const value = await apiRequest(`/api/workspace/projects/${project}/learning/review?limit=50`, { headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} }); if (current()) { items.value = value.items || []; loaded.value = true } }
+  try { const value = await workspaceApi.loadProjectLearningReviewByLimit50(project, {headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {}}); if (current()) { items.value = value.items || []; loaded.value = true } }
   catch (cause) { if (current()) { if (cause.status === 401 && props.mobile) emit('expired'); error.value = cause.message } }
   finally { if (current()) busy.value = false }
 }

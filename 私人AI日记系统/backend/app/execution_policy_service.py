@@ -1,12 +1,14 @@
 """Owner-configured autonomy; tool policy is distinct from process isolation."""
 from __future__ import annotations
 
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from contextvars import ContextVar
 import json
 import os
 from pathlib import Path
 import threading
+
+from .repositories import execution_policy_repository as repository
 
 from . import db
 
@@ -21,25 +23,22 @@ CONTROL = {'agent_task_update', 'compress_current_context', 'terminal_stop', 'de
 
 
 def initialize():
-    with _lock, closing(db.get_conn()) as conn, conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS execution_policy(
-            id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,
-            settings_json TEXT NOT NULL,updated_at TEXT NOT NULL)''')
-        conn.execute('BEGIN IMMEDIATE')
-        row = conn.execute('SELECT * FROM execution_policy WHERE id=1').fetchone()
+    with _lock, repository.unit_of_work() as conn:
+        conn.ensure_policy_table()
+        conn.lock_for_update()
+        row = conn.stored_policy_for_migration()
         if row:
             values = json.loads(row['settings_json'])
             # Older mode-only saves left autonomy contradicted by terminal confirmation.
             if values.get('mode') == 'autonomous' and values.get('terminal_mode') == 'confirm':
                 values['terminal_mode'] = 'host'
-                conn.execute('UPDATE execution_policy SET revision=?,settings_json=?,updated_at=? WHERE id=1',
-                             (row['revision'] + 1, json.dumps(values, ensure_ascii=False), db.now_iso()))
+                conn.migrate_policy((row['revision'] + 1, json.dumps(values, ensure_ascii=False), db.now_iso()))
 
 
 def configuration():
     initialize()
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM execution_policy WHERE id=1').fetchone()
+    with repository.unit_of_work(write=False) as conn:
+        row = conn.stored_policy()
     return {**DEFAULTS, **(json.loads(row['settings_json']) if row else {}),
             'revision': row['revision'] if row else 0, 'configured': bool(row)}
 
@@ -80,15 +79,14 @@ def configure(*, expected_revision, **changes):
     if config['terminal_mode']=='sandbox' and not status(config['sandbox_image'])['available']:
         raise ValueError('隔离终端当前不可用。请启动 Docker 并准备对应镜像；不会自动改为本机执行。')
     initialize()
-    with _lock, closing(db.get_conn()) as conn, conn:
-        conn.execute('BEGIN IMMEDIATE')
-        row = conn.execute('SELECT revision FROM execution_policy WHERE id=1').fetchone()
+    with _lock, repository.unit_of_work() as conn:
+        conn.lock_for_update()
+        row = conn.policy_revision()
         revision = row[0] if row else 0
         if revision != expected_revision:
             raise ValueError('执行设置已在另一个窗口改变，请刷新后保存。')
         values={key:config[key] for key in DEFAULTS}
-        conn.execute('INSERT OR REPLACE INTO execution_policy VALUES(1,?,?,?)',
-            (revision+1,json.dumps(values,ensure_ascii=False),db.now_iso()))
+        conn.save_policy((revision+1,json.dumps(values,ensure_ascii=False),db.now_iso()))
     return snapshot()
 
 
@@ -124,6 +122,8 @@ def decision(definition, arguments, context):
     if definition.permission!=ToolPermission.HIGH_RISK_WRITE:
         return 'allow',''
     name = definition.name
+    if name == 'terminal_input':
+        return ('allow', '') if config['terminal_mode'] == 'host' else ('ask', '向本机交互终端输入需确认。')
     if name in {'code_apply_patch','code_restore','terminal_start','code_verify'}:
         from . import code_workspace_service as code
         try:

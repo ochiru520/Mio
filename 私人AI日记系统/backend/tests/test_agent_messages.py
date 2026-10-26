@@ -28,8 +28,6 @@ from app.secret_store import protect_secret
 from app.routes.agent import (
     AgentAttachmentRequest,
     AgentChatRequest,
-    ConversationUpdateRequest,
-    ModelProfileRequest,
     _agent_stats_payload,
     _day_dashboard_payload,
     _conversation_id,
@@ -41,11 +39,9 @@ from app.routes.agent import (
     approve_agent_task,
     cancel_agent_task,
     context_usage,
-    create_model_profile,
-    delete_conversation,
-    rename_conversation,
-    remove_model_profile,
 )
+from app.routes.conversations import ConversationUpdateRequest, delete_conversation, rename_conversation
+from app.routes.models import ModelProfileRequest, create_model_profile, remove_model_profile
 from app.routes import agent as agent_routes
 from app.routes.conversations import (
     ConversationMessageDeleteRequest,
@@ -953,13 +949,13 @@ class TodayStateAnalysisRetryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_analysis_can_retry_on_next_chat(self) -> None:
         today = db.today_string()
-        with patch("app.routes.chat.analyze_today_state", new=AsyncMock(side_effect=RuntimeError("temporary"))):
+        with patch("app.daily_state_analysis_service.analyze_today_state", new=AsyncMock(side_effect=RuntimeError("temporary"))):
             agent_routes._schedule_today_state_analysis()
             await asyncio.gather(*list(agent_routes._background_state_analysis_tasks))
 
         self.assertNotIn(today, agent_routes._analyzed_state_days)
 
-        with patch("app.routes.chat.analyze_today_state", new=AsyncMock(return_value={"ok": True})) as analyze:
+        with patch("app.daily_state_analysis_service.analyze_today_state", new=AsyncMock(return_value={"ok": True})) as analyze:
             agent_routes._schedule_today_state_analysis()
             await asyncio.gather(*list(agent_routes._background_state_analysis_tasks))
 

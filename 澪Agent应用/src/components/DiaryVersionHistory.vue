@@ -1,6 +1,7 @@
 <script setup>
+import * as diaryApi from '../services/diaryApi.js'
+
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { apiRequest } from '../services/api.js'
 const props = defineProps({ diary: { type: Object, required: true }, confirm: { type: Function, required: true } })
 const emit = defineEmits(['restored'])
 const expanded = ref(false), versions = ref([]), comparison = ref(null), busy = ref(false), error = ref('')
@@ -9,7 +10,7 @@ async function load() {
   const date = props.diary.date, n = ++revision
   busy.value = true; error.value = ''
   try {
-    const result = await apiRequest(`/api/diaries/${date}/versions`)
+    const result = await diaryApi.loadDiaryVersions(date, {})
     if (!disposed && n === revision && date === props.diary.date) versions.value = result.versions || []
   } catch (cause) { if (!disposed && n === revision) error.value = cause.message }
   finally { if (!disposed && n === revision) busy.value = false }
@@ -23,7 +24,7 @@ async function compare(version) {
   const date = props.diary.date, n = ++revision
   busy.value = true; error.value = ''; comparison.value = null
   try {
-    const result = await apiRequest(`/api/diaries/${date}/versions/${version}/diff`)
+    const result = await diaryApi.loadDiaryVersionDiff(date, version, {})
     if (!disposed && n === revision && date === props.diary.date) comparison.value = result
   } catch (cause) { if (!disposed && n === revision) error.value = cause.message }
   finally { if (!disposed && n === revision) busy.value = false }
@@ -36,7 +37,7 @@ async function restore(version) {
   const n = ++revision
   busy.value = true; error.value = ''
   try {
-    await apiRequest(`/api/diaries/${date}/versions/${version}/restore`, { method: 'POST', body: JSON.stringify({ expected_revision: current }) })
+    await diaryApi.submitDiaryVersionRestore(date, version, { expected_revision: current }, {})
     if (!disposed && n === revision && date === props.diary.date) emit('restored', date)
   } catch (cause) { if (!disposed && n === revision) error.value = cause.message }
   finally { if (!disposed && n === revision) busy.value = false }

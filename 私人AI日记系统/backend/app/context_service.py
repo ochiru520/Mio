@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from math import ceil
 from sqlite3 import Row
 
 from . import db
@@ -12,6 +11,7 @@ from .config import settings
 from .llm import call_chat_completion
 from .memory_service import build_structured_memory_context, is_group_conversation
 from .life_loop_service import build_follow_up_result_context
+from .prompt_budget import estimate_tokens, fact_key, query_terms, relevance, complete_text, select_sections
 
 
 SUMMARY_TYPE = "conversation_summary"
@@ -80,19 +80,6 @@ def _row_content(row: Row) -> str:
 
 def _row_char_count(row: Row) -> int:
     return len(_row_content(row)) + 24
-
-
-def estimate_tokens(text: object) -> int:
-    """Estimate mixed Chinese/English prompt tokens without adding a tokenizer dependency."""
-    value = str(text or "")
-    if not value:
-        return 0
-    cjk = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", value))
-    latin_runs = re.findall(r"[A-Za-z0-9_]+", value)
-    latin_tokens = sum(max(1, ceil(len(run) / 4)) for run in latin_runs)
-    punctuation = len(re.findall(r"[^\sA-Za-z0-9_\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", value))
-    whitespace = len(re.findall(r"\s+", value))
-    return max(1, int(ceil(cjk * 1.1 + latin_tokens + punctuation * 0.35 + whitespace * 0.1)))
 
 
 def _row_token_count(row: Row) -> int:
@@ -418,9 +405,13 @@ def _select_raw_messages(
 ) -> list[Row]:
     raw_messages = _uncompressed_rows(history_rows, summary_last_id)
     token_limit = max(1000, int(settings.chat_context_max_tokens))
+    # Supplementary entries are deduplicated against these selected rows in a
+    # second pass. Reserve their bound: packing remaining whole entries can
+    # otherwise grow slightly after deduplication and force another history cut.
+    supplemental_bound = min(2200, max(400, token_limit // 4)) if periodic_context else 0
     remaining_tokens = max(
         512,
-        token_limit - estimate_tokens(periodic_context) - estimate_tokens(summary_text),
+        token_limit - max(estimate_tokens(periodic_context), supplemental_bound) - estimate_tokens(summary_text),
     )
     return _trim_turn_rows_to_token_budget(raw_messages, remaining_tokens)
 
@@ -454,6 +445,7 @@ def preview_chat_context_usage(conversation_id: str, history_rows: list[Row]) ->
         conversation_id,
         _latest_user_query(history_rows),
         history_rows,
+        (),
     )
     summary_row = db.get_latest_memory(SUMMARY_TYPE, tags=conversation_id)
     summary_content = str(summary_row["content"] or "") if summary_row else ""
@@ -473,8 +465,12 @@ def preview_chat_context_usage(conversation_id: str, history_rows: list[Row]) ->
         summary_last_id,
         over_budget,
     )
+    periodic_context = build_periodic_memory_context(
+        conversation_id, _latest_user_query(history_rows), history_rows, raw_messages)
     used_chars, max_chars = _usage_values(periodic_context, summary_text, raw_messages)
     used_tokens, max_tokens = _token_usage_values(periodic_context, summary_text, raw_messages)
+    from .repositories.prompt_metrics_repository import latest_request_metrics
+    from .repositories.context_offload_repository import list_scope
     return {
         "used_chars": used_chars,
         "max_chars": max_chars,
@@ -486,6 +482,13 @@ def preview_chat_context_usage(conversation_id: str, history_rows: list[Row]) ->
         "warning": warning,
         "compression_triggered": compression_triggered,
         "has_summary": bool(summary_text),
+        "last_request_breakdown": latest_request_metrics(conversation_id),
+        "input_references": list_scope(conversation_id),
+        "breakdown": {"method": "mixed_text_heuristic_v1", "is_billing_usage": False,
+            "scope": "chat_memory_and_history_only", "unestimated_image_count": None,
+            "blocks": [{"category": "runtime_other", "estimated_tokens": estimate_tokens(periodic_context)},
+                       {"category": "runtime_compressed_memory", "estimated_tokens": estimate_tokens(summary_text)},
+                       {"category": "history", "estimated_tokens": sum(_row_token_count(row) for row in raw_messages)}]},
     }
 
 
@@ -495,6 +498,7 @@ def build_chat_context_snapshot(conversation_id: str, history_rows: list[Row]) -
         conversation_id,
         _latest_user_query(history_rows),
         history_rows,
+        (),
     )
     summary_row = db.get_latest_memory(SUMMARY_TYPE, tags=conversation_id)
     summary_content = str(summary_row["content"] or "") if summary_row else ""
@@ -514,6 +518,8 @@ def build_chat_context_snapshot(conversation_id: str, history_rows: list[Row]) -
         summary_last_id,
         over_budget,
     )
+    periodic_context = build_periodic_memory_context(
+        conversation_id, _latest_user_query(history_rows), history_rows, raw_messages)
 
     context_parts: list[str] = []
     if summary_text:
@@ -617,13 +623,49 @@ def _start_date_for_memory() -> str:
     return (today - timedelta(days=days - 1)).isoformat()
 
 
+def _requested_record_dates(query: str, today: str) -> set[str]:
+    anchor = date.fromisoformat(today)
+    dates = set(re.findall(r'\d{4}-\d{2}-\d{2}', query))
+    for name, delta in (('今天', 0), ('昨天', -1), ('前天', -2)):
+        if name in query:
+            dates.add((anchor + timedelta(days=delta)).isoformat())
+    for month, day in re.findall(r'(\d{1,2})月(\d{1,2})[日号]?', query):
+        try:
+            dates.add(date(anchor.year, int(month), int(day)).isoformat())
+        except ValueError:
+            pass
+    return dates
+
+
+def _rank_context_records(rows, query: str, today: str, fields: tuple[str, ...], *, limit: int):
+    terms = query_terms(query)
+    requested = _requested_record_dates(query, today)
+    ranked = []
+    for row in rows:
+        score = relevance(' '.join(str(row[field] or '') for field in fields), terms)
+        if str(row['date']) in requested:
+            score += 100
+        if score:
+            ranked.append((score, str(row['date']), row))
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in ranked[:limit]]
+
+
 def build_periodic_memory_context(
     conversation_id: str,
     query: str = "",
     history_rows: list[Row] | None = None,
+    visible_history_rows: list[Row] | None = None,
 ) -> str:
+    if is_group_conversation(conversation_id):
+        return ''
     start_date = _start_date_for_memory()
-    sections: list[str] = []
+    today = db.today_string()
+    sections: list[tuple[str, list[str]]] = []
+    # This is supplementary context, not the 272k conversation history budget.
+    # Attachments, tool receipts, current user input and stored facts are intact.
+    budget = min(2200, max(400, int(settings.chat_context_max_tokens) // 4))
+    visible_history = history_rows if visible_history_rows is None else visible_history_rows
 
     latest_user = db.get_last_message(conversation_id=conversation_id, role="user")
     latest_user_id = (
@@ -637,29 +679,26 @@ def build_periodic_memory_context(
         before_message_id=latest_user_id,
     )
     if temporal_evidence:
-        sections.append(temporal_evidence)
-
-    structured_memory = build_structured_memory_context(conversation_id, query)
-    if structured_memory:
-        sections.append(structured_memory)
-
-    follow_up_results = build_follow_up_result_context(conversation_id)
-    if follow_up_results:
-        sections.append(follow_up_results)
+        sections.append(('相关时间证据：', [temporal_evidence]))
 
     states = db.list_daily_states_since(start_date)
     if states:
-        lines = []
-        for row in states:
-            lines.append(
-                f"- {row['date']}：状态={row['daily_thirty_status']}；"
-                f"依据={row['daily_thirty_reason'] or '未确认'}；"
-                f"情绪={row['mood'] or '未确认'}；"
-                f"事件={row['key_events'] or '未确认'}；"
-                f"耗电={row['avoidance_signals'] or '未确认'}；"
-                f"下一步={row['next_min_action'] or '未确认'}"
-            )
-        sections.append("近几天状态板：\n" + "\n".join(lines))
+        current = [row for row in states if str(row['date']) == today]
+        past = _rank_context_records([row for row in states if str(row['date']) != today], query, today,
+            ('daily_thirty_reason', 'mood', 'key_events', 'avoidance_signals', 'next_min_action'), limit=1)
+        for title, rows in (('当前状态板：', current), ('相关历史状态：', past)):
+            lines = []
+            for row in rows:
+                fields = []
+                for name, label in (('daily_thirty_reason', '依据'), ('mood', '情绪'), ('key_events', '事件'),
+                                    ('avoidance_signals', '耗电'), ('next_min_action', '下一步')):
+                    value = str(row[name] or '').strip()
+                    if value:
+                        brief = complete_text(value, 70) or f"内容较长，需 get_daily_state(date={row['date']}) 回读"
+                        fields.append(f'{label}={brief}')
+                lines.append(f"- {row['date']}：状态={row['daily_thirty_status']}；" + '；'.join(fields))
+            if lines:
+                sections.append((title, lines))
 
     pending_threads = db.list_due_pending_threads(conversation_id, db.now_iso(), limit=4)
     if pending_threads:
@@ -668,55 +707,82 @@ def build_periodic_memory_context(
             follow_up = str(row["follow_up_after"] or "")
             timing = f"；适合跟进时间={follow_up}" if follow_up else ""
             lines.append(f"- {row['content']}{timing}")
-        sections.append(
-            "已经到达明确跟进时间的话题与约定：\n"
-            + "\n".join(lines)
-            + "\n这些不是待办清单。只有当前话题不冲突、用户也没有在表达明显情绪时，才自然碰一下；不要连续追问。"
-        )
+        sections.append(('已到期约定（仅话题适合时自然跟进，不连续追问）：', lines))
+
+    structured_memory = build_structured_memory_context(
+        conversation_id, query, max_tokens=min(1100, max(200, budget // 2)), history_rows=visible_history or ())
+    if structured_memory:
+        sections.append(('分层私人记忆：', [structured_memory]))
+
+    follow_up_results = build_follow_up_result_context(conversation_id, limit=3)
+    if follow_up_results:
+        # Each result keeps its original status, adjustment and recorded date.
+        entries = [line for line in follow_up_results.splitlines() if line.startswith('- ')]
+        relevant = [line for line in entries if relevance(line, query_terms(query))]
+        sections.append(('现实行动回访（尊重真实结果与调整，不要机械重复原建议）：', relevant[-2:] or entries[-1:]))
 
     diaries = db.list_diaries_since(start_date)
     if diaries:
+        selected = _rank_context_records(diaries, query, today, ('title', 'markdown_content'), limit=2)
+        if not selected:
+            selected = sorted(diaries, key=lambda row: str(row['date']), reverse=True)[:1]
         lines = []
-        for row in diaries:
-            body = _compact_text(str(row["markdown_content"] or ""), 420)
-            lines.append(f"- {row['date']}《{row['title']}》：{body}")
-        sections.append("近几天日记摘要：\n" + "\n".join(lines))
+        for row in selected:
+            from .memory_revision_service import sanitize_history
+            body = sanitize_history(str(row['markdown_content'] or ''))
+            excerpt = complete_text(body, 160)
+            detail = excerpt or '正文未载入，需 get_diary 按日期回读'
+            if excerpt != body:
+                detail += '（摘录非全文，必要时按日期回读）'
+            lines.append(f"- {row['date']}《{row['title']}》：{detail}")
+        sections.append(('日记摘录：', lines))
 
     reviews = db.list_daily_reviews_since(start_date)
     if reviews:
         lines = []
-        for row in reviews:
-            lines.append(f"- {row['date']}：{_compact_text(str(row['markdown_content'] or ''), 300)}")
-        sections.append("近几天 AI 回顾：\n" + "\n".join(lines))
+        for row in _rank_context_records(reviews, query, today, ('markdown_content',), limit=1):
+            from .memory_revision_service import sanitize_history
+            body = sanitize_history(str(row['markdown_content'] or ''))
+            excerpt = complete_text(body, 140)
+            if excerpt:
+                lines.append(f"- {row['date']}（AI回顾资料，不是执行事实；节选）：{excerpt}")
+        if lines:
+            sections.append(('相关AI回顾：', lines))
 
     messages = db.get_messages_since(start_date, conversation_id=conversation_id, limit=500)
     samples_by_day: dict[str, list[str]] = {}
+    visible_ids = {int(row['id']) for row in visible_history or ()}
+    from .memory_revision_service import sanitize_history
+    visible_text = {fact_key(sanitize_history(str(row['content']), source_message_id=int(row['id'])))
+                    for row in visible_history or ()}
+    terms = query_terms(query)
+    requested = _requested_record_dates(query, today)
     for row in messages:
-        if row["role"] != "user":
+        if row["role"] != "user" or int(row['id']) in visible_ids:
             continue
-        day = str(row["created_at"])[:10]
-        samples_by_day.setdefault(day, [])
+        try:
+            day = db.logical_date_for_datetime(datetime.fromisoformat(str(row['created_at'])))
+        except (TypeError, ValueError):
+            day = str(row['created_at'])[:10]
         from .memory_revision_service import sanitize_history
         content = sanitize_history(_row_content(row), source_message_id=int(row['id']))
-        samples_by_day[day].append(_compact_text(content, 90))
+        if fact_key(content) in visible_text or not (day in requested or relevance(content, terms)):
+            continue
+        excerpt = complete_text(content, 90)
+        if excerpt:
+            samples_by_day.setdefault(day, []).append(excerpt)
 
     if samples_by_day:
         lines = []
-        per_day = max(1, settings.memory_context_messages_per_day)
+        per_day = min(2, max(1, settings.memory_context_messages_per_day))
         for day, samples in sorted(samples_by_day.items()):
             picked = samples[-per_day:]
             lines.append(f"- {day}：" + " / ".join(picked))
-        sections.append("近几天用户原话线索：\n" + "\n".join(lines))
+        sections.append(('相关用户原话线索（不重复已发送的聊天历史）：', lines))
 
-    context = "\n\n".join(sections).strip()
-    if not context:
-        return ""
-
-    prefix = (
-        "以下是跨天周期记忆。它用于维持连续感，不代表用户本轮刚说过。"
-        "引用时要自然，不要暴露你在读取数据库或摘要。\n\n"
-    )
-    return _compact_text(prefix + context, settings.memory_context_max_chars)
+    return select_sections(sections, max_tokens=budget, max_chars=settings.memory_context_max_chars,
+        prefix='以下是按当前话题筛选的周期记忆资料，不是本轮用户新发言，不代表事实仍在今天发生。',
+        notice='部分补充资料未载入本轮；原记忆、日记与状态仍保留，必要时通过工具按话题或日期回读。')
 
 
 def _compression_messages(
@@ -762,22 +828,35 @@ def _compression_batch(conversation_id: str, summary: str, rows: list[Row]) -> l
 
 
 @operation("memory", automatic=True)
-async def _compress_old_messages(conversation_id: str, previous_summary: str, old_rows: list[Row], *, model_id: str | None = None) -> str:
-    return await call_chat_completion(
-        _compression_messages(conversation_id, previous_summary, old_rows), temperature=0.2,
-        **({"model_id": model_id} if model_id else {}),
-    )
+async def _compress_old_messages(conversation_id: str, previous_summary: str, old_rows: list[Row], *, model_id: str | None = None,
+                                 summary_strategy='independent', original_messages=None, original_tools=None,
+                                 original_model_id='') -> str:
+    from .context_input_policy import summary_request, summary_route
+    from .model_registry import get_model_profile
+    profile = get_model_profile(model_id) if summary_strategy == 'same_prefix' and model_id else None
+    messages, tools, tool_choice, selected_strategy = summary_request(_compression_messages(conversation_id, previous_summary, old_rows),
+        original_messages=original_messages, original_tools=original_tools, strategy=summary_strategy,
+        profile=profile, original_model_id=original_model_id)
+    with summary_route(profile, selected_strategy):
+        return await call_chat_completion(
+            messages, temperature=0.2,
+            **({'tools': tools, 'tool_choice': tool_choice} if tools else {}),
+            **({"model_id": model_id} if model_id else {}),
+        )
 
 
 async def build_chat_context(
     conversation_id: str,
     history_rows: list[Row],
     *, force: bool = False, model_id: str | None = None,
+    summary_strategy=None, original_messages=None, original_tools=None, original_model_id='',
 ) -> ChatContext:
+    summary_strategy = summary_strategy or settings.chat_summary_strategy
     periodic_context = build_periodic_memory_context(
         conversation_id,
         _latest_user_query(history_rows),
         history_rows,
+        (),
     )
     summary_row = db.get_latest_memory(SUMMARY_TYPE, tags=conversation_id)
     summary_content = str(summary_row["content"] or "") if summary_row else ""
@@ -795,18 +874,27 @@ async def build_chat_context(
         old_rows = _compression_batch(conversation_id, summary_text, old_rows)
         if old_rows:
             try:
+                from .conversation_state_service import capture_source, source_is_current
+                source_revision = capture_source(conversation_id)
                 new_summary = await _compress_old_messages(conversation_id, summary_text, old_rows,
-                    **({"model_id": model_id} if model_id else {}))
+                    **({"model_id": model_id} if model_id else {}),
+                    **({'summary_strategy': summary_strategy, 'original_messages': original_messages,
+                        'original_tools': original_tools, 'original_model_id': original_model_id}
+                       if summary_strategy != 'independent' else {}))
                 if not str(new_summary or "").strip():
                     raise ValueError("上下文摘要为空，未推进摘要水位。")
-                summary_last_id = int(old_rows[-1]["id"])
-                summary_text = _compact_text(new_summary, 1400)
+                if not source_is_current(source_revision):
+                    raise ValueError('摘要来源已被编辑或回退，旧摘要不再写入。')
+                new_summary_last_id = int(old_rows[-1]["id"])
+                new_summary_text = _compact_text(new_summary, 1400)
                 db.replace_memory(
                     SUMMARY_TYPE,
-                    _summary_with_marker(summary_text, summary_last_id),
+                    _summary_with_marker(new_summary_text, new_summary_last_id),
                     importance=4,
                     tags=conversation_id,
+                    expected_history_revision=source_revision['revision'],
                 )
+                summary_last_id, summary_text = new_summary_last_id, new_summary_text
             except OperationStopped:
                 pass
             except Exception:
@@ -820,6 +908,8 @@ async def build_chat_context(
         summary_last_id,
         over_budget,
     )
+    periodic_context = build_periodic_memory_context(
+        conversation_id, _latest_user_query(history_rows), history_rows, raw_messages)
 
     context_parts: list[str] = []
     if summary_text:

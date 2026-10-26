@@ -155,6 +155,8 @@ class PetEventHub:
                 "connection_count": len(self._clients),
                 "desktop_renderer_connected": desktop_renderer_count > 0,
                 "desktop_renderer_count": desktop_renderer_count,
+                "desktop_renderers": [dict(self._client_info.get(client, {})) for client in self._clients
+                                      if self._client_info.get(client, {}).get("runtime") in {"electron", "pywebview"}],
                 "last_connected_at": self._last_connected_at,
                 "last_disconnected_at": self._last_disconnected_at,
                 "last_event_at": self._last_event_at,
@@ -230,6 +232,7 @@ class PetEventHub:
             "ready",
             {
                 "protocol_version": 3,
+                "show_request_id": companion_service.pet_show_request_id(),
                 "settings": companion_service.load_config(),
                 "activity": companion_service.pet_activity_status(),
                 "screen": screen_observation_service.status(),
@@ -265,6 +268,19 @@ class PetEventHub:
                         self._last_error = error
                         self._renderer_errors.append(error)
                         self._renderer_errors = self._renderer_errors[-20:]
+                        if payload.get("stage") == "startup":
+                            self._client_info.setdefault(websocket, {}).update({
+                                "runtime": str(payload.get("runtime") or "unknown")[:30],
+                                "launch_id": str(payload.get("launch_id") or "")[:100],
+                                "model_ready": False, "visible": False, "startup_error": error,
+                            })
+                elif event_type == "renderer_loading":
+                    with self._lock:
+                        self._client_info[websocket] = {
+                            "runtime": str(payload.get("runtime") or "unknown")[:30],
+                            "launch_id": str(payload.get("launch_id") or "")[:100],
+                            "model_ready": False, "visible": False,
+                        }
                 elif event_type == "renderer_ready":
                     with self._lock:
                         runtime = str(payload.get("runtime") or "unknown")[:30]
@@ -272,6 +288,10 @@ class PetEventHub:
                             "runtime": runtime,
                             "model_id": str(payload.get("model_id") or "")[:100],
                             "ready_at": self._now(),
+                            "launch_id": str(payload.get("launch_id") or "")[:100],
+                            "show_request_id": str(payload.get("show_request_id") or "")[:100],
+                            "model_ready": payload.get("model_ready") is True,
+                            "visible": payload.get("visible") is True,
                         }
                         self._last_error = ""
                         self._renderer = {

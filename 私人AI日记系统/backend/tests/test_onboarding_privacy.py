@@ -121,7 +121,7 @@ class OnboardingPrivacyTests(unittest.TestCase):
             patch("app.privacy_service.screen_observation_service.end_session") as end_session,
             patch("app.privacy_service.system_audio_service.stop") as stop_audio,
             patch(
-                "app.routes.onebot.disconnect_all_connections",
+                "app.onebot_transport_service.disconnect_all_connections",
                 new=AsyncMock(return_value=2),
             ) as disconnect_qq,
         ):
@@ -152,7 +152,7 @@ class OnboardingPrivacyTests(unittest.TestCase):
             patch("app.privacy_service.screen_observation_service.end_session") as end_session,
             patch("app.privacy_service.system_audio_service.stop") as stop_audio,
             patch(
-                "app.routes.onebot.disconnect_all_connections",
+                "app.onebot_transport_service.disconnect_all_connections",
                 new=AsyncMock(side_effect=RuntimeError("qq close failed")),
             ) as disconnect_qq,
         ):
@@ -175,7 +175,7 @@ class OnboardingPrivacyTests(unittest.TestCase):
             patch.object(companion_service.window_observer, "stop"),
             patch("app.privacy_service.screen_observation_service.end_session"),
             patch("app.privacy_service.system_audio_service.stop"),
-            patch("app.routes.onebot.disconnect_all_connections", new=AsyncMock(return_value=0)),
+            patch("app.onebot_transport_service.disconnect_all_connections", new=AsyncMock(return_value=0)),
         ):
             retried = asyncio.run(privacy_service.pause_sensitive_capabilities())
         self.assertTrue(retried["paused"])
@@ -195,7 +195,7 @@ class OnboardingPrivacyTests(unittest.TestCase):
             patch.object(companion_service.window_observer, "stop"),
             patch("app.privacy_service.screen_observation_service.end_session"),
             patch("app.privacy_service.system_audio_service.stop"),
-            patch("app.routes.onebot.disconnect_all_connections", new=AsyncMock(return_value=0)),
+            patch("app.onebot_transport_service.disconnect_all_connections", new=AsyncMock(return_value=0)),
         ):
             asyncio.run(privacy_service.pause_sensitive_capabilities())
 
@@ -231,7 +231,7 @@ class OnboardingPrivacyTests(unittest.TestCase):
             patch.object(companion_service.window_observer, "stop"),
             patch("app.privacy_service.screen_observation_service.end_session"),
             patch("app.privacy_service.system_audio_service.stop"),
-            patch("app.routes.onebot.disconnect_all_connections", new=AsyncMock(return_value=0)),
+            patch("app.onebot_transport_service.disconnect_all_connections", new=AsyncMock(return_value=0)),
         ):
             asyncio.run(privacy_service.pause_sensitive_capabilities())
 

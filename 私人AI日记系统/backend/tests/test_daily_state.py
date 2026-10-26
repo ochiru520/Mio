@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from app import db
-from app.routes.chat import _chat_log_for_rows, analyze_today_state
+from app.daily_state_analysis_service import _chat_log_for_rows, analyze_today_state
 
 
 class DailyStateTests(unittest.IsolatedAsyncioTestCase):
@@ -41,8 +41,8 @@ class DailyStateTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         with (
-            patch("app.routes.chat.require_configured"),
-            patch("app.routes.chat.call_chat_completion", completion),
+            patch("app.daily_state_analysis_service.require_configured"),
+            patch("app.daily_state_analysis_service.call_chat_completion", completion),
         ):
             result = await analyze_today_state()
 

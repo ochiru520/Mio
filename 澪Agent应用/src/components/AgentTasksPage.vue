@@ -1,16 +1,18 @@
 <script setup>
+import SelectField from './SelectField.vue'
+import * as tasksApi from '../services/tasksApi.js'
+
 import { mergeLoadedItems } from '../scrollCollections.js'
 import WorkspacePager from './WorkspacePager.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Check, ChevronDown, ListChecks, Pause, Play, RefreshCw, Settings, X } from '@lucide/vue'
-import { apiRequest } from '../services/api.js'
+import { Check, ChevronDown, ListChecks, Pause, Play, RefreshCw, Settings, X } from '../icons/index.js'
 import { canResumeTask, taskStatusLabel } from '../agentTaskState.js'
 import RuntimeTimeline from './RuntimeTimeline.vue'
 import JobRecovery from './JobRecovery.vue'
 import AgentTaskProgress from './AgentTaskProgress.vue'
 import AgentTaskFollowUp from './AgentTaskFollowUp.vue'
 
-const props = defineProps({ compact: Boolean, conversationId: { type: String, default: '' } })
+const props = defineProps({ compact: Boolean, taskId:String, conversationId: { type: String, default: '' } })
 const emit = defineEmits(['open-settings'])
 const tasks = ref([])
 const error = ref('')
@@ -29,7 +31,7 @@ function closeOutside(event) {
   if (compactRoot.value && !compactRoot.value.contains(event.target)) expanded.value = false
 }
 const visible = computed(() => {
-  const values = filter.value === 'active' ? tasks.value.filter(t => !['completed', 'cancelled'].includes(t.status)) : tasks.value
+  const values = filter.value === 'active' ? tasks.value.filter(t => t.id===props.taskId || !['completed', 'cancelled'].includes(t.status)) : tasks.value
   return props.compact ? values.slice(0, 1) : values
 })
 
@@ -40,27 +42,30 @@ async function load() {
   const conversationId = props.conversationId
   const requestedFilter = filter.value
   const requestedOffset = offset.value
+  const requestedTask = props.taskId
   try {
-    const data = await apiRequest(`/api/agent/work?conversation_id=${encodeURIComponent(props.conversationId)}&status=${requestedFilter}&offset=${requestedOffset}`)
-    if (disposed || conversationId !== props.conversationId || requestedFilter !== filter.value || requestedOffset !== offset.value) return
+    const data = await tasksApi.loadWorkByConversationIdStatusOffset(props.conversationId, requestedFilter, requestedOffset, {})
+    if(requestedTask){const target=await tasksApi.loadWork(requestedTask);const selected=target.task || target;if(selected.conversation_id===conversationId)data.tasks=[selected,...(data.tasks || []).filter(item=>item.id!==selected.id)]}
+    if (disposed || conversationId !== props.conversationId || requestedFilter !== filter.value || requestedOffset !== offset.value || requestedTask !== props.taskId) return
     tasks.value = mergeLoadedItems(tasks.value,data.tasks || [],requestedOffset)
     hasMore.value = !!data.has_more
     budgetEnabled.value = !!data.limits?.enabled
     loaded.value = true
     error.value = ''
-  } catch (e) { if (!disposed && conversationId === props.conversationId) error.value = e.message }
-  finally { loading.value = false }
+  } catch (e) { if (!disposed && conversationId === props.conversationId && requestedTask === props.taskId) error.value = e.message }
+  finally { loading.value = false; if(!disposed && (conversationId !== props.conversationId || requestedTask !== props.taskId || requestedFilter !== filter.value || requestedOffset !== offset.value))void load() }
 }
-async function action(task, command) {
+async function action(task, command, actionId) {
   if (busy.value) return
   busy.value = task.id
   try {
-    await apiRequest(`/api/agent/work/${encodeURIComponent(task.id)}/${command}`, { method: 'POST', body: '{}' })
+    await (command === 'approve' ? tasksApi.approveWorkAction(task.id, actionId) : tasksApi.submitWork(task.id, command, {}))
     await load()
   } catch (e) { error.value = e.message }
   finally { busy.value = '' }
 }
 watch(() => props.conversationId, () => { tasks.value = []; expanded.value = false; load() })
+watch(() => props.taskId, () => { tasks.value=[]; offset.value=0; void load() })
 watch(() => visible.value[0]?.id, () => { expanded.value = false })
 watch(filter, () => { offset.value = 0; tasks.value = []; void load() })
 watch(offset, () => { void load() })
@@ -88,7 +93,7 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.rem
         <p v-if="task.snapshot?.blocker" class="task-blocker">{{ task.snapshot.blocker }}</p>
         <p v-if="task.snapshot?.next_step">下一步：{{ task.snapshot.next_step }}</p>
         <ol v-if="task.snapshot?.plan?.length"><li v-for="(step,index) in task.snapshot.plan" :key="index">{{ step }}</li></ol>
-        <div v-for="step in (task.observations || []).filter(s => task.status === 'waiting_confirmation' && s.status === 'needs_confirmation')" :key="step.step_id" class="goal-confirm"><span>待确认：{{ step.tool_name }}</span><button type="button" :disabled="!!busy" @click="action(task, `actions/${step.action_id}/approve`)">确认执行</button></div>
+        <div v-for="step in (task.observations || []).filter(s => task.status === 'waiting_confirmation' && s.status === 'needs_confirmation')" :key="step.step_id" class="goal-confirm"><span>待确认：{{ step.tool_name }}</span><button type="button" :disabled="!!busy" @click="action(task, 'approve', step.action_id)">确认执行</button></div>
         <details v-if="task.observations?.length"><summary>执行记录 · {{ task.observations.length }}</summary><ul><li v-for="step in task.observations" :key="step.step_id">{{ step.tool_name }} · {{ step.status }}<p v-if="step.error">{{ step.error }}</p></li></ul></details>
         <JobRecovery :observations="task.observations || []" @changed="load" /><small>模型费用 ¥{{ Number(task.spent_yuan || 0).toFixed(4) }}<template v-if="task.snapshot?.cost_unknown">（部分费用未知）</template></small>
       </section>
@@ -97,7 +102,7 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.rem
   <section v-else-if="!compact" class="agent-tasks">
     <header v-if="!compact" class="task-heading">
       <h2><ListChecks :size="20" />任务</h2>
-      <select v-model="filter" aria-label="任务状态"><option value="active">当前任务</option><option value="all">全部任务</option></select>
+      <SelectField v-model="filter" aria-label="任务状态"><option value="active">当前任务</option><option value="all">全部任务</option></SelectField>
       <button title="刷新任务" :disabled="loading" @click="load"><RefreshCw :class="{ spin: loading }" :size="17" /></button>
       <button title="任务设置" @click="emit('open-settings')"><Settings :size="17" /></button>
     </header>
@@ -115,7 +120,7 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.rem
         <ul><li v-for="step in task.observations" :key="step.step_id"><code>{{ step.tool_name }}</code><span>{{ step.status }}</span><p v-if="step.error">{{ step.error }}</p><a v-if="step.result?.verified && step.result?.url" :href="step.result.url" download>{{ step.result.name }}</a></li></ul>
       </details>
       <div v-for="step in task.observations.filter(s => task.status === 'waiting_confirmation' && s.status === 'needs_confirmation')" :key="`approve-${step.step_id}`" class="task-confirm">
-        <span>待确认：{{ step.tool_name }}</span><button :disabled="!!busy" @click="action(task, `actions/${step.action_id}/approve`)"><Check :size="15" />确认执行</button>
+        <span>待确认：{{ step.tool_name }}</span><button :disabled="!!busy" @click="action(task, 'approve', step.action_id)"><Check :size="15" />确认执行</button>
       </div>
       <footer>
         <JobRecovery :observations="task.observations || []" @changed="load" /><small>模型费用 ¥{{ Number(task.spent_yuan || 0).toFixed(4) }}<template v-if="task.snapshot.cost_unknown">（部分费用未知）</template><template v-if="budgetEnabled"> / ¥{{ Number(task.budget_yuan).toFixed(2) }}</template></small>
@@ -137,9 +142,9 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.rem
 .task-goal-strip button:focus-visible{outline:2px solid var(--muted);outline-offset:1px}
 .goal-row .goal-summary{flex:1;min-width:0;justify-content:flex-start;text-align:left;font-size:calc(12px * var(--fs, 1))}
 .goal-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.goal-status{flex-shrink:0;font-size:calc(11px * var(--fs, 1))}.goal-row svg{flex-shrink:0}.rotated{transform:rotate(180deg)}
+.goal-status{flex-shrink:0;font-size:calc(12px * var(--fs, 1))}.goal-row svg{flex-shrink:0}.rotated{transform:rotate(180deg)}
 .goal-details{position:absolute;bottom:calc(100% + 6px);left:0;right:0;z-index:30;max-height:min(280px,40vh);overflow:auto;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);box-shadow:0 8px 28px var(--shadow-tint);overflow-wrap:anywhere}
-.goal-details header{display:flex;align-items:center;justify-content:space-between}.goal-details p,.goal-details li{font-size:calc(12px * var(--fs, 1));line-height:1.6}.goal-details small{display:block;margin-top:10px;color:var(--muted)}.goal-confirm{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.goal-confirm button{border:1px solid var(--line)}.goal-error{display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);font-size:calc(11px * var(--fs, 1));max-height:48px;overflow:auto}
+.goal-details header{display:flex;align-items:center;justify-content:space-between}.goal-details p,.goal-details li{font-size:calc(12px * var(--fs, 1));line-height:1.6}.goal-details small{display:block;margin-top:10px;color:var(--muted)}.goal-confirm{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.goal-confirm button{border:1px solid var(--line)}.goal-error{display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);font-size:calc(12px * var(--fs, 1));max-height:48px;overflow:auto}
 .task-heading,.task-heading h2,.task-item header,.task-item footer{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .task-heading h2{font-size:calc(20px * var(--fs, 1));margin-right:auto}.task-item{border-bottom:1px solid var(--border);padding:18px 0}.task-item header strong{flex:1;min-width:120px;overflow-wrap:anywhere}.task-item header span{font-size:calc(12px * var(--fs, 1));color:var(--success)}.task-item p,.task-item li{font-size:calc(13px * var(--fs, 1));overflow-wrap:anywhere;line-height:1.6}.task-item footer{margin-top:12px}.task-item footer small{margin-right:auto;color:var(--text-muted)}.task-item button,.task-heading button,.task-limits button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:5px 9px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:inherit;cursor:pointer}.task-error,.task-blocker{color:var(--danger)}.task-confirm{display:flex;gap:12px;align-items:center;margin:12px 0}.task-limits{margin-top:24px}.task-limits>div{display:flex;gap:16px;flex-wrap:wrap;padding-top:16px}.task-limits label{display:grid;gap:6px;font-size:calc(12px * var(--fs, 1))}.task-limits input{width:100px;padding:6px;border:1px solid var(--border);border-radius:4px}.empty-tasks{padding:32px 0;color:var(--text-muted)}details summary{cursor:pointer;font-size:calc(13px * var(--fs, 1))}code{margin-right:12px}button:disabled{opacity:.5;cursor:wait}@media(max-width:600px){.agent-tasks{padding:14px}.task-item header{align-items:flex-start}.task-item footer small{width:100%}}
 </style>

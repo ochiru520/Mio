@@ -328,7 +328,7 @@ class AutonomyServiceTests(unittest.IsolatedAsyncioTestCase):
         try:
             object.__setattr__(autonomy_service.settings, "qq_bot_enabled", True)
             object.__setattr__(autonomy_service.settings, "qq_allowed_user_ids", ("10001",))
-            with patch("app.routes.onebot.send_private_message", new=AsyncMock()) as send:
+            with patch("app.onebot_transport_service.send_private_message", new=AsyncMock()) as send:
                 result = await autonomy_service.process_once(self.now)
         finally:
             for name, value in originals.items():

@@ -1,7 +1,8 @@
 <script setup>
+import * as runtimeApi from '../services/runtimeApi.js'
+
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { Activity, RefreshCw } from '@lucide/vue'
-import { apiRequest } from '../services/api.js'
+import { Activity, RefreshCw } from '../icons/index.js'
 
 const props = defineProps({ mode: { type: String, default: 'agent' }, taskId: { type: String, default: '' } })
 const operations = ref([])
@@ -19,7 +20,7 @@ async function load() {
   try {
     const query = new URLSearchParams({ mode: props.mode, limit: '40' })
     if (props.taskId) query.set('task_id', props.taskId)
-    operations.value = (await apiRequest(`/api/runtime/operations?${query}`)).operations || []
+    operations.value = (await runtimeApi.loadOperations(query, {})).operations || []
     error.value = ''
   } catch (cause) { error.value = cause.message }
   finally { loading.value = false }
@@ -43,5 +44,5 @@ onBeforeUnmount(() => window.clearInterval(timer))
 </template>
 
 <style scoped>
-.runtime-timeline{margin:18px 0 24px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:14px 0}.runtime-timeline>header{display:flex;justify-content:space-between;align-items:center;gap:12px}.runtime-timeline h3{display:flex;align-items:center;gap:7px;margin:0;font-size:calc(15px * var(--fs, 1))}.runtime-timeline header small{display:block;color:var(--text-muted);margin-top:4px}.runtime-timeline header button{display:flex;border:1px solid var(--border);background:var(--surface);border-radius:5px;padding:6px;cursor:pointer}.timeline-operation{display:flex;gap:10px;position:relative;padding:13px 0 3px 12px}.timeline-marker{width:7px;height:7px;border-radius:50%;background:var(--success);margin-top:6px;flex:0 0 auto}.timeline-main{min-width:0;flex:1}.timeline-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.timeline-title span,.timeline-title b{font-size:calc(11px * var(--fs, 1));font-weight:500;color:var(--text-muted)}.timeline-title b.timeline-failed{color:var(--danger)}.timeline-title b.timeline-running{color:var(--warning)}.timeline-main>small{display:block;color:var(--text-muted);margin-top:4px;overflow-wrap:anywhere}.timeline-main details{margin-top:7px}.timeline-main summary{cursor:pointer;font-size:calc(12px * var(--fs, 1))}.timeline-main ul{margin:6px 0 0;padding-left:18px}.timeline-main li{display:flex;gap:8px;align-items:center;font-size:calc(12px * var(--fs, 1));flex-wrap:wrap}.timeline-main li small{color:var(--text-muted)}.timeline-main li em{color:var(--danger);font-style:normal}.timeline-error{color:var(--danger)}.timeline-empty{color:var(--text-muted);font-size:calc(12px * var(--fs, 1))}
+.runtime-timeline{margin:18px 0 24px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:14px 0}.runtime-timeline>header{display:flex;justify-content:space-between;align-items:center;gap:12px}.runtime-timeline h3{display:flex;align-items:center;gap:7px;margin:0;font-size:calc(15px * var(--fs, 1))}.runtime-timeline header small{display:block;color:var(--text-muted);margin-top:4px}.runtime-timeline header button{display:flex;border:1px solid var(--border);background:var(--surface);border-radius:5px;padding:6px;cursor:pointer}.timeline-operation{display:flex;gap:10px;position:relative;padding:13px 0 3px 12px}.timeline-marker{width:7px;height:7px;border-radius:50%;background:var(--success);margin-top:6px;flex:0 0 auto}.timeline-main{min-width:0;flex:1}.timeline-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.timeline-title span,.timeline-title b{font-size:calc(12px * var(--fs, 1));font-weight:500;color:var(--text-muted)}.timeline-title b.timeline-failed{color:var(--danger)}.timeline-title b.timeline-running{color:var(--warning)}.timeline-main>small{display:block;color:var(--text-muted);margin-top:4px;overflow-wrap:anywhere}.timeline-main details{margin-top:7px}.timeline-main summary{cursor:pointer;font-size:calc(12px * var(--fs, 1))}.timeline-main ul{margin:6px 0 0;padding-left:18px}.timeline-main li{display:flex;gap:8px;align-items:center;font-size:calc(12px * var(--fs, 1));flex-wrap:wrap}.timeline-main li small{color:var(--text-muted)}.timeline-main li em{color:var(--danger);font-style:normal}.timeline-error{color:var(--danger)}.timeline-empty{color:var(--text-muted);font-size:calc(12px * var(--fs, 1))}
 </style>

@@ -106,13 +106,12 @@ async def completed(context,job,timeout_seconds=45):
     # a worker still using this test's database and process handles.
     deadline=time.monotonic()+timeout_seconds
     while time.monotonic()<deadline:
-        current=terminal.read(context,job['job_id'])
+        current=terminal.read(context,job['job_id'],deliver=False)
         if current['status']!='running' and job['job_id'] not in terminal._running: return current
         await asyncio.sleep(.05)
     raise AssertionError(f'command did not terminate within {timeout_seconds}s: {current}')
 
 
-# Exercise stdout directly, without depending on cmdlet module discovery.
 @pytest.mark.parametrize('command,status,exit_code',[("[Console]::WriteLine('hello'); exit 0",'completed',0),("[Console]::Error.WriteLine('bad'); exit 7",'failed',7),("Start-Sleep -Seconds 10",'timed_out',None)])
 def test_real_terminal_success_failure_timeout(project,command,status,exit_code):
     _,_,config,context=project

@@ -117,9 +117,20 @@ class MemoryRepository:
             ).fetchone()
 
 
-    def replace_memory(self, memory_type: str, content: str, importance: int = 3, tags: str = "") -> None:
+    def replace_memory(self, memory_type: str, content: str, importance: int = 3, tags: str = "", *, expected_history_revision: int | None = None) -> None:
         timestamp = self._dep_now_iso()
         with self._dep_get_conn() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if memory_type == 'conversation_summary':
+                if expected_history_revision is not None:
+                    from .conversation_state_service_repository import bind
+                    if bind(conn).revision(tags) != expected_history_revision:
+                        raise ValueError('摘要来源历史已变化，拒绝迟到写入。')
+                import re
+                marker = re.search(r'<!--\s*last_message_id:(\d+)\s*-->', content)
+                if marker and conn.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_invalidated_messages'").fetchone():
+                    if conn.execute('SELECT 1 FROM conversation_invalidated_messages WHERE message_id=? AND conversation_id=?', (int(marker[1]), tags)).fetchone():
+                        raise ValueError('摘要来源历史已失效，拒绝迟到写入。')
             conn.execute(
                 "DELETE FROM memories WHERE type = ? AND tags = ?",
                 (memory_type, tags),
@@ -162,6 +173,7 @@ class MemoryRepository:
         timestamp = self._dep_now_iso()
         with self._dep_get_conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_source_active(conn, source_conversation_id, source_message_id)
             exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_user_controls'").fetchone()
             if exists:
                 controlled = conn.execute('SELECT c.action,c.memory_id,m.content FROM memory_user_controls c JOIN structured_memories m ON m.id=c.memory_id WHERE c.category=? AND c.memory_key=?', (category, memory_key)).fetchone()
@@ -282,6 +294,8 @@ class MemoryRepository:
     ) -> int:
         timestamp = self._dep_now_iso()
         with self._dep_get_conn() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            self._assert_source_active(conn, source_conversation_id, source_message_id)
             cursor = conn.execute(
                 """
                 INSERT INTO structured_memories (
@@ -316,6 +330,13 @@ class MemoryRepository:
             memory_id = int(cursor.lastrowid)
             self._upsert_structured_memory_fts(conn, memory_id, memory_key, category, content)
             return memory_id
+
+    def _assert_source_active(self, conn, conversation_id, message_id):
+        if not message_id:
+            return
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_invalidated_messages'").fetchone():
+            if conn.execute('SELECT 1 FROM conversation_invalidated_messages WHERE message_id=? AND conversation_id=?', (int(message_id), conversation_id)).fetchone():
+                raise ValueError('记忆来源消息已被编辑或回退，拒绝迟到提取结果。')
 
 
     def list_structured_memories(self,

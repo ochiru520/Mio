@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import closing
 import hashlib
 import json
+
+from .repositories import context_tools_repository as repository
 
 from . import db, maintenance_service
 from .tool_types import EmptyToolInput, ToolDefinition, ToolPermission
@@ -56,15 +57,12 @@ async def compress_for_context(context):
     if not identity:
         raise ValueError("缺少当前消息的执行标识，未重复发起压缩。")
     key = hashlib.sha256(f"{conversation_id}\x1f{identity}".encode()).hexdigest()
-    with closing(db.get_conn()) as conn, conn:
-        db.assert_conversation_writable(conversation_id, conn)
-        conn.execute("""CREATE TABLE IF NOT EXISTS context_tool_requests(
-            request_key TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
-            status TEXT NOT NULL, result_json TEXT NOT NULL DEFAULT '{}')""")
-        created = conn.execute("INSERT OR IGNORE INTO context_tool_requests(request_key,conversation_id,status) VALUES(?,?,'running')",
-                               (key, conversation_id)).rowcount
+    with repository.unit_of_work() as conn:
+        db.assert_conversation_writable(conversation_id, conn.connection)
+        conn.ensure_request_table()
+        created = conn.claim_request((key, conversation_id))
         if not created:
-            row = conn.execute("SELECT status,result_json FROM context_tool_requests WHERE request_key=?", (key,)).fetchone()
+            row = conn.stored_request((key,))
             if row["status"] in STATUSES:
                 return {**json.loads(row["result_json"]), "replayed": True}
             return _failed("同一消息的压缩已启动但尚未确认结果，未自动重复执行。")
@@ -77,12 +75,11 @@ async def compress_for_context(context):
             value = await force_compress_context(conversation_id, model_id=None)
         result = _bounded_result(value, agent=conversation_id.startswith("desktop_agent_"))
     except asyncio.CancelledError:
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE context_tool_requests SET status='cancelled' WHERE request_key=?", (key,))
+        with repository.unit_of_work() as conn:
+            conn.cancel_request((key,))
         raise
     except Exception:
         result = _failed("上下文压缩暂未成功，请检查模型状态；未报告压缩完成。")
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("UPDATE context_tool_requests SET status=?,result_json=? WHERE request_key=?",
-                     (result["status"], json.dumps(result, ensure_ascii=False), key))
+    with repository.unit_of_work() as conn:
+        conn.finish_request((result["status"], json.dumps(result, ensure_ascii=False), key))
     return result

@@ -249,7 +249,7 @@ class RuntimeSettingsTest(unittest.TestCase):
             patch("app.routes.agent._day_dashboard_payload", return_value={}),
             patch("app.routes.agent._context_usage", return_value={}),
             patch("app.routes.agent.db.get_recent_messages", return_value=[]),
-            patch("app.routes.agent._qq_status", new=AsyncMock(return_value={})),
+            patch("app.qq_status_service.status", new=AsyncMock(return_value={})),
         ):
             with TestClient(create_app()) as client:
                 response = client.get("/api/agent/bootstrap")

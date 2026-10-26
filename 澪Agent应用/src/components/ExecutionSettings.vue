@@ -1,6 +1,8 @@
 <script setup>
+import SelectField from './SelectField.vue'
+import * as executionApi from '../services/executionApi.js'
+
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { apiRequest } from '../services/api.js'
 import { selectLocalPath } from '../services/localPicker.js'
 import ExecutionPolicy from './ExecutionPolicy.vue'
 const props = defineProps({ initialProjectId: String, projects: { type: Array, default: () => [] } })
@@ -40,7 +42,7 @@ async function load() {
   loadedProjectId.value = ''; loadError.value = ''; windows.value = []
   if (!id) return
   busy.value = true; notice.value = ''
-  try { const data = await apiRequest(`/api/workspace/execution/projects/${id}`); if (n !== version || id !== projectId.value) return
+  try { const data = await executionApi.loadProject(id, {}); if (n !== version || id !== projectId.value) return
     Object.assign(config, data); for (const key of Object.keys(commands)) commands[key] = data.code.verification[key] || ''
     executableText.value = data.desktop.executables.join('\n')
     loadedProjectId.value = id
@@ -64,7 +66,7 @@ async function load() {
 }
 async function loadDefaults() {
   const n = ++defaultsVersion
-  try { const result = await apiRequest('/api/workspace/execution/defaults'); if (n === defaultsVersion) { capabilityDefaults.value = result; defaultsError.value = '' } }
+  try { const result = await executionApi.loadDefaults({}); if (n === defaultsVersion) { capabilityDefaults.value = result; defaultsError.value = '' } }
   catch (error) { if (n === defaultsVersion) defaultsError.value = error.message }
 }
 async function changeDefault(event, key) {
@@ -74,7 +76,7 @@ async function changeDefault(event, key) {
   if (key === 'read_enabled' && !changes[key]) Object.assign(changes, { write_enabled: false, execute_enabled: false })
   if (['write_enabled', 'execute_enabled'].includes(key) && changes[key]) changes.read_enabled = true
   try {
-    capabilityDefaults.value = await apiRequest('/api/workspace/execution/defaults', { method: 'PUT', body: JSON.stringify({ ...changes, expected_revision: capabilityDefaults.value.revision }) })
+    capabilityDefaults.value = await executionApi.saveDefaults({ ...changes, expected_revision: capabilityDefaults.value.revision }, {})
     window.dispatchEvent(new Event('mio-execution-defaults-changed'))
   } catch (error) { await loadDefaults(); defaultsError.value = error.message }
   finally { event.target.checked = Boolean(capabilityDefaults.value?.[key]); defaultsBusy.value = false }
@@ -92,7 +94,7 @@ async function save(kind) {
       execute_enabled: config.code.execute_enabled, verification: { ...commands }, expected_revision: config.code.revision }
       : { enabled: config.desktop.enabled, windows: config.desktop.windows, executables: executableText.value.split('\n').map(s => s.trim()).filter(Boolean), expected_revision: config.desktop.revision }
     if (rootChanged) Object.assign(body, { read_enabled: false, write_enabled: false, execute_enabled: false })
-    const result = await apiRequest(`/api/workspace/execution/projects/${id}/${kind}`, { method: 'PUT', body: JSON.stringify(body) })
+    const result = await executionApi.saveProject(id, kind, body, {})
     if (id === projectId.value) {
       config[kind] = result
       const baseline=JSON.parse(saved.value); baseline.config[kind]=result
@@ -124,7 +126,7 @@ async function saveAll() {
   if (codeChanged && !await save('code')) return
   await save('desktop')
 }
-async function refreshWindows() { busy.value = true; try { windows.value = (await apiRequest('/api/workspace/execution/desktop/windows', { timeoutMs: 45000 })).windows } catch (error) { notice.value = error.message } finally { busy.value = false } }
+async function refreshWindows() { busy.value = true; try { windows.value = (await executionApi.loadDesktopWindows({timeoutMs: 45000})).windows } catch (error) { notice.value = error.message } finally { busy.value = false } }
 async function toggleWindow(item, checked) { config.desktop.windows = checked ? [...config.desktop.windows.filter(w => w.hwnd !== item.hwnd), item] : config.desktop.windows.filter(w => w.hwnd !== item.hwnd);await save('desktop') }
 async function toggleCode(key) {
   if (key==='read_enabled' && !config.code.read_enabled) {config.code.write_enabled=false;config.code.execute_enabled=false}
@@ -148,7 +150,7 @@ onMounted(() => { projectId.value = preferredProject(); void loadDefaults(); win
       <p v-if="defaultsError" class="execution-defaults-error" role="alert">{{ defaultsError }} <button type="button" :disabled="defaultsBusy" @click="loadDefaults">重试</button></p>
     </section>
     <header class="execution-header"><div><h1>目录与窗口</h1><p>选择要交给 Mio 使用的项目目录和电脑窗口。</p></div><button v-if="projectId && !loadError" type="button" :disabled="busy" @click="load">重新读取权限</button></header>
-    <label class="execution-project">当前项目<select v-model="projectId" aria-label="执行权限项目" :disabled="busy"><option value="">选择项目</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
+    <label class="execution-project">当前项目<SelectField v-model="projectId" aria-label="执行权限项目" :disabled="busy"><option value="">选择项目</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></SelectField></label>
     <p v-if="!projects.length">先创建项目，再绑定代码目录或授权电脑窗口。</p><p v-if="notice" class="execution-notice" role="status">{{ notice }}</p>
     <p v-if="projectId && loadError" role="alert">执行权限读取失败：{{ loadError }} <button type="button" :disabled="busy" @click="load">重新读取</button></p>
     <p v-else-if="projectId && loadedProjectId !== projectId" role="status">正在读取项目执行权限…</p>
@@ -185,5 +187,5 @@ onMounted(() => { projectId.value = preferredProject(); void loadDefaults(); win
 </style>
 
 <style scoped>
-.execution-access-levels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:16px 0}.execution-access-levels button{display:grid;gap:6px;text-align:left;padding:12px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--text);cursor:pointer;min-width:0}.execution-access-levels button.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}.execution-access-levels small{color:var(--text-muted);font-size:11px;line-height:1.5}.execution-access-levels strong{font-size:12px}.execution-access-levels button:disabled{opacity:.5;cursor:default}@media(max-width:480px){.execution-access-levels{grid-template-columns:1fr}}
+.execution-access-levels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:16px 0}.execution-access-levels button{display:grid;gap:6px;text-align:left;padding:12px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--text);cursor:pointer;min-width:0}.execution-access-levels button.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}.execution-access-levels small{color:var(--text-muted);font-size:12px;line-height:1.5}.execution-access-levels strong{font-size:12px}.execution-access-levels button:disabled{opacity:.5;cursor:default}@media(max-width:480px){.execution-access-levels{grid-template-columns:1fr}}
 </style>

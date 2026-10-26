@@ -1,6 +1,8 @@
 <script setup>
+import SelectField from './SelectField.vue'
+import * as creationApi from '../services/creationApi.js'
+
 import { computed, reactive, ref, watch } from 'vue'
-import { apiRequest } from '../services/api.js'
 const props = defineProps({ observations: { type: Array, default: () => [] } })
 const emit = defineEmits(['changed'])
 const drafts = reactive({})
@@ -25,7 +27,7 @@ async function perform(job, command, payload = {}) {
   if (busy.value) return
   busy.value = true; error.value = ''
   try {
-    const value = await apiRequest(`/api/creation/jobs/${encodeURIComponent(job.id)}/${command}`, { method: 'POST', body: JSON.stringify(payload) })
+    const value = await creationApi.submitJob(job.id, command, payload, {})
     overrides[job.id] = value.job
     emit('changed')
   } catch (cause) { error.value = cause.message }
@@ -41,7 +43,7 @@ async function perform(job, command, payload = {}) {
       <p>{{ job.error || job.confirmation_reason }}</p>
       <small>请求编号：{{ job.client_id || '尚无回执' }} · 最近状态：{{ job.updated_at }}</small>
       <template v-if="job.status === 'unknown'">
-        <label>核对结果<select v-model="draft(job).outcome"><option value="still_unknown">仍无法确认</option><option value="not_completed">供应商确认未完成</option><option value="completed_external">供应商确认已完成，尚未取回成果</option></select></label>
+        <label>核对结果<SelectField v-model="draft(job).outcome"><option value="still_unknown">仍无法确认</option><option value="not_completed">供应商确认未完成</option><option value="completed_external">供应商确认已完成，尚未取回成果</option></SelectField></label>
         <label>供应商回执编号<input v-model="draft(job).receipt" maxlength="200" /></label>
         <label>核对说明<textarea v-model="draft(job).note" maxlength="1000" /></label>
         <button type="button" :disabled="busy || !draft(job).receipt.trim() || !draft(job).note.trim()" @click="perform(job, 'reconcile', draft(job))">保存核对结果</button>

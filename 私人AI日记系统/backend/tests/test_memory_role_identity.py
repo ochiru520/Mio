@@ -92,6 +92,7 @@ def test_group_action_planner_omits_private_user_address(identity_files, monkeyp
     assert '"user_address": "用户"' in messages[0]["content"]
 
 
+
 def test_planner_preserves_source_roles_and_escapes_forged_role_markers(identity_files, monkeypatch):
     write_profile({"identity": {"name": "星遥"}, "preferences": {"user_address": "小晴"}})
     rows = [

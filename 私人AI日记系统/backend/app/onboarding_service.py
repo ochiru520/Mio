@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .repositories import onboarding_service_repository as repository
 from . import db
 from .config import save_runtime_settings, settings
 from .mio_profile import DEFAULT_PROFILE, load_mio_profile, save_mio_profile_from_settings
@@ -31,21 +32,21 @@ def _write_state(state: dict[str, Any]) -> dict[str, Any]:
 def _existing_user_evidence() -> list[str]:
     evidence: list[str] = []
     if settings.db_path.exists():
-        with db.get_conn() as conn:
+        with repository.transaction() as conn:
             for table, label in (
                 ("messages", "聊天记录"),
                 ("diaries", "日记"),
                 ("structured_memories", "结构化记忆"),
             ):
                 try:
-                    count = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    count = int(conn.existing_user_evidence_f_schema(table)[0])
                 except sqlite3.OperationalError:
                     count = 0
                 if count:
                     evidence.append(label)
             try:
                 manual_free_count = int(
-                    conn.execute("SELECT COUNT(*) FROM memories WHERE type != 'manual'").fetchone()[0]
+                    conn.existing_user_evidence_find_memories()[0]
                 )
             except sqlite3.OperationalError:
                 manual_free_count = 0

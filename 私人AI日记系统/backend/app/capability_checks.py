@@ -215,7 +215,7 @@ async def _execute(capability: str) -> dict:
         except OSError:
             return {'ok': False, 'error_code': 'unavailable'}
     if capability == 'qq':
-        from .routes import onebot
+        from . import onebot_transport_service as onebot
         health = onebot.runtime_health_status()
         expected = str(settings.napcat_account or '').strip()
         accounts = health.get('connected_accounts', [])

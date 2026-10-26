@@ -1,6 +1,6 @@
 <script setup>
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { AlertTriangle, X } from '@lucide/vue'
+import { AlertTriangle, X } from '../icons/index.js'
 import { focusModal, restoreModalFocus, trapModalFocus } from '../modalFocus.js'
 
 const props = defineProps({

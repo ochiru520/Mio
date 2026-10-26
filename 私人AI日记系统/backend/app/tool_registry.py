@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date as calendar_date
 from enum import IntEnum
 from typing import Any, Iterable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .creation_models import CreationToolRemoteImageRequest, ImageLoraChoice
 
@@ -70,6 +71,16 @@ class WebSearchInput(ToolInput):
 
 class DiaryLookupInput(ToolInput):
     date: str = Field(default="", pattern=r"^$|^\d{4}-\d{2}-\d{2}$")
+
+
+class DailyStateLookupInput(ToolInput):
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$", description="需要回读状态的明确日期，格式 YYYY-MM-DD；不能使用今天、昨天等相对日期。")
+
+    @field_validator("date")
+    @classmethod
+    def valid_calendar_date(cls, value: str) -> str:
+        calendar_date.fromisoformat(value)
+        return value
 
 
 class CreationPresetQueryInput(ToolInput):
@@ -383,6 +394,9 @@ tool_registry.register_many(
         ToolDefinition("get_service_health", ToolPermission.READ_ONLY, "读取本地服务健康状态", handler="get_service_health"),
         ToolDefinition("explain_last_route", ToolPermission.READ_ONLY, "解释最近一次模型与思考选择", handler="explain_last_route"),
         ToolDefinition("get_today_state", ToolPermission.READ_ONLY, "读取今日状态", handler="get_today_state"),
+        ToolDefinition("get_daily_state", ToolPermission.READ_ONLY,
+            "按明确日期读取私人历史状态；日期须为 YYYY-MM-DD，没有记录时返回空状态，不代表当天状态已完成或未完成。",
+            handler="get_daily_state", arguments_model=DailyStateLookupInput),
         ToolDefinition(
             "search_web",
             ToolPermission.READ_ONLY,
@@ -499,7 +513,7 @@ tool_registry.register_many(
         ToolDefinition(
             "remember_memory",
             ToolPermission.LOW_RISK_WRITE,
-            "保存有原话证据的结构化记忆",
+            "保存有原话证据的结构化记忆。每条只保存一件独立事实，保留否定、条件和时间限定；多件无关事实分条。",
             handler="companion_action",
             arguments_model=MemoryInput,
             compensation="supersede_created_memory",

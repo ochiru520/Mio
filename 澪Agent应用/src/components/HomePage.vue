@@ -11,7 +11,7 @@ import {
   Sparkles,
   Wifi,
   WifiOff,
-} from '@lucide/vue'
+} from '../icons/index.js'
 
 export default {
   name: 'HomePage',

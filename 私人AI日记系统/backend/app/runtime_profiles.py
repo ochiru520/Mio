@@ -20,6 +20,7 @@ COMPANION_TOOL_NAMES = frozenset(
         "get_service_health",
         "explain_last_route",
         "get_today_state",
+        "get_daily_state",
         "search_memory",
         "get_diary",
         "add_diary_material",

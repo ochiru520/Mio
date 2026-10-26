@@ -1,6 +1,7 @@
 """Native call/result pairs with provider protocol preserved across task runs."""
-from contextlib import closing
 import json
+
+from .repositories import agent_protocol_history_repository as repository
 
 from . import db
 from .agent_result_context import encode, model_result
@@ -43,9 +44,8 @@ def history(task_id, model_id, *, max_chars=None, max_tokens=None):
     from .config import settings
     from .context_service import estimate_tokens
     token_limit = max(1000, int(settings.chat_context_max_tokens if max_tokens is None else max_tokens))
-    with closing(db.get_conn()) as conn:
-        rows = conn.execute('''SELECT h.content_json FROM agent_run_messages h JOIN agent_task_runs r ON r.run_id=h.run_id
-            WHERE r.task_id=? AND h.role='protocol_turn' ORDER BY h.id DESC''', (task_id,)).fetchall()
+    with repository.unit_of_work(write=False) as conn:
+        rows = conn.protocol_turns((task_id,))
     selected, used, omitted = [], 0, 0
     for row in rows:
         turn = json.loads(row['content_json'])

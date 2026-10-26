@@ -88,4 +88,3 @@ test('blur completes the pointer gesture even without a pointerup', async () => 
   await flush()
   assert.equal(moves.length, 2)
 })
-

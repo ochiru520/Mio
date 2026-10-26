@@ -1,4 +1,5 @@
 <script setup>
+import SelectField from './SelectField.vue'
 import { computed, inject, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import {
   Activity,
@@ -21,7 +22,7 @@ import {
   Save,
   Trash2,
   X,
-} from '@lucide/vue'
+} from '../icons/index.js'
 
 import MemoryEvidence from './MemoryEvidence.vue'
 import ReviewSources from './ReviewSources.vue'
@@ -270,7 +271,7 @@ async function saveDiaryEdit() {
           </li>
         </ol>
         <form v-if="diaryEditing" class="inline-diary-editor" @submit.prevent="saveDiaryEdit">
-          <div><label>今日成长状态<select v-model="diaryDraft.daily_thirty_status"><option value="unknown">未确认</option><option value="done">完成</option><option value="partial">部分完成</option><option value="missed">未完成</option></select></label><label>标签<input v-model="diaryDraft.mood_tags" placeholder="用顿号分隔" /></label></div>
+          <div><label>今日成长状态<SelectField v-model="diaryDraft.daily_thirty_status"><option value="unknown">未确认</option><option value="done">完成</option><option value="partial">部分完成</option><option value="missed">未完成</option></SelectField></label><label>标签<input v-model="diaryDraft.mood_tags" placeholder="用顿号分隔" /></label></div>
           <textarea v-model="diaryDraft.markdown_content" aria-label="日记 Markdown 正文" spellcheck="false" />
         </form>
         <div v-else class="markdown-body" v-html="context.renderedMarkdown(context.selectedDiary.markdown_content)" />
@@ -321,7 +322,7 @@ async function saveDiaryEdit() {
     <div v-else-if="context.memoryError" class="reader-empty compact-reader-empty"><p role="alert">记忆读取失败：{{ context.memoryError }}</p><button type="button" @click="context.loadMemoryHub()">重新读取</button></div>
     <template v-else-if="memoryView === 'remembered'">
       <section class="memory-understanding"><span>{{ context.mioDisplayName }}现在怎样认识你</span><p v-if="context.memoryData.structured?.length">{{ context.memoryData.structured.slice(0, 5).map((item) => item.content).join('；') }}</p><p v-else>还没有形成稳定的长期认识</p></section>
-      <form class="memory-natural-add" @submit.prevent="addNaturalMemory"><select v-model="context.newStructuredMemory.category"><option v-for="item in memoryCategories" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select><input v-model="context.newStructuredMemory.content" :placeholder="`用一句自然的话告诉${context.mioDisplayName}要记住什么`" /><button type="submit" :disabled="Boolean(context.memoryBusy)"><Plus :size="15" />记住</button></form>
+      <form class="memory-natural-add" @submit.prevent="addNaturalMemory"><SelectField v-model="context.newStructuredMemory.category"><option v-for="item in memoryCategories" :key="item[0]" :value="item[0]">{{ item[1] }}</option></SelectField><input v-model="context.newStructuredMemory.content" :placeholder="`用一句自然的话告诉${context.mioDisplayName}要记住什么`" /><button type="submit" :disabled="Boolean(context.memoryBusy)"><Plus :size="15" />记住</button></form>
       <section v-if="pendingCandidates.length" class="memory-candidate-panel"><header><strong>等待你确认</strong><span>{{ pendingCandidates.length }} 条</span></header><article v-for="memory in pendingCandidates" :key="memory.id"><p>{{ memory.content }}</p><div><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.rejectMemoryCandidate(memory)">忽略</button><button type="button" class="primary-button" :disabled="Boolean(context.memoryBusy)" @click="context.confirmMemoryCandidate(memory)">确认记住</button></div></article></section>
       <div v-if="groupedMemories.length" class="memory-category-grid"><section v-for="group in groupedMemories" :key="group.id"><header><strong>{{ group.label }}</strong><span>{{ group.items.length }}</span></header><article v-for="memory in group.items" :key="memory.id"><p>{{ memory.content }}</p><small>{{ memoryTimeLabel(memory) }}</small><div class="memory-item-actions"><MemoryEvidence :memory="memory" /><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.editStructuredMemory(memory)">编辑</button><button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.sleepStructuredMemory(memory)">暂时搁置</button><button type="button" title="忘记" :disabled="Boolean(context.memoryBusy)" @click="context.archiveStructuredMemory(memory)"><Trash2 :size="14" /></button></div></article></section></div>
       <div v-else class="reader-empty compact-reader-empty"><Archive :size="30" /><strong>{{ context.mioDisplayName }}还没有形成长期记忆</strong></div>

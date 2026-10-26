@@ -196,10 +196,7 @@ export function useSettings(deps) {
         .split(/\r?\n/)
         .map((item) => item.trim())
         .filter(Boolean)
-      const result = await deps.request('/api/settings/profile', {
-        method: 'PATCH',
-        body: JSON.stringify({ profile }),
-      })
+      const result = await settingsApi.saveProfileSettings(profile)
       deps.mioProfileDraft.value = result.profile
       deps.mioProfileNotesDraft.value = (result.profile?.preferences?.custom_notes || []).join('\n')
       deps.mioProfileAvoidDraft.value = (result.profile?.speaking_style?.avoid || []).join('\n')
@@ -232,10 +229,7 @@ export function useSettings(deps) {
     deps.errorMessage.value = ''
     try {
       const dataUrl = await deps.readFileAsDataUrl(file)
-      await deps.request('/api/settings/avatar', {
-        method: 'POST',
-        body: JSON.stringify({ data_url: dataUrl }),
-      })
+      await settingsApi.uploadProfileAvatar(dataUrl)
       deps.profileAvatarCustom.value = true
       deps.profileAvatarNonce.value = Date.now()
       deps.showSettingsFeedback('profile', 'success', '头像已更新')
@@ -251,7 +245,7 @@ export function useSettings(deps) {
     deps.mioProfileBusy.value = true
     deps.errorMessage.value = ''
     try {
-      await deps.request('/api/settings/avatar', { method: 'DELETE' })
+      await settingsApi.resetProfileAvatar()
       deps.profileAvatarCustom.value = false
       deps.profileAvatarNonce.value = Date.now()
       deps.showSettingsFeedback('profile', 'success', '已恢复默认头像')
@@ -275,12 +269,11 @@ export function useSettings(deps) {
       return
     }
     const isBackground = kind === 'background'
-    const endpoint = isBackground ? '/api/settings/chat-background' : '/api/settings/user-avatar'
     deps.mioProfileBusy.value = true
     deps.errorMessage.value = ''
     try {
       const dataUrl = await deps.readFileAsDataUrl(file)
-      await deps.request(endpoint, { method: 'POST', body: JSON.stringify({ data_url: dataUrl }) })
+      await settingsApi.uploadAppearanceImage(kind, dataUrl)
       if (isBackground) {
         deps.chatBackgroundCustom.value = true
         deps.chatBackgroundNonce.value = Date.now()
@@ -300,11 +293,10 @@ export function useSettings(deps) {
     const isBackground = kind === 'background'
     const isCustom = isBackground ? deps.chatBackgroundCustom.value : deps.userAvatarCustom.value
     if (deps.mioProfileBusy.value || !isCustom) return
-    const endpoint = isBackground ? '/api/settings/chat-background' : '/api/settings/user-avatar'
     deps.mioProfileBusy.value = true
     deps.errorMessage.value = ''
     try {
-      await deps.request(endpoint, { method: 'DELETE' })
+      await settingsApi.resetAppearanceImage(kind)
       if (isBackground) {
         deps.chatBackgroundCustom.value = false
         deps.chatBackgroundNonce.value = Date.now()

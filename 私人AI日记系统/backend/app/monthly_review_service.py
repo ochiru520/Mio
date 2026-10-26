@@ -14,7 +14,7 @@ from .config import settings
 from .llm import call_chat_completion
 from .prompts import build_monthly_review_messages
 from .review_sources import period_payload, save_snapshot
-from .routes.onebot import send_private_message
+from .onebot_transport_service import send_private_message
 
 
 logger = logging.getLogger(__name__)

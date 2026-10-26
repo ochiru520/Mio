@@ -37,6 +37,7 @@ PRIVATE_DATA_TOOLS = {
     "agent_search_files", "creation_find_local_workflows", "creation_import_local_workflow", "creation_read_local_workflow",
     "agent_list_files", "agent_read_document", "agent_write_document", "birefnet_remove_background", "agent_task_update",
     "get_today_state",
+    "get_daily_state",
     "search_memory",
     "get_diary",
     "creation_list_presets",
@@ -233,6 +234,8 @@ async def _dispatch_read_tool(name: str, arguments: dict[str, Any], context: Too
         return {"last_route": snapshot.get("last_route"), "generated_at": snapshot.get("generated_at", "")}
     if name == "get_today_state":
         return {"date": db.today_string(), "state": _safe_row(db.get_daily_state())}
+    if name == "get_daily_state":
+        return {"date": arguments["date"], "state": _safe_row(db.get_daily_state(arguments["date"]))}
     if name == "search_web":
         from .web_search_service import lookup_web_query
 

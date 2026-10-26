@@ -1,13 +1,14 @@
 <script setup>
+import * as modelProvidersApi from '../services/modelProvidersApi.js'
+
 import { computed, onMounted, reactive, ref } from 'vue'
-import { AlertCircle, ArrowLeft, ArrowRight, Bot, Check, CheckCircle2, Cpu, Database, RefreshCw, ShieldCheck, Sparkles } from '@lucide/vue'
+import { AlertCircle, ArrowLeft, ArrowRight, Bot, Check, CheckCircle2, Cpu, Database, RefreshCw, ShieldCheck, Sparkles } from '../icons/index.js'
 import {
   createOnboardingProvider,
   discoverOnboardingModels,
   testOnboardingModel,
 } from '../services/onboardingApi.js'
 import { canContinueOnboardingStep } from '../onboardingGates.js'
-import { apiRequest } from '../services/api.js'
 import DependencyCenter from './DependencyCenter.vue'
 import AppSelect from './AppSelect.vue'
 
@@ -127,7 +128,7 @@ function selectProviderPreset(presetId) {
 
 onMounted(async () => {
   try {
-    const result = await apiRequest('/api/agent/models/provider-presets')
+    const result = await modelProvidersApi.loadModelsProviderPresets({})
     providerPresets.value = result.presets || []
   } catch {
     providerPresets.value = []
@@ -210,7 +211,7 @@ async function saveAndTestProvider() {
         display_name: item.display_name || item.model,
         family_name: item.family_name || item.model,
         variant_name: item.variant_name || '',
-        supports_vision: Boolean(item.supports_vision),
+        supports_vision: true,
         supports_tool_calls: item.supports_tool_calls ?? null,
         supports_structured_output: item.supports_structured_output ?? true,
         context_window_tokens: Number(item.context_window_tokens || 32768),

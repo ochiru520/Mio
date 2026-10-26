@@ -9,7 +9,7 @@ from ..markdown_rendering import render_safe_markdown
 from ..review_service import generate_review_for_date
 from ..review_sources import daily_payload, metadata
 from ..web import templates
-from .diary import _validated_diary_date
+from ..http_service_errors import validated_diary_date
 
 
 router = APIRouter()
@@ -37,7 +37,7 @@ async def api_reviews_list():
 
 @router.get("/reviews/{date}", response_class=HTMLResponse)
 async def review_page(request: Request, date: str):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     diary = db.get_diary(date)
     if diary is None:
         raise HTTPException(status_code=404, detail="没有找到这一天的日记。")
@@ -59,7 +59,7 @@ async def review_page(request: Request, date: str):
 
 @router.post("/api/reviews/{date}/generate")
 async def api_generate_review(date: str):
-    date = _validated_diary_date(date)
+    date = validated_diary_date(date)
     try:
         result = await generate_review_for_date(date, overwrite=True)
     except LLMConfigError as exc:

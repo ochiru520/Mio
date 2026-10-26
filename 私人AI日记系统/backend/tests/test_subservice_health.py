@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app import companion_runtime_service as companion_runtime
 
 import threading
 import unittest
@@ -37,7 +38,7 @@ class PassiveServiceHealthTests(unittest.IsolatedAsyncioTestCase):
     def test_subservice_snapshot_reports_all_isolated_runtime_boundaries(self) -> None:
         with (
             patch.object(
-                companion,
+                companion_runtime,
                 "call_runtime_status",
                 return_value={
                     "active": True,
@@ -98,7 +99,7 @@ class PassiveServiceHealthTests(unittest.IsolatedAsyncioTestCase):
                 },
             ),
             patch(
-                "app.routes.onebot.runtime_health_status",
+                "app.onebot_transport_service.runtime_health_status",
                 return_value={
                     "enabled": True,
                     "websocket_connections": 0,
@@ -130,7 +131,7 @@ class PassiveServiceHealthTests(unittest.IsolatedAsyncioTestCase):
     def test_disabled_screen_analysis_is_not_reported_as_degraded(self) -> None:
         with (
             patch.object(
-                companion,
+                companion_runtime,
                 "call_runtime_status",
                 return_value={
                     "active": False,
@@ -183,7 +184,7 @@ class PassiveServiceHealthTests(unittest.IsolatedAsyncioTestCase):
                 },
             ),
             patch(
-                "app.routes.onebot.runtime_health_status",
+                "app.onebot_transport_service.runtime_health_status",
                 return_value={"enabled": False, "websocket_connections": 0},
             ),
         ):

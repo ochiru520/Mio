@@ -74,7 +74,7 @@ def test_model_import_reads_source_and_preserves_original(tmp_path):
     before=target.read_bytes()
     prepared={'media_type':'image','prompt':graph(),'bindings':{},'notes':[]}
     context=ToolExecutionContext(run_id='r',request_id='r',trace_id='r',conversation_id='desktop_agent_test',source_message_id=0,user_message='导入工作流',step_index=0)
-    with patch('app.routes.creation.creation_preview_workflow',return_value=prepared), \
+    with patch('app.workflow_import_service.preview_workflow',return_value=prepared), \
          patch('app.creation_custom.import_workflow',return_value={'id':'custom_test'}) as importer:
         result=asyncio.run(_dispatch_write_tool('creation_import_local_workflow',{'path':str(target),'label':''},context))
     assert result['workflow']['id']=='custom_test'

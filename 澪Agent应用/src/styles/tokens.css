@@ -24,11 +24,11 @@
   /* 字号阶梯。用 calc(--fs × 系数) 而不是 rem，这样字体大小开关只影响
      文本尺寸，不会连带缩放所有用 rem 表达的间距和圆角。 */
   --fs: 1;
-  --text-xs: calc(10px * var(--fs));
-  --text-sm: calc(11px * var(--fs));
-  --text-base: calc(12px * var(--fs));
-  --text-md: calc(13px * var(--fs));
-  --text-lg: calc(15px * var(--fs));
+  --text-xs: calc(12px * var(--fs));
+  --text-sm: calc(12px * var(--fs));
+  --text-base: calc(13px * var(--fs));
+  --text-md: calc(14px * var(--fs));
+  --text-lg: calc(16px * var(--fs));
   --text-xl: calc(17px * var(--fs));
   --text-2xl: calc(21px * var(--fs));
   --text-3xl: calc(28px * var(--fs));
@@ -502,6 +502,110 @@
   --sidebar-bg: rgb(32 25 28 / 94%);
   --sidebar-active: #352a2e;
   --titlebar-bg: rgb(30 24 27 / 94%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 晴窗（澪的标志主题 · 浅）
+ *
+ * 取自一间白天的房间：近白的墙、薰衣草色的窗帘、窗外一片浅蓝。
+ * 干净是第一原则：只有一个强调色（薰衣草紫），只用在"当前在哪、可以点什么"上；
+ * 其余都是中性的近白与灰紫，没有渐变按钮，没有发光，没有悬停时的灰块。
+ * 结构与装饰见 styles/calm.css，这里只放颜色。
+ * ------------------------------------------------------------------------- */
+[data-theme="calm-day"] {
+  color-scheme: light;
+  --bg: #f1eff7;
+  --bg-elevated: #f6f4fa;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-soft: #f6f4fa;
+  --surface-sunken: #ebe8f3;
+  --surface-warm: #f6f4fa;
+  --overlay: rgb(30 26 54 / 42%);
+  --text: #25223a;
+  --text-muted: #5d5a74;
+  --text-faint: #5d5a74;
+  --text-inverse: #ffffff;
+  --border: #e3e0ee;
+  --border-strong: #cdc9de;
+  --accent: #6c5dd3;
+  --accent-hover: #5a4bc0;
+  --accent-soft: #eeebfb;
+  --accent-contrast: #ffffff;
+  --success: #2f8060;
+  --success-soft: #e6f3ec;
+  --warning: #96640f;
+  --warning-soft: #f8efdb;
+  --danger: #b43c52;
+  --danger-soft: #faeaee;
+  --info: #3b73b4;
+  --info-soft: #e8f0f9;
+  --shadow-tint: rgb(60 50 110 / 7%);
+  --shadow-strong: rgb(40 30 90 / 20%);
+  --focus-ring: color-mix(in srgb, var(--accent) 34%, transparent);
+  --scrollbar-thumb: rgb(100 92 140 / 30%);
+  --scrollbar-thumb-hover: rgb(80 72 125 / 52%);
+  --sidebar-bg: #f6f4fa;
+  --sidebar-active: #eeebfb;
+  --titlebar-bg: #f1eff7;
+  --view-accent: var(--accent);
+  --view-accent-soft: var(--accent-soft);
+
+  --sky: #cfe6f7;
+  --sky-glow: rgb(182 214 242 / 55%);
+  --lavender-glow: rgb(212 200 245 / 50%);
+  --hover-tint: rgb(108 93 211 / 6%);
+}
+
+/* ---------------------------------------------------------------------------
+ * 夜窗（澪的标志主题 · 深）
+ *
+ * 同一间房间的夜晚：灯关了，窗帘还是薰衣草色。底色是带一点紫的深蓝灰，
+ * 不发光、不渐变；强调色换成更亮的薰衣草，保证在深色面板上对比度够。
+ * ------------------------------------------------------------------------- */
+[data-theme="calm-night"] {
+  color-scheme: dark;
+  --bg: #14121f;
+  --bg-elevated: #181628;
+  --surface: #1d1a2e;
+  --surface-raised: #25213a;
+  --surface-soft: #181628;
+  --surface-sunken: #100e1a;
+  --surface-warm: #181628;
+  --overlay: rgb(6 4 14 / 66%);
+  --text: #ece9f8;
+  --text-muted: #a9a4c4;
+  --text-faint: #a9a4c4;
+  --text-inverse: #17132b;
+  --border: #2d2943;
+  --border-strong: #433e62;
+  --accent: #b3a6ff;
+  --accent-hover: #c9bfff;
+  --accent-soft: rgb(179 166 255 / 14%);
+  --accent-contrast: #17132b;
+  --success: #77d1a6;
+  --success-soft: rgb(119 209 166 / 13%);
+  --warning: #eec27a;
+  --warning-soft: rgb(238 194 122 / 13%);
+  --danger: #ff93a8;
+  --danger-soft: rgb(255 147 168 / 13%);
+  --info: #94c2f2;
+  --info-soft: rgb(148 194 242 / 13%);
+  --shadow-tint: rgb(0 0 8 / 30%);
+  --shadow-strong: rgb(0 0 8 / 58%);
+  --focus-ring: color-mix(in srgb, var(--accent) 42%, transparent);
+  --scrollbar-thumb: rgb(170 162 215 / 24%);
+  --scrollbar-thumb-hover: rgb(190 182 232 / 44%);
+  --sidebar-bg: #181628;
+  --sidebar-active: rgb(179 166 255 / 15%);
+  --titlebar-bg: #14121f;
+  --view-accent: var(--accent);
+  --view-accent-soft: var(--accent-soft);
+
+  --sky: #232044;
+  --sky-glow: rgb(70 80 150 / 30%);
+  --lavender-glow: rgb(110 90 190 / 24%);
+  --hover-tint: rgb(179 166 255 / 7%);
 }
 
 /* ---------------------------------------------------------------------------

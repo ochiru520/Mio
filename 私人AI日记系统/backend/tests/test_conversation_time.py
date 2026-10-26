@@ -3,18 +3,25 @@ from __future__ import annotations
 import unittest
 from datetime import datetime
 
+from app.config import settings
 from app.chat_service import (
+    _RUNTIME_CONTEXT_RULES,
     _annotate_history_content,
     _build_conversation_orientation_context,
     _build_current_time_context,
     _build_user_message_gap_context,
     _relative_message_time,
+    replies_for_source,
 )
 
 
 class ConversationTimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.current = datetime.fromisoformat("2026-07-14T08:10:00+08:00")
+        for name, value in (("timezone", "Asia/Shanghai"), ("day_boundary_hour", 4)):
+            original = getattr(settings, name)
+            self.addCleanup(object.__setattr__, settings, name, original)
+            object.__setattr__(settings, name, value)
 
     def test_relative_labels_distinguish_today_and_yesterday(self) -> None:
         self.assertEqual(
@@ -167,6 +174,48 @@ class ConversationTimeTests(unittest.TestCase):
         self.assertIn("最近的活动起点线索", context)
         self.assertIn("23:45", context)
         self.assertIn("1 小时 3 分钟", context)
+
+    def test_time_context_includes_actual_offset_timezone_and_weekday(self) -> None:
+        context = _build_current_time_context(self.current)
+        self.assertIn("2026-07-14 08:10+08:00", context)
+        self.assertIn("时区：Asia/Shanghai", context)
+        self.assertIn("星期二", context)
+        self.assertIn("上午", context)
+
+    def test_record_day_boundary_is_configurable_in_facts_and_orientation(self) -> None:
+        object.__setattr__(settings, "day_boundary_hour", 6)
+        current = datetime.fromisoformat("2026-07-18T05:59:00+08:00")
+        rows = [{"id": 1, "role": "user", "content": "还在学习。",
+                 "created_at": "2026-07-17T23:59:00+08:00"}]
+        context = _build_current_time_context(current)
+        self.assertIn("当前记录日仍是 2026-07-17", context)
+        self.assertIn("记录日边界：06:00", context)
+        orientation = _build_conversation_orientation_context(rows, current=current)
+        self.assertIn("仍属于同一个记录日", orientation)
+        self.assertNotIn("四点", orientation)
+        at_boundary = datetime.fromisoformat("2026-07-18T06:00:00+08:00")
+        self.assertIn("当前记录日：2026-07-18", _build_current_time_context(at_boundary))
+        self.assertIn("跨天后的新一轮对话",
+                      _build_conversation_orientation_context(rows, current=at_boundary))
+
+    def test_topic_change_does_not_claim_activity_duration(self) -> None:
+        rows = [
+            {"id": 1, "role": "user", "content": "我在学习。",
+             "created_at": "2026-07-14T06:00:00+08:00"},
+            {"id": 2, "role": "user", "content": "午饭吃什么？",
+             "created_at": "2026-07-14T08:10:00+08:00"},
+        ]
+        context = _build_user_message_gap_context(rows, 2)
+        self.assertIn("2 小时 10 分钟", context)
+        self.assertNotIn("活动起点", context)
+        self.assertIn("换话题或无连续性时不得认定全程在做", _RUNTIME_CONTEXT_RULES)
+        self.assertIn("同一记录日内明确持续自我提升至少30分钟", _RUNTIME_CONTEXT_RULES)
+
+    def test_internal_time_rules_remain_private_in_public_replies(self) -> None:
+        self.assertIn("公开回复禁止", _RUNTIME_CONTEXT_RULES)
+        reply = "[内部消息时间：2026-07-14T08:10:00+08:00]\n[今天 08:10]慢慢说。"
+        self.assertEqual(replies_for_source(reply, "qq"), ["慢慢说"])
+        self.assertEqual(replies_for_source(reply, "desktop"), ["慢慢说"])
 
 
 if __name__ == "__main__":

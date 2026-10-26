@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app import companion_runtime_service as companion_runtime
 
 import json
 from pathlib import Path
@@ -17,7 +18,7 @@ class AudioWorkerOwnershipTests(unittest.TestCase):
         health = {'services': {'asr_system_audio': {'state': 'failed', 'enabled': True}}}
         subservice_health.reset_recovery_state_for_tests()
         with patch.object(call_session_service.manager, 'status', return_value={'active': True}), \
-            patch.object(routes, '_ensure_call_asr_ready') as ensure, \
+            patch.object(companion_runtime, 'ensure_call_asr_ready') as ensure, \
             patch.object(audio, 'start') as generic:
             result = subservice_health.recover_failed(health)
         ensure.assert_called_once()
@@ -30,7 +31,7 @@ class AudioWorkerOwnershipTests(unittest.TestCase):
             'screen_audio_enabled': False, 'pet_call_asr_engine': 'sensevoice',
         }), patch.object(routes.companion_service.window_observer, 'status', return_value={'running': True}), \
             patch.object(audio, 'start', return_value={'ready': True}) as start:
-            self.assertTrue(routes._ensure_call_asr_ready()['ready'])
+            self.assertTrue(companion_runtime.ensure_call_asr_ready()['ready'])
         self.assertTrue(start.call_args.kwargs['transcription_only'])
         self.assertEqual(start.call_args.args[0]['asr_engine'], 'sensevoice')
 
@@ -38,7 +39,7 @@ class AudioWorkerOwnershipTests(unittest.TestCase):
         with patch.object(routes.companion_service, 'load_config', return_value={'screen_audio_enabled': True}), \
             patch.object(routes.companion_service.window_observer, 'status', return_value={'running': False}), \
             patch.object(audio, 'start', return_value={'ready': True}) as start:
-            routes._ensure_call_asr_ready()
+            companion_runtime.ensure_call_asr_ready()
         self.assertTrue(start.call_args.kwargs['transcription_only'])
 
     def test_file_transcription_can_start_with_system_capture_disabled(self):

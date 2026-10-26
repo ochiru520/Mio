@@ -1,3 +1,5 @@
+
+import * as companionApi from '../services/companionApi.js'
 /** Companion operations. Reactive values and cross-domain callbacks are explicitly injected.
  * This module owns behavior, not application-global mutable state.
  * Dependencies are accessors so async callbacks see the latest state.
@@ -50,7 +52,7 @@ export function useCompanion(deps) {
         if (result?.ok === false) throw new Error(result.error || '独立预览窗口启动失败')
         return
       }
-      window.open(`/api/companion/screen/preview?t=${Date.now()}`, '_blank', 'noopener,noreferrer')
+      window.open(companionApi.screenPreviewUrl(), '_blank', 'noopener,noreferrer')
     } catch (error) {
       deps.errorMessage.value = `打开独立预览失败：${error.message}`
     }
@@ -60,10 +62,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = 'size'
     deps.errorMessage.value = ''
     try {
-      deps.companionStatus.value = await deps.request('/api/companion/size', {
-        method: 'PATCH',
-        body: JSON.stringify({ percent: Number(deps.companionStatus.value.pet.settings.pet_size_percent) }),
-      })
+      deps.companionStatus.value = await companionApi.updateSize({ percent: Number(deps.companionStatus.value.pet.settings.pet_size_percent) }, {}, deps.request)
     } catch (error) {
       deps.errorMessage.value = `桌宠大小调整失败：${error.message}`
     } finally {
@@ -75,9 +74,14 @@ export function useCompanion(deps) {
     deps.companionBusy.value = action
     deps.errorMessage.value = ''
     try {
-      deps.companionStatus.value = await deps.request(`/api/companion/${action}`, { method: 'POST', body: '{}' })
+      deps.companionStatus.value = await companionApi.submitCompanion(action, {}, deps.request)
     } catch (error) {
       deps.errorMessage.value = error.message
+      // A failed start can leave a live but unready process. Show its diagnosis,
+      // while preserving the settings draft and the original operation error.
+      if (['start', 'restart'].includes(action)) {
+        await loadCompanionStatus({ quiet: true, preserveSettings: true })
+      }
     } finally {
       deps.companionBusy.value = ''
     }
@@ -87,10 +91,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = 'motion-preview'
     deps.errorMessage.value = ''
     try {
-      await deps.request('/api/companion/live2d/motion/preview', {
-        method: 'POST',
-        body: JSON.stringify({ group }),
-      })
+      await companionApi.submitLive2dMotionPreview({ group }, {}, deps.request)
     } catch (error) {
       deps.errorMessage.value = `动作预览失败：${error.message}`
     } finally {
@@ -102,10 +103,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = 'expression-preview'
     deps.errorMessage.value = ''
     try {
-      await deps.request('/api/companion/live2d/expression/preview', {
-        method: 'POST',
-        body: JSON.stringify({ expression }),
-      })
+      await companionApi.submitLive2dExpressionPreview({ expression }, {}, deps.request)
     } catch (error) {
       deps.errorMessage.value = `表情预览失败：${error.message}`
     } finally {
@@ -130,16 +128,13 @@ export function useCompanion(deps) {
       const payload = section && deps.companionSettingKeys[section]
         ? Object.fromEntries(deps.companionSettingKeys[section].map((key) => [key, settings[key]]))
         : settings
-      deps.companionStatus.value = await deps.request('/api/companion/settings', {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      })
+      deps.companionStatus.value = await companionApi.updateSettings(payload, {}, deps.request)
       const rendererChanged = section === 'pet'
         && previousPetSettings.pet_renderer !== settings.pet_renderer
       const runtimeChanged = section === 'pet'
         && previousPetSettings.live2d_disable_gpu !== settings.live2d_disable_gpu
       if (petWasRunning && (rendererChanged || runtimeChanged)) {
-        deps.companionStatus.value = await deps.request('/api/companion/restart', { method: 'POST', body: '{}' })
+        deps.companionStatus.value = await companionApi.submitRestart({}, deps.request)
       }
       const sections = section ? [section] : Object.keys(deps.companionSettingKeys)
       if (section === 'voice') sections.push('pet')
@@ -164,7 +159,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = 'voice'
     deps.errorMessage.value = ''
     try {
-      await deps.request('/api/companion/voice/test', { method: 'POST', body: '{}' })
+      await companionApi.submitVoiceTest({}, deps.request)
       await loadCompanionStatus({ quiet: true, preserveSettings: true })
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -196,14 +191,11 @@ export function useCompanion(deps) {
     deps.companionBusy.value = 'voice-reference'
     deps.errorMessage.value = ''
     try {
-      deps.companionStatus.value = await deps.request('/api/companion/voice/reference', {
-        method: 'POST',
-        body: JSON.stringify({
+      deps.companionStatus.value = await companionApi.submitVoiceReference({
           name: file.name,
           data_url: await deps.readFileAsDataUrl(file),
           profile_id: profileId,
-        }),
-      })
+        }, {}, deps.request)
       deps.savedCompanionSettings.value.voice = deps.companionSettingsSnapshot('voice')
       deps.savedCompanionSettings.value.pet = deps.companionSettingsSnapshot('pet')
       deps.showSettingsFeedback('voice', 'success', deps.companionStatus.value.pet?.settings?.voice_engine === 'indextts2' ? 'IndexTTS2 参考音频已保存' : '参考音频已保存到当前音色')
@@ -219,11 +211,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = 'voice-export'
     deps.errorMessage.value = ''
     try {
-      const response = await fetch('/api/companion/voice/profiles/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile_id: profileId }),
-      })
+      const response = await companionApi.exportVoicePackage(profileId)
       if (!response.ok) {
         let detail = '导出失败'
         try {
@@ -287,11 +275,7 @@ export function useCompanion(deps) {
           : `${engineLabel}「${imported.name || '未命名'}」已通过模型加载验证、设为默认，可直接试听`
         deps.showSettingsFeedback('pet', imported.runtime === 'missing' ? 'error' : 'success', readyMessage)
       } else {
-        const response = await fetch('/api/companion/voice/profiles/import-package', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/octet-stream' },
-          body: file,
-        })
+        const response = await companionApi.importVoicePackage(file)
         if (!response.ok) {
           let detail = '导入失败'
           try {
@@ -318,10 +302,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = `voice-runtime-${action}`
     deps.errorMessage.value = ''
     try {
-      deps.companionStatus.value.voice_runtime = await deps.request(`/api/companion/voice/runtime/${action}`, {
-        method: 'POST',
-        body: '{}',
-      })
+      deps.companionStatus.value.voice_runtime = await companionApi.submitVoiceRuntime(action, {}, deps.request)
     } catch (error) {
       deps.errorMessage.value = error.message
     } finally {
@@ -333,10 +314,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = `local-vision-${action}`
     deps.errorMessage.value = ''
     try {
-      const localVision = await deps.request(`/api/companion/local-vision/runtime/${action}`, {
-        method: 'POST',
-        body: '{}',
-      })
+      const localVision = await companionApi.submitLocalVisionRuntime(action, {}, deps.request)
       deps.companionStatus.value.screen_analysis = {
         ...(deps.companionStatus.value.screen_analysis || {}),
         local_vision: localVision,
@@ -353,10 +331,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = 'local-vision-pull'
     deps.errorMessage.value = ''
     try {
-      const localVision = await deps.request('/api/companion/local-vision/model/pull', {
-        method: 'POST',
-        body: '{}',
-      })
+      const localVision = await companionApi.submitLocalVisionModelPull({}, deps.request)
       deps.companionStatus.value.screen_analysis = {
         ...(deps.companionStatus.value.screen_analysis || {}),
         local_vision: localVision,
@@ -372,10 +347,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = `voice-training-${action}`
     deps.errorMessage.value = ''
     try {
-      deps.companionStatus.value.voice_training = await deps.request(`/api/companion/voice/training/${action}`, {
-        method: 'POST',
-        body: '{}',
-      })
+      deps.companionStatus.value.voice_training = await companionApi.submitVoiceTraining(action, {}, deps.request)
     } catch (error) {
       deps.errorMessage.value = error.message
     } finally {
@@ -399,10 +371,7 @@ export function useCompanion(deps) {
           confirmText: '导入',
         })
         if (!sourcePath) return
-        result = await deps.request('/api/companion/live2d/models/import', {
-          method: 'POST',
-          body: JSON.stringify({ source_path: sourcePath }),
-        })
+        result = await companionApi.submitLive2dModelsImport({ source_path: sourcePath }, {}, deps.request)
       }
       await loadCompanionStatus({ quiet: false })
       deps.showSettingsFeedback('pet', 'success', `已导入 ${result?.model?.name || 'Live2D 模型'}`)
@@ -425,7 +394,7 @@ export function useCompanion(deps) {
     deps.companionBusy.value = 'live2d-delete'
     deps.errorMessage.value = ''
     try {
-      await deps.request(`/api/companion/live2d/models/${encodeURIComponent(model.id)}`, { method: 'DELETE' })
+      await companionApi.deleteLive2dModel(model.id, {}, deps.request)
       await loadCompanionStatus({ quiet: false })
       deps.showSettingsFeedback('pet', 'success', '自定义 Live2D 模型已删除')
     } catch (error) {
@@ -447,10 +416,7 @@ export function useCompanion(deps) {
     deps.errorMessage.value = ''
     try {
       const dataUrl = await deps.readFileAsDataUrl(file)
-      await deps.request(`/api/companion/live2d/models/${encodeURIComponent(model.id)}/preview`, {
-        method: 'POST',
-        body: JSON.stringify({ data_url: dataUrl }),
-      })
+      await companionApi.submitLive2dModelPreview(model.id, { data_url: dataUrl }, {}, deps.request)
       deps.companionAvatarNonce.value = Date.now()
       await loadCompanionStatus({ quiet: false })
       deps.showSettingsFeedback('pet', 'success', `已更新 ${model.name || 'Live2D 模型'} 的封面`)
@@ -473,10 +439,7 @@ export function useCompanion(deps) {
     deps.errorMessage.value = ''
     try {
       const dataUrl = await deps.readFileAsDataUrl(file)
-      deps.companionStatus.value = await deps.request('/api/companion/spritesheet', {
-        method: 'POST',
-        body: JSON.stringify({ data_url: dataUrl }),
-      })
+      deps.companionStatus.value = await companionApi.submitSpritesheet({ data_url: dataUrl }, {}, deps.request)
       deps.companionAvatarNonce.value = Date.now()
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -508,26 +471,17 @@ export function useCompanion(deps) {
     deps.errorMessage.value = ''
     try {
       if (action === 'stop') {
-        deps.companionStatus.value.screen = await deps.request('/api/companion/screen/stop', { method: 'POST', body: '{}' })
+        deps.companionStatus.value.screen = await companionApi.submitScreenStop({}, deps.request)
         deps.companionStatus.value.pet.settings.screen_audio_enabled = false
         return
       }
 
       if (deps.observationMode.value === 'game') {
         if (!deps.selectedGameHwnd.value) throw new Error('请选择要观察的游戏窗口。')
-        deps.companionStatus.value.screen = await deps.request('/api/companion/game/select', {
-          method: 'POST',
-          body: JSON.stringify({ hwnd: Number(deps.selectedGameHwnd.value) }),
-        })
-        deps.companionStatus.value.screen = await deps.request('/api/companion/game/start', {
-          method: 'POST',
-          body: JSON.stringify({ interval_ms: deps.observationInterval.value }),
-        })
+        deps.companionStatus.value.screen = await companionApi.submitGameSelect({ hwnd: Number(deps.selectedGameHwnd.value) }, {}, deps.request)
+        deps.companionStatus.value.screen = await companionApi.submitGameStart({ interval_ms: deps.observationInterval.value }, {}, deps.request)
       } else {
-        deps.companionStatus.value.screen = await deps.request('/api/companion/screen/start', {
-          method: 'POST',
-          body: JSON.stringify({ interval_ms: deps.observationInterval.value, scope: deps.screenScope.value }),
-        })
+        deps.companionStatus.value.screen = await companionApi.submitScreenStart({ interval_ms: deps.observationInterval.value, scope: deps.screenScope.value }, {}, deps.request)
       }
       deps.companionStatus.value.pet.settings.screen_audio_enabled = true
       await loadCompanionStatus({ quiet: true, preserveSettings: true })
@@ -549,17 +503,11 @@ export function useCompanion(deps) {
           deps.companionStatus.value.screen?.mode !== 'window'
           || String(deps.companionStatus.value.screen?.hwnd || '') !== String(deps.selectedGameHwnd.value)
         ) {
-          deps.companionStatus.value.screen = await deps.request('/api/companion/game/select', {
-            method: 'POST',
-            body: JSON.stringify({ hwnd: Number(deps.selectedGameHwnd.value) }),
-          })
+          deps.companionStatus.value.screen = await companionApi.submitGameSelect({ hwnd: Number(deps.selectedGameHwnd.value) }, {}, deps.request)
         }
-        result = await deps.request('/api/companion/game/analyze', { method: 'POST', body: '{}' })
+        result = await companionApi.submitGameAnalyze({}, deps.request)
       } else {
-        result = await deps.request('/api/companion/screen/analyze', {
-          method: 'POST',
-          body: JSON.stringify({ interval_ms: deps.observationInterval.value, scope: deps.screenScope.value }),
-        })
+        result = await companionApi.submitScreenAnalyze({ interval_ms: deps.observationInterval.value, scope: deps.screenScope.value }, {}, deps.request)
       }
       deps.companionStatus.value.screen_analysis = result.analysis
       await loadCompanionStatus({ quiet: true, preserveSettings: true })

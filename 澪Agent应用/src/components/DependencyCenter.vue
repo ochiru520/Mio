@@ -1,9 +1,10 @@
 <script setup>
+import * as dependenciesApi from '../services/dependenciesApi.js'
+
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Check, CheckCircle2, CircleAlert, CircleHelp, Download, ExternalLink, RefreshCw, RotateCw, Settings2, Wrench } from '@lucide/vue'
+import { Check, CheckCircle2, CircleAlert, CircleHelp, Download, ExternalLink, RefreshCw, RotateCw, Settings2, Wrench } from '../icons/index.js'
 import { activateLocalVision, verifyDependency, installDependency, loadDependencies, loadDependencyStatus, previewDependencyUninstall, uninstallDependency, loadDependencyPackage, saveDependencyPackageSource } from '../services/dependenciesApi.js'
 
-import { apiRequest } from '../services/api.js'
 import CapabilityChecks from './CapabilityChecks.vue'
 
 const props = defineProps({
@@ -94,7 +95,7 @@ async function copyDiagnostics() {
   if (busy.value) return
   busy.value = true
   try {
-    const report = await apiRequest('/api/dependencies/diagnostics')
+    const report = await dependenciesApi.loadDiagnostics({})
     await navigator.clipboard.writeText(JSON.stringify(report, null, 2))
     notice.value = `已复制脱敏诊断（${report.checked_at}）`
   } catch (cause) { error.value = cause.message }

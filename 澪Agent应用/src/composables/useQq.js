@@ -1,3 +1,7 @@
+
+import * as dependenciesApi from '../services/dependenciesApi.js'
+
+import * as qqApi from '../services/qqApi.js'
 /** Qq operations. Reactive values and cross-domain callbacks are explicitly injected.
  * This module owns behavior, not application-global mutable state.
  * Dependencies are accessors so async callbacks see the latest state.
@@ -24,7 +28,7 @@ export function useQq(deps) {
     let lastRequestError = null
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
-        lastStatus = await deps.request('/api/agent/qq/status')
+        lastStatus = await qqApi.loadStatus({}, deps.request)
         lastRequestError = null
         applyQqStatus(lastStatus)
         deps.qqSetupResult.value = {
@@ -56,11 +60,11 @@ export function useQq(deps) {
     deps.qqBusy.value = action
     deps.errorMessage.value = ''
     try {
-      const result = await deps.request(`/api/agent/qq/${action}`, { method: 'POST', body: '{}' })
+      const result = await qqApi.submitQq(action, {}, deps.request)
       if (['start', 'restart'].includes(action)) {
         const status = await waitForQqStartup()
         if (!status.account_ready) {
-          await deps.request('/api/agent/qq/login', { method: 'POST', body: '{}' })
+          await qqApi.submitLogin({}, deps.request)
           await loadQqQrCode({ attempts: 30 })
         }
       }
@@ -83,29 +87,23 @@ export function useQq(deps) {
     deps.qqSetupResult.value = null
     deps.errorMessage.value = ''
     try {
-      let result = await deps.request('/api/agent/qq/setup', {
-        method: 'POST',
-        body: JSON.stringify({ account, target_user_id: deps.qqTestTargetDraft.value.trim() }),
-      })
+      let result = await qqApi.submitSetup({ account, target_user_id: deps.qqTestTargetDraft.value.trim() }, {}, deps.request)
       if (result.stage === 'installing') {
         deps.showSettingsFeedback('qq', 'success', 'NapCat 正在安装，完成后会自动继续配置')
         for (let attempt = 0; attempt < 1350; attempt += 1) {
           await new Promise((resolve) => window.setTimeout(resolve, 2000))
-          const progress = await deps.request('/api/dependencies/napcat/status')
+          const progress = await dependenciesApi.loadNapcatStatus({}, deps.request)
           if (progress.error) throw new Error(progress.error)
           if (progress.done && !progress.installing) break
           if (attempt === 1349) throw new Error('NapCat 安装等待超过 45 分钟，请检查安装窗口')
         }
-        result = await deps.request('/api/agent/qq/setup', {
-          method: 'POST',
-          body: JSON.stringify({ account, target_user_id: deps.qqTestTargetDraft.value.trim() }),
-        })
+        result = await qqApi.submitSetup({ account, target_user_id: deps.qqTestTargetDraft.value.trim() }, {}, deps.request)
       }
       deps.qqSetupResult.value = result
       const status = await waitForQqStartup()
       if (!status.account_ready) {
         if (!result.force_qr_login) {
-          await deps.request('/api/agent/qq/login', { method: 'POST', body: '{}' })
+          await qqApi.submitLogin({}, deps.request)
         }
         const qrcodeLoaded = await loadQqQrCode({ attempts: 30 })
         if (!qrcodeLoaded) throw new Error(deps.qqQrError.value || 'NapCat 已启动，但登录二维码还没有准备好')
@@ -134,10 +132,7 @@ export function useQq(deps) {
     }
     deps.qqBusy.value = 'test-delivery'
     try {
-      const result = await deps.request('/api/agent/qq/test-delivery', {
-        method: 'POST',
-        body: JSON.stringify({ account, target_user_id: target }),
-      })
+      const result = await qqApi.submitTestDelivery({ account, target_user_id: target }, {}, deps.request)
       deps.qqSetupResult.value = result
       if (!result.delivery_confirmed) throw new Error(result.diagnostic || 'NapCat 没有确认发送')
       deps.showSettingsFeedback('qq', 'success', `NapCat 已确认发送${result.message_id ? `，消息 ID ${result.message_id}` : ''}`)
@@ -167,10 +162,7 @@ export function useQq(deps) {
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
-        const response = await fetch(`/api/agent/qq/qrcode?ts=${Date.now()}`, {
-          headers: { Accept: 'image/png,image/*' },
-          cache: 'no-store',
-        })
+        const response = await qqApi.loadQqQrCodeResponse()
         if (response.ok) {
           const blob = await response.blob()
           if (!blob.size || !blob.type.startsWith('image/')) throw new Error('二维码图片数据无效')
@@ -213,14 +205,11 @@ export function useQq(deps) {
         .split(/[;,]/)
         .map((item) => item.trim())
         .filter(Boolean)
-      const result = await deps.request('/api/agent/qq/group-settings', {
-        method: 'PATCH',
-        body: JSON.stringify({
+      const result = await qqApi.updateGroupSettings({
           enabled: deps.groupChatSettings.value.enabled,
           group_ids: [...new Set(groupIds)],
           mention_required: deps.groupChatSettings.value.mention_required,
-        }),
-      })
+        }, {}, deps.request)
       deps.groupChatSettings.value = { ...deps.groupChatSettings.value, ...result.group_chat }
       deps.groupIdsDraft.value = (result.group_chat.group_ids || []).join(', ')
       deps.savedGroupChatSettings.value = deps.normalizedGroupChatSnapshot()
@@ -243,7 +232,7 @@ export function useQq(deps) {
     deps.qqBusy.value = 'group-context'
     deps.errorMessage.value = ''
     try {
-      const result = await deps.request('/api/agent/qq/group-context/clear', { method: 'POST', body: '{}' })
+      const result = await qqApi.submitGroupContextClear({}, deps.request)
       deps.groupChatSettings.value = { ...deps.groupChatSettings.value, ...result.group_chat }
     } catch (error) {
       deps.errorMessage.value = error.message

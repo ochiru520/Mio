@@ -30,7 +30,7 @@ async function main() {
   const ctx = await browser.newContext({ viewport: { width: 1128, height: 720 } })
   const page = await ctx.newPage()
   const errors = [], checks = []
-  let handoff = true
+  let handoff = true, handoffStatus = process.env.MIO_EXPECT_STALE_HANDOFF === '1' ? 'completed' : 'running', handoffTaskId = 'synthetic-task'
   const conversations = [{ id: 'qq_layout_fixture', title: 'QQ共享对话', kind: 'qq' }]
   const messages = Array.from({ length: 45 }, (_, i) => ({ id: i + 1, role: i % 2 ? 'assistant' : 'user',
     content: `合成对话 ${i + 1}。` + '这是用于检查聊天输入框位置的测试内容。'.repeat(8), created_at: '2026-10-24T12:00:00', request_id: `layout-${i}` }))
@@ -48,7 +48,7 @@ async function main() {
     if (p === '/api/onboarding/status') value = { completed: true }
     else if (p === '/api/agent/bootstrap') value = { onboarding: { completed: true }, conversation_id: 'qq_layout_fixture', conversations, messages,
       models: [], diaries: [], settings: {}, qq: {}, model: {}, provider_presets: [] }
-    else if (p.includes('/handoff/source/')) value = { handoff: handoff ? { task_id: 'synthetic-task', conversation_id: 'desktop_agent_fixture' } : null }
+    else if (p.includes('/handoff/source/')) value = { handoff: handoff ? { task_id: handoffTaskId, conversation_id: 'desktop_agent_fixture', status: handoffStatus } : null }
     else if (p === '/api/agent/conversations') value = conversations
     else if (p === '/api/agent/messages') value = messages
     else if (p === '/api/agent/models/catalog') value = { models: [], provider_presets: [], hidden_model_providers: [] }
@@ -82,6 +82,13 @@ async function main() {
     await page.goto(url)
     await page.locator('.chat-handoff-notice').waitFor()
     await page.locator('[data-message-anchor]').first().waitFor()
+    if (process.env.MIO_EXPECT_STALE_HANDOFF === '1') {
+      assert.match(await page.locator('.chat-handoff-notice').innerText(), /继续处理/)
+      await page.screenshot({ path: path.join(output, 'stale-completed-task.png') })
+      await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ reproduced: true, taskStatus: handoffStatus, staleNoticeVisible: true, pageErrors: errors }, null, 2))
+      console.log('Reproduced: completed historical task still claims continued execution')
+      return
+    }
     if (expectBroken) {
       const size = await geometry()
       assert.ok(size.footer.top < size.reading.top, 'Original defect must reproduce before repair')
@@ -114,6 +121,36 @@ async function main() {
     await page.locator('[data-message-anchor]').first().waitFor()
     assert.equal(await page.locator('.chat-handoff-notice').count(), 0)
     await assertBottom('without handoff notice')
+    handoff = true; handoffStatus = 'completed'
+    await page.reload(); await page.locator('[data-message-anchor]').first().waitFor()
+    assert.equal(await page.locator('.chat-handoff-notice').count(), 0)
+    checks.push({ name: 'completed historical task stays hidden after reload' })
+    handoffStatus = 'running'
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await page.locator('.chat-handoff-notice').filter({ hasText: 'Agent 正在处理' }).waitFor()
+    handoffStatus = 'completed'
+    await page.locator('.chat-handoff-notice').waitFor({ state: 'detached', timeout: 10000 })
+    checks.push({ name: 'running task finishes and disappears through periodic status refresh' })
+    handoffStatus = 'paused'
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await page.locator('.chat-handoff-notice').filter({ hasText: '任务已暂停' }).waitFor()
+    await page.getByRole('button', { name: '关闭任务提示', exact: true }).click()
+    await page.locator('.chat-handoff-notice').waitFor({ state: 'detached' })
+    await page.reload(); await page.locator('[data-message-anchor]').first().waitFor()
+    assert.equal(await page.locator('.chat-handoff-notice').count(), 0)
+    assert.equal(handoffStatus, 'paused')
+    checks.push({ name: 'paused label is accurate; dismiss survives reload without changing task' })
+    handoffTaskId = 'new-task'; handoffStatus = 'waiting_confirmation'
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await page.locator('.chat-handoff-notice').filter({ hasText: '等待确认' }).waitFor()
+    checks.push({ name: 'dismissing an old task does not suppress a new task' })
+    for (const status of ['cancelled', 'failed']) {
+      handoffStatus = status
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+      await page.locator('.chat-handoff-notice').waitFor({ state: 'detached' })
+      checks.push({ name: `${status} task does not claim continued execution` })
+    }
+    await page.screenshot({ path: path.join(output, 'completed-notice-cleared.png') })
     assert.deepEqual(errors, [])
     await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ checks, pageErrors: errors, scope: 'Production frontend, synthetic API; no real conversations or model calls.' }, null, 2))
     console.log(JSON.stringify({ passed: checks.length, pageErrors: errors }))

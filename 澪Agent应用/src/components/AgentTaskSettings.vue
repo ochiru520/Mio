@@ -1,7 +1,8 @@
 <script setup>
+import * as tasksApi from '../services/tasksApi.js'
+
 import { onMounted, reactive, ref, watch } from 'vue'
-import { Check, FolderOpen, RefreshCw, Save, X } from '@lucide/vue'
-import { apiRequest } from '../services/api.js'
+import { Check, FolderOpen, RefreshCw, Save, X } from '../icons/index.js'
 import { selectLocalPath } from '../services/localPicker.js'
 
 const props = defineProps({ section: { type: String, default: 'budget' } })
@@ -26,7 +27,7 @@ async function loadBudget() {
   budgetLoading.value = true
   budgetError.value = ''
   try {
-    const data = await apiRequest('/api/agent/work?limit=1')
+    const data = await tasksApi.loadWorkByLimit1({})
     if (!data.limits) throw new Error('未能读取已保存的预算。')
     Object.assign(limits, data.limits)
     Object.assign(savedLimits, limits)
@@ -39,7 +40,7 @@ async function loadFiles() {
   filesLoading.value = true
   filesError.value = ''
   try {
-    const data = await apiRequest('/api/agent/work/file-roots')
+    const data = await tasksApi.loadWorkFileRoots({})
     roots.value = data.roots || []
     outputRoot.value = data.output_root || ''
     filesReady.value = true
@@ -52,7 +53,7 @@ async function saveLimits() {
   budgetError.value = ''
   budgetNotice.value = ''
   try {
-    Object.assign(limits, await apiRequest('/api/agent/work/limits', { method: 'PUT', body: JSON.stringify(limits) }))
+    Object.assign(limits, await tasksApi.saveWorkLimits(limits, {}))
     Object.assign(savedLimits, limits)
     budgetNotice.value = '预算已保存。'
   } catch (cause) { budgetError.value = cause.message }
@@ -64,7 +65,7 @@ async function saveRoots(paths) {
   filesError.value = ''
   filesNotice.value = ''
   try {
-    const data = await apiRequest('/api/agent/work/file-roots', { method: 'PUT', body: JSON.stringify({ paths }) })
+    const data = await tasksApi.saveWorkFileRoots({ paths }, {})
     roots.value = data.roots || []
     outputRoot.value = data.output_root || ''
     folder.value = ''
@@ -76,7 +77,7 @@ async function selectFolder() {
   try {
     const result = await selectLocalPath('directory')
     if (result) {
-      const current = await apiRequest('/api/agent/work/file-roots')
+      const current = await tasksApi.loadWorkFileRoots({})
       await saveRoots([...new Set([...(current.roots || []).filter(p => p !== current.output_root), result.path])])
     }
   } catch (cause) { filesError.value = cause.message }

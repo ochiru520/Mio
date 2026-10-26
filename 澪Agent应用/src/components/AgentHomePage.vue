@@ -1,7 +1,8 @@
 <script setup>
+import * as tasksApi from '../services/tasksApi.js'
+
 import { inject, nextTick, onMounted, ref } from 'vue'
-import { ArrowRight, Archive, Bot, ChevronDown, FileText, FolderOpen, ListChecks, MessageSquareText, Paperclip, Plus, RefreshCw, Settings, Sparkles, X } from '@lucide/vue'
-import { apiRequest } from '../services/api.js'
+import { ArrowRight, Archive, Bot, ChevronDown, FileText, FolderOpen, ListChecks, MessageSquareText, Paperclip, Plus, RefreshCw, Settings, Sparkles, X } from '../icons/index.js'
 import { taskStatusLabel } from '../agentTaskState.js'
 
 const emit = defineEmits(['navigate'])
@@ -14,7 +15,7 @@ async function load() {
   if (loading.value) return
   loading.value = true
   error.value = ''
-  try { recentTasks.value = (await apiRequest('/api/agent/work?limit=6')).tasks || [] }
+  try { recentTasks.value = (await tasksApi.loadWorkByLimit6({})).tasks || [] }
   catch (cause) { error.value = cause.message }
   finally { loading.value = false }
 }

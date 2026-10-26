@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-from contextlib import closing
 from pathlib import Path
+
+from .repositories import music_repository as repository
 
 from . import db, agent_file_service as files
 
@@ -11,10 +12,7 @@ AUDIO = {'.mp3', '.wav', '.m4a', '.ogg', '.flac', '.webm'}
 
 
 def initialize() -> None:
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("""CREATE TABLE IF NOT EXISTS music_tracks(
-            id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
-            size INTEGER NOT NULL, modified REAL NOT NULL, created_at TEXT NOT NULL)""")
+    repository.initialize()
 
 
 def _public(row) -> dict:
@@ -25,8 +23,7 @@ def _public(row) -> dict:
 
 def listing(limit: int = 200) -> dict:
     initialize()
-    with closing(db.get_conn()) as conn:
-        rows = conn.execute("SELECT * FROM music_tracks ORDER BY name COLLATE NOCASE,id LIMIT ?", (max(1, min(int(limit), 500)),)).fetchall()
+    rows = repository.list_tracks(limit)
     return {'tracks': [_public(row) for row in rows]}
 
 
@@ -35,7 +32,7 @@ def scan(path: str) -> dict:
     if not directory.is_dir():
         raise ValueError('音乐扫描需要已授权目录。')
     initialize(); found = 0
-    with closing(db.get_conn()) as conn, conn:
+    def records():
         for item in directory.rglob('*'):
             if not item.is_file() or item.suffix.lower() not in AUDIO or item.name.startswith('.'):
                 continue
@@ -44,17 +41,15 @@ def scan(path: str) -> dict:
             except (ValueError, OSError):
                 continue
             identifier = 'music_' + hashlib.sha256(f'{source}|{stat.st_size}|{stat.st_mtime_ns}'.encode()).hexdigest()[:24]
-            conn.execute("""INSERT INTO music_tracks(id,path,name,size,modified,created_at) VALUES(?,?,?,?,?,?)
-                ON CONFLICT(path) DO UPDATE SET id=excluded.id,name=excluded.name,size=excluded.size,modified=excluded.modified""",
-                         (identifier, str(source), source.name, stat.st_size, stat.st_mtime, db.now_iso()))
-            found += 1
+            yield (identifier, str(source), source.name, stat.st_size, stat.st_mtime, db.now_iso())
+
+    found = repository.upsert_scanned(records())
     return {'scanned': found, **listing()}
 
 
 def file(track_id: str) -> tuple[Path, str]:
     initialize()
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM music_tracks WHERE id=?', (track_id,)).fetchone()
+    row = repository.get(track_id)
     if row is None:
         raise ValueError('音乐不存在。')
     source = files.resolve_read(row['path'])

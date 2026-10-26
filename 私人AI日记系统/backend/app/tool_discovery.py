@@ -1,4 +1,6 @@
 """Model-selected schema discovery, independent of intent keywords."""
+import json
+
 from pydantic import Field
 from .tool_types import ToolInput
 
@@ -16,10 +18,22 @@ def catalog(allowed):
                      if d.name in allowed and tool_availability(d)[0])
 
 
-def exposed(allowed, observations):
+def exposed(allowed, observations, *, task_id=''):
     # Small explicit tool selections used by callers remain intact.
     if len(allowed)<=16 or 'agent_discover_tools' not in allowed: return set(allowed)
     names=CORE & allowed
+    if task_id:
+        # UI observations contain only the latest 100 steps. Discovery remains
+        # enabled across that window, but never expands the current allowlist.
+        from .repositories.agent_tasks_repository import completed_discovery_results
+        for payload in completed_discovery_results(task_id):
+            try:
+                result = json.loads(payload or '{}')
+            except (TypeError, ValueError):
+                continue
+            enabled = result.get('enabled_tools') if isinstance(result, dict) else None
+            if isinstance(enabled, list):
+                names.update(name for name in enabled if isinstance(name, str) and name in allowed)
     for item in observations:
         if item.get('tool_name')=='agent_discover_tools' and item.get('status') in {'completed','executed'}:
             names.update(set(item.get('result',{}).get('enabled_tools',[])) & allowed)

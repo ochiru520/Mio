@@ -115,6 +115,33 @@ class LearningAnswer(Input):
     answer: str = Field(min_length=1, max_length=10000)
 
 
+class LearningDraft(Input):
+    answers: dict[str, str] = Field(default_factory=dict, max_length=1000)
+    flagged_item_ids: list[str] = Field(default_factory=list, max_length=1000)
+    active_item_id: str = Field(default='', max_length=120)
+    expected_revision: int | None = Field(default=None, ge=0)
+
+
+class Reference(Input):
+    kind: Literal['file', 'directory', 'conversation']
+    target: str = Field(min_length=1, max_length=1200)
+    version: str = Field(default='', max_length=64)
+
+
+class References(Input):
+    references: list[Reference] = Field(max_length=20)
+    project_id: str = ''
+    max_chars: int = Field(default=16000, ge=1, le=60000)
+
+
+class RetrievalOptions(Input):
+    enabled: bool = False
+    base_url: str = Field(default='http://127.0.0.1:1234/v1', max_length=1000)
+    embedding_model: str = Field(default='', max_length=200)
+    rerank_model: str = Field(default='', max_length=200)
+    candidate_limit: int = Field(default=500, ge=1, le=1000)
+
+
 class BrowserConfig(Input):
     hosts: list[str]=Field(default_factory=list,max_length=100)
     allow_public: bool=False
@@ -304,6 +331,38 @@ async def learning_review(project_id: str, limit: int = Query(50, ge=1, le=200))
 async def learning_detail(project_id: str, session_id: str):
     from .. import learning_service
     return await call(learning_service.session, project_id, session_id)
+
+
+@router.put('/projects/{project_id}/learning/{session_id}/draft')
+async def learning_draft(project_id: str, session_id: str, payload: LearningDraft):
+    from .. import learning_service
+    return await call(learning_service.save_draft, project_id, session_id, **payload.model_dump())
+
+
+@router.get('/references/candidates')
+async def reference_candidates(kind: Literal['file', 'directory', 'conversation'] = 'file',
+                               query: str = Query('', max_length=500), path: str = '', project_id: str = '',
+                               offset: int = Query(0, ge=0), limit: int = Query(40, ge=1, le=100)):
+    from .. import reference_service
+    return await call(reference_service.candidates, kind, query, path, project_id, limit, offset)
+
+
+@router.get('/knowledge/retrieval-options')
+async def retrieval_options():
+    from ..knowledge_retrieval import options
+    return await call(options)
+
+
+@router.put('/knowledge/retrieval-options')
+async def save_retrieval_options(payload: RetrievalOptions):
+    from ..knowledge_retrieval import options
+    return await call(options, payload.model_dump())
+
+
+@router.post('/references/resolve')
+async def resolve_references(payload: References):
+    from .. import reference_service
+    return await call(reference_service.resolve, **payload.model_dump())
 
 
 @router.post('/projects/{project_id}/learning/{session_id}/items')

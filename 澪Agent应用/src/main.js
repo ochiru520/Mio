@@ -15,5 +15,6 @@ import './styles/refinements.css'
 import './styles/agent-settings.css'
 import './styles/agent-surface.css'
 import './styles/ui-polish.css'
+import './styles/calm.css'
 
 createApp(App).mount('#app')

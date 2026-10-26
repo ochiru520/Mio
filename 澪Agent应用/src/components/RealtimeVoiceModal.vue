@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Mic, MicOff, PhoneCall, PhoneOff } from '@lucide/vue'
+import { Mic, MicOff, PhoneCall, PhoneOff } from '../icons/index.js'
 import { createRealtimeVoiceSession } from '../realtimeVoiceSession.js'
 import { focusModal, restoreModalFocus, trapModalFocus } from '../modalFocus.js'
 
@@ -14,7 +14,6 @@ let confirmedTranscript = ''
 const dialogRef = ref(null)
 let focusBeforeOpen = null
 const session = createRealtimeVoiceSession({
-  url: () => `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/realtime/voice`,
   instructions: () => props.instructions,
   onState(value) { state.value = value; if (value === 'idle') muted.value = false },
   onError(value) { error.value = value },

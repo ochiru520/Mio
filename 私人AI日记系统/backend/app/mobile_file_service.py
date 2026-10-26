@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import closing
 import hashlib
 import re
 from pathlib import Path
@@ -11,6 +10,7 @@ import uuid
 
 import httpx
 
+from .repositories import mobile_file_service_repository as repository
 from . import db, agent_file_service as files
 from .config import settings
 from . import mobile_task_service as mobile
@@ -35,8 +35,8 @@ def segments(event: dict) -> list[dict]:
         return [item['data'] for item in message if isinstance(item, dict) and item.get('type') == 'file' and isinstance(item.get('data'), dict)]
     if isinstance(message, str):
         # Some OneBot adapters use CQ strings. Decode escapes with the existing parser.
-        from .routes.onebot import _parse_cq_params
-        return [_parse_cq_params(match[1]) for match in re.finditer(r'\[CQ:file,([^\]]+)\]', message)]
+        from .onebot_protocol import parse_cq_params
+        return [parse_cq_params(match[1]) for match in re.finditer(r'\[CQ:file,([^\]]+)\]', message)]
     return []
 
 
@@ -85,12 +85,10 @@ def root() -> Path:
 def attachment_authorized(path: Path, task_id: str) -> bool:
     if not task_id or not db.settings.db_path.is_file():
         return False
-    with closing(db.get_conn()) as conn:
-        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='mobile_task_attachments'").fetchone():
+    with repository.read() as conn:
+        if not conn.attachment_authorized_find_sqlite_master():
             return False
-        row = conn.execute('SELECT a.* FROM mobile_task_attachments a JOIN mobile_task_bindings b ON a.task_id=b.task_id '
-                           'AND a.self_id=b.self_id AND a.user_id=b.user_id WHERE a.task_id=? AND a.path=?',
-                           (task_id, str(path))).fetchone()
+        row = conn.attachment_authorized_find_mobile_task_attachments((task_id, str(path)))
     if not row or not mobile.valid_origin(dict(row)):
         return False
     directory = root()
@@ -103,7 +101,7 @@ async def receive(event: dict, origin: dict, event_key: str) -> bool:
     items = segments(event)
     if not items:
         return False
-    from .routes.onebot import request_task_api
+    from .onebot_transport_service import request_task_api
     mobile.initialize()
     accepted, errors = [], []
     async with _intake_locks.setdefault((origin['self_id'], origin['user_id']), asyncio.Lock()):
@@ -116,10 +114,9 @@ async def receive(event: dict, origin: dict, event_key: str) -> bool:
                 size = int(item.get('file_size') or item.get('size') or 0)
                 if size < 0 or size > MAX_BYTES:
                     raise ValueError('单个附件不能超过 32MB。')
-                with closing(db.get_conn()) as conn:
-                    previous = conn.execute('SELECT name FROM mobile_task_attachments WHERE self_id=? AND user_id=? AND file_id=?',
-                                            (origin['self_id'], origin['user_id'], file_id)).fetchone()
-                    pending = conn.execute("SELECT COUNT(*) FROM mobile_task_attachments WHERE self_id=? AND user_id=? AND task_id=''", (origin['self_id'], origin['user_id'])).fetchone()[0]
+                with repository.read() as conn:
+                    previous = conn.receive_find_mobile_task_attachments((origin['self_id'], origin['user_id'], file_id))
+                    pending = conn.receive_find_mobile_task_attachments_2((origin['self_id'], origin['user_id']))[0]
                 if previous:
                     accepted.append(previous['name'])
                     continue
@@ -138,9 +135,8 @@ async def receive(event: dict, origin: dict, event_key: str) -> bool:
                     path.write_bytes(payload)
                     # Parse once now so corrupt/oversized archives fail before reaching the model.
                     await asyncio.to_thread(files._read_source, path, max_chars=300)
-                    with closing(db.get_conn()) as conn, conn:
-                        conn.execute('INSERT INTO mobile_task_attachments VALUES(?,?,?,?,?,?,?,?,?,?)',
-                            (identifier, origin['self_id'], origin['user_id'], file_id, name, str(path), len(payload), digest, '', db.now_iso()))
+                    with repository.transaction() as conn:
+                        conn.receive_insert_mobile_task_attachments((identifier, origin['self_id'], origin['user_id'], file_id, name, str(path), len(payload), digest, '', db.now_iso()))
                 except BaseException:
                     path.unlink(missing_ok=True)
                     directory.rmdir()
@@ -167,12 +163,11 @@ async def store_document(origin: dict, file_id: str, name: str, payload: bytes) 
     if not payload or len(payload) > MAX_BYTES:
         raise ValueError('附件为空或超过 32MB。')
     async with _intake_locks.setdefault((origin['self_id'], origin['user_id']), asyncio.Lock()):
-        with closing(db.get_conn()) as conn:
-            previous = conn.execute('SELECT id FROM mobile_task_attachments WHERE self_id=? AND user_id=? AND file_id=?',
-                                    (origin['self_id'], origin['user_id'], file_id)).fetchone()
+        with repository.read() as conn:
+            previous = conn.store_document_find_mobile_task_attachments((origin['self_id'], origin['user_id'], file_id))
             if previous:
                 return previous['id']
-            count = conn.execute("SELECT COUNT(*) FROM mobile_task_attachments WHERE self_id=? AND user_id=? AND task_id=''", (origin['self_id'], origin['user_id'])).fetchone()[0]
+            count = conn.store_document_find_mobile_task_attachments_2((origin['self_id'], origin['user_id']))[0]
         if count >= 8:
             raise ValueError('待处理附件已达 8 个，请先创建任务或发送“/任务 清空附件”。')
         identifier = 'phonefile_' + uuid.uuid4().hex
@@ -182,9 +177,8 @@ async def store_document(origin: dict, file_id: str, name: str, payload: bytes) 
         try:
             path.write_bytes(payload)
             await asyncio.to_thread(files._read_source, path, max_chars=300)
-            with closing(db.get_conn()) as conn, conn:
-                conn.execute('INSERT INTO mobile_task_attachments VALUES(?,?,?,?,?,?,?,?,?,?)',
-                    (identifier, origin['self_id'], origin['user_id'], file_id, name, str(path), len(payload),
+            with repository.transaction() as conn:
+                conn.store_document_insert_mobile_task_attachments((identifier, origin['self_id'], origin['user_id'], file_id, name, str(path), len(payload),
                      hashlib.sha256(payload).hexdigest(), '', db.now_iso()))
         except BaseException:
             path.unlink(missing_ok=True)

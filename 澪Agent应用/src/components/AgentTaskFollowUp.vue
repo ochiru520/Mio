@@ -1,6 +1,7 @@
 <script setup>
+import * as workspaceApi from '../services/workspaceApi.js'
+
 import { ref } from 'vue'
-import { apiRequest } from '../services/api.js'
 const props = defineProps({ taskId: String, disabled: Boolean })
 const emit = defineEmits(['changed'])
 const draft = ref(''), busy = ref(false), error = ref(''), notice = ref('')
@@ -12,7 +13,7 @@ async function submit() {
   const request = pending
   busy.value = true; error.value = ''; notice.value = ''
   try {
-    await apiRequest(`/api/workspace/tasks/${encodeURIComponent(id)}/follow-up`, { method: 'POST', body: JSON.stringify({ message: content, request_key: request.key }) })
+    await workspaceApi.submitTaskFollowUp(id, { message: content, request_key: request.key }, {})
     if (id === props.taskId) {
       if (draft.value.trim() === content) draft.value = ''
       notice.value = '补充已保存，下一次规划会读取。'; emit('changed')

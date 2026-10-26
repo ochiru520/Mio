@@ -1,4 +1,18 @@
 <script setup>
+import SelectField from './components/SelectField.vue'
+import { createSettingsState } from './state/settingsState.js'
+import { createPrivacyState } from './state/privacyState.js'
+import { createConversationState } from './state/conversationState.js'
+import { createRecordsState } from './state/recordsState.js'
+import { createTasksState } from './state/tasksState.js'
+import { createQqState } from './state/qqState.js'
+import { createCompanionState, createPetCallRuntime } from './state/companionState.js'
+import { createProvidersState } from './state/providersState.js'
+import { useAppDialog } from './composables/useAppDialog.js'
+import { petStartupPresentation } from './petStartupState.js'
+import { useTaskHandoff } from './composables/useTaskHandoff.js'
+import { useStatsPresentation } from './composables/useStatsPresentation.js'
+const { appDialog, showAppConfirm, showAppPrompt, confirmAppDialog, cancelAppDialog } = useAppDialog()
 import { monthlyCatalog } from './monthlyCatalog.js'
 import { executionActionLabels } from './executionRecordPresentation.js'
 import { messageCacheRateLabel } from './messageTokenUsage.js'
@@ -82,7 +96,7 @@ const { refreshContextUsage, refreshDayDashboard, openTokenUsagePanel, formatTok
 })
 
 import { useConversations } from './composables/useConversations.js'
-const { historyLoading, historyHasMore, loadOlderMessages, refreshMessages, requestStartupGreeting, createClientRequestId, openAgentHandoff, sendMessage, requestChatCancellation, cancelActiveChat, refreshConversations, selectConversation, createNewConversation, renameConversation, deleteConversation, deleteConversationMessages } = useConversations({
+const { references, elementReference, failedChatDrafts, restoreChatDraft, replayTurn, loadHistoryToMessage, historyLoading, historyHasMore, loadOlderMessages, refreshMessages, requestStartupGreeting, createClientRequestId, openAgentHandoff, sendMessage, requestChatCancellation, cancelActiveChat, refreshConversations, selectConversation, createNewConversation, renameConversation, deleteConversation, deleteConversationMessages } = useConversations({
   get agentSurfaceMode() { return agentSurfaceMode },
   get activeChatCancelPayload() { return activeChatCancelPayload },
   set activeChatCancelPayload(value) { activeChatCancelPayload = value },
@@ -334,43 +348,43 @@ const { handlePetChatKeydown, beginPetChatWindowDrag, resetPetCallCapture, submi
   get createClientRequestId() { return createClientRequestId },
   get errorMessage() { return errorMessage },
   get petCallActive() { return petCallActive },
-  get petCallAudioContext() { return petCallAudioContext },
-  set petCallAudioContext(value) { petCallAudioContext = value },
-  get petCallAwaitingVoiceSince() { return petCallAwaitingVoiceSince },
-  set petCallAwaitingVoiceSince(value) { petCallAwaitingVoiceSince = value },
-  get petCallBargeInStartedAt() { return petCallBargeInStartedAt },
-  set petCallBargeInStartedAt(value) { petCallBargeInStartedAt = value },
+  get petCallAudioContext() { return petCallRuntime.petCallAudioContext },
+  set petCallAudioContext(value) { petCallRuntime.petCallAudioContext = value },
+  get petCallAwaitingVoiceSince() { return petCallRuntime.petCallAwaitingVoiceSince },
+  set petCallAwaitingVoiceSince(value) { petCallRuntime.petCallAwaitingVoiceSince = value },
+  get petCallBargeInStartedAt() { return petCallRuntime.petCallBargeInStartedAt },
+  set petCallBargeInStartedAt(value) { petCallRuntime.petCallBargeInStartedAt = value },
   get petCallError() { return petCallError },
-  get petCallFrames() { return petCallFrames },
-  set petCallFrames(value) { petCallFrames = value },
-  get petCallInterruptSent() { return petCallInterruptSent },
-  set petCallInterruptSent(value) { petCallInterruptSent = value },
-  get petCallLastVoiceAt() { return petCallLastVoiceAt },
-  set petCallLastVoiceAt(value) { petCallLastVoiceAt = value },
-  get petCallMonitorTimer() { return petCallMonitorTimer },
-  set petCallMonitorTimer(value) { petCallMonitorTimer = value },
-  get petCallNextTurnId() { return petCallNextTurnId },
-  set petCallNextTurnId(value) { petCallNextTurnId = value },
-  get petCallPreRoll() { return petCallPreRoll },
-  set petCallPreRoll(value) { petCallPreRoll = value },
-  get petCallProcessor() { return petCallProcessor },
-  set petCallProcessor(value) { petCallProcessor = value },
-  get petCallResponseId() { return petCallResponseId },
-  set petCallResponseId(value) { petCallResponseId = value },
-  get petCallSessionId() { return petCallSessionId },
-  set petCallSessionId(value) { petCallSessionId = value },
+  get petCallFrames() { return petCallRuntime.petCallFrames },
+  set petCallFrames(value) { petCallRuntime.petCallFrames = value },
+  get petCallInterruptSent() { return petCallRuntime.petCallInterruptSent },
+  set petCallInterruptSent(value) { petCallRuntime.petCallInterruptSent = value },
+  get petCallLastVoiceAt() { return petCallRuntime.petCallLastVoiceAt },
+  set petCallLastVoiceAt(value) { petCallRuntime.petCallLastVoiceAt = value },
+  get petCallMonitorTimer() { return petCallRuntime.petCallMonitorTimer },
+  set petCallMonitorTimer(value) { petCallRuntime.petCallMonitorTimer = value },
+  get petCallNextTurnId() { return petCallRuntime.petCallNextTurnId },
+  set petCallNextTurnId(value) { petCallRuntime.petCallNextTurnId = value },
+  get petCallPreRoll() { return petCallRuntime.petCallPreRoll },
+  set petCallPreRoll(value) { petCallRuntime.petCallPreRoll = value },
+  get petCallProcessor() { return petCallRuntime.petCallProcessor },
+  set petCallProcessor(value) { petCallRuntime.petCallProcessor = value },
+  get petCallResponseId() { return petCallRuntime.petCallResponseId },
+  set petCallResponseId(value) { petCallRuntime.petCallResponseId = value },
+  get petCallSessionId() { return petCallRuntime.petCallSessionId },
+  set petCallSessionId(value) { petCallRuntime.petCallSessionId = value },
   get petCallSettings() { return petCallSettings },
-  get petCallSource() { return petCallSource },
-  set petCallSource(value) { petCallSource = value },
-  get petCallSpeechCandidateStartedAt() { return petCallSpeechCandidateStartedAt },
-  set petCallSpeechCandidateStartedAt(value) { petCallSpeechCandidateStartedAt = value },
-  get petCallSpeechStartedAt() { return petCallSpeechStartedAt },
-  set petCallSpeechStartedAt(value) { petCallSpeechStartedAt = value },
+  get petCallSource() { return petCallRuntime.petCallSource },
+  set petCallSource(value) { petCallRuntime.petCallSource = value },
+  get petCallSpeechCandidateStartedAt() { return petCallRuntime.petCallSpeechCandidateStartedAt },
+  set petCallSpeechCandidateStartedAt(value) { petCallRuntime.petCallSpeechCandidateStartedAt = value },
+  get petCallSpeechStartedAt() { return petCallRuntime.petCallSpeechStartedAt },
+  set petCallSpeechStartedAt(value) { petCallRuntime.petCallSpeechStartedAt = value },
   get petCallState() { return petCallState },
-  get petCallStream() { return petCallStream },
-  set petCallStream(value) { petCallStream = value },
-  get petCallTurnPending() { return petCallTurnPending },
-  set petCallTurnPending(value) { petCallTurnPending = value },
+  get petCallStream() { return petCallRuntime.petCallStream },
+  set petCallStream(value) { petCallRuntime.petCallStream = value },
+  get petCallTurnPending() { return petCallRuntime.petCallTurnPending },
+  set petCallTurnPending(value) { petCallRuntime.petCallTurnPending = value },
   get petChatDraft() { return petChatDraft },
   get petChatImages() { return petChatImages },
   get petChatSending() { return petChatSending },
@@ -419,7 +433,6 @@ const { focusComposer, openMemoryTab, handleSettingsModelChange, handlePetModelC
   get readFileAsDataUrl() { return readFileAsDataUrl },
   get reasoningLevel() { return reasoningLevel },
   get refreshDataPrivacy() { return refreshDataPrivacy },
-  get request() { return request },
   get rightSidebarVisible() { return rightSidebarVisible },
   get runtimeSettingKeysBySection() { return runtimeSettingKeysBySection },
   get runtimeSettingsBusy() { return runtimeSettingsBusy },
@@ -482,7 +495,6 @@ const { navigatePrimaryView, returnToApp, openCompanionSection, focusDesktopPetC
   get validInitialViews() { return validInitialViews },
 })
 
-
 import AgentTasksPage from './components/AgentTasksPage.vue'
 import AgentWorkspaceHub from './components/AgentWorkspaceHub.vue'
 import { executionStatus } from './agentTaskState.js'
@@ -519,7 +531,8 @@ import {
   formatCreationElapsed,
 } from './agentCreationState.js'
 import { bargeInThreshold, bytesToBase64, encodePcmWav } from './petCallAudio.js'
-import { apiRequest } from './services/api.js'
+import { apiRequest as request } from './services/api.js'
+import * as appRuntimeApi from './services/appRuntimeApi.js'
 import { focusModal, restoreModalFocus, trapModalFocus } from './modalFocus.js'
 import * as chatApi from './services/chatApi.js'
 import { filterConversationsForWorkspace, normalizeAgentView } from './workspaceState.js'
@@ -610,7 +623,7 @@ import {
   WifiOff,
   Wrench,
   X,
-} from '@lucide/vue'
+} from './icons/index.js'
 
 const workspaceSearchParams = new URLSearchParams(window.location.search)
 const workspaceMode = workspaceSearchParams.get('workspace') === 'agent' ? 'agent' : 'main'
@@ -797,10 +810,14 @@ function applyStoredAppPreferences() {
   if (!isAgentWorkspace) rightSidebarVisible.value = next.focus_mode ? false : next.right_sidebar_visible !== false
 }
 
+let lastReturnToChatMarker = ''
 function handleAppPreferencesStorage(event) {
   if (event.key === MODEL_CATALOG_KEY) void refreshModelCatalog()
   if (event.key === 'mio_app_preferences') applyStoredAppPreferences()
-  if (!isAgentWorkspace && event.key === 'mio_return_to_chat' && event.newValue) activeView.value = 'chat'
+  if (!isAgentWorkspace && event.key === 'mio_return_to_chat' && event.newValue && event.newValue !== lastReturnToChatMarker) {
+    lastReturnToChatMarker = event.newValue
+    activeView.value = 'chat'
+  }
   if (event.key === 'mio_profile_updated' && !isSettingsSectionDirty('profile')) {
     void loadMioProfileSettings({ quiet: true })
   }
@@ -826,8 +843,8 @@ const activeView = ref(isAgentWorkspace
   : (returnToChatRequested
       ? 'chat'
       : (validInitialViews.has(devInitialView) || devInitialView === 'settings'
-          ? devInitialView
-          : (validInitialViews.has(initialAppPreferences.default_open_page) ? initialAppPreferences.default_open_page : 'home'))))
+      ? devInitialView
+      : (validInitialViews.has(initialAppPreferences.default_open_page) ? initialAppPreferences.default_open_page : 'home'))))
 const settingsReturnView = ref(activeView.value)
 const homeThreadFocus = ref(null)
 function openHomeThread(thread) {
@@ -836,190 +853,172 @@ function openHomeThread(thread) {
 }
 const activeCompanionSection = ref('pet-panel')
 const settingsSectionFromUrl = workspaceSearchParams.get('settings-section')
-const activeSettingsSection = ref(settingsSectionFromUrl || localStorage.getItem(isAgentWorkspace ? 'mio_agent_settings_section' : 'mio_settings_section') || (isAgentWorkspace ? 'budget' : 'general'))
-const settingsSearch = ref('')
-const settingsFeedback = ref({ section: '', type: '', message: '' })
-const savedAppPreferences = ref(cloneAppPreferences(initialAppPreferences))
-const appPreferencesDraft = ref(cloneAppPreferences(savedAppPreferences.value))
-const chatSettingsDraft = ref({ model_id: '', reasoning_level: '', voice_language: 'auto' })
-const savedChatSettings = ref('')
-const latestTaskHandoff = ref(null)
+const {
+  activeSettingsSection,
+  settingsSearch,
+  settingsFeedback,
+  savedAppPreferences,
+  appPreferencesDraft,
+  chatSettingsDraft,
+  savedChatSettings,
+  savedStartupGreeting,
+  desktopPreferencesDraft,
+  savedDesktopPreferences,
+  desktopPreferencesReady,
+  desktopPreferencesBusy,
+  qqStartupEnabled,
+  savedQqStartupEnabled,
+  savedGroupChatSettings,
+  savedCompanionSettings,
+  runtimeSettingsDraft,
+  savedRuntimeSettings,
+  runtimeSettingsRevision,
+  runtimeSettingsReady,
+  runtimeSettingsBusy,
+  mioProfileDraft,
+  mioProfileNotesDraft,
+  mioProfileAvoidDraft,
+  savedMioProfile,
+  mioProfileReady,
+  mioProfileBusy,
+  profileAvatarNonce,
+  profileAvatarCustom,
+  userAvatarNonce,
+  userAvatarCustom,
+  chatBackgroundNonce,
+  chatBackgroundCustom,
+  leftSidebarVisible,
+  rightSidebarVisible,
+  leftSidebarPinned,
+  rightSidebarPinned,
+  agentRightSidebarHoverExpand,
+  leftSidebarHovered,
+  rightSidebarHovered,
+} = createSettingsState({ initialAppPreferences, cloneAppPreferences, isAgentWorkspace, settingsSectionFromUrl })
+
+const {
+  latestTaskHandoff,
+  messages,
+  conversations,
+  draft,
+  sending,
+  loading,
+  errorMessage,
+  chatScroll,
+  fileInput,
+  modelPicker,
+  tokenUsageDialog,
+  providerDialog,
+  chatVoiceLanguage,
+  showModelMenu,
+  modelMenuSection,
+  contextUsage,
+  attachments,
+  isFileDragging,
+  copiedTurnId,
+  speakingPartId,
+  voiceLoadingPartId,
+  showTokenUsagePanel,
+  tokenUsageLoading,
+  tokenUsageError,
+  tokenUsageData,
+  stateAnalyzeBusy,
+} = createConversationState()
 let handoffLoadVersion = 0
-const savedStartupGreeting = ref(true)
-const desktopPreferencesDraft = ref({ close_to_background: true, background_notifications: true, windows_startup: false })
-const savedDesktopPreferences = ref('')
-const desktopPreferencesReady = ref(false)
-const desktopPreferencesBusy = ref(false)
-const qqStartupEnabled = ref(false)
-const savedQqStartupEnabled = ref(false)
-const savedGroupChatSettings = ref('')
-const savedCompanionSettings = ref({ pet: '', voice: '', observation: '' })
-const runtimeSettingsDraft = ref({ chat_context_max_tokens: DEFAULT_CONTEXT_MAX_TOKENS })
-const savedRuntimeSettings = ref('')
-const runtimeSettingsRevision = ref('')
-const runtimeSettingsReady = ref(false)
-const runtimeSettingsBusy = ref(false)
-const webSearchTestQuery = ref('帮我查一下 DeepSeek 最新消息')
-const webSearchTestBusy = ref(false)
-const webSearchTestResult = ref(null)
-const mioProfileDraft = ref(null)
-const mioProfileNotesDraft = ref('')
-const mioProfileAvoidDraft = ref('')
-const savedMioProfile = ref('')
-const mioProfileReady = ref(false)
-const mioProfileBusy = ref(false)
-const profileAvatarNonce = ref(Date.now())
-const profileAvatarCustom = ref(false)
-const userAvatarNonce = ref(Date.now())
-const userAvatarCustom = ref(false)
-const chatBackgroundNonce = ref(Date.now())
-const chatBackgroundCustom = ref(false)
+
+const {
+  webSearchTestQuery,
+  webSearchTestBusy,
+  webSearchTestResult,
+  modelTestBusy,
+  modelTestStatus,
+  showProviderPanel,
+  providerBusy,
+  providerDiscoveryBusy,
+  providerDiscoveryWarning,
+  providerDiscoveryMeta,
+  discoveredModels,
+  providerForm,
+} = createProvidersState()
+
 const standalonePetChat = window.location.hash === '#pet-chat-window'
-const leftSidebarVisible = ref(!savedAppPreferences.value.focus_mode && savedAppPreferences.value.left_sidebar_visible !== false)
-const rightSidebarVisible = ref(isAgentWorkspace
-  ? localStorage.getItem('mio_agent_right_sidebar_visible') !== 'false'
-  : !savedAppPreferences.value.focus_mode && savedAppPreferences.value.right_sidebar_visible !== false)
-const leftSidebarPinned = ref(savedAppPreferences.value.remember_sidebar_state !== false && localStorage.getItem('mio_left_sidebar_pinned') === 'true')
-const rightSidebarPinned = ref((isAgentWorkspace || savedAppPreferences.value.remember_sidebar_state !== false) && localStorage.getItem(isAgentWorkspace ? 'mio_agent_right_sidebar_pinned' : 'mio_right_sidebar_pinned') === 'true')
-const agentRightSidebarHoverExpand = ref(localStorage.getItem('mio_agent_right_sidebar_hover_expand') !== 'false')
-const leftSidebarHovered = ref(false)
-const rightSidebarHovered = ref(false)
-const bootstrap = ref(null)
+
+const {
+  bootstrap,
+  onboardingBusy,
+  onboardingError,
+  onboardingEnvironment,
+  onboardingEnvironmentBusy,
+  dataPrivacyState,
+  dataPrivacyLoading,
+  dataPrivacyBusy,
+} = createPrivacyState()
 const providerPresets = computed(() => bootstrap.value?.provider_presets || [])
-const onboardingBusy = ref(false)
-const onboardingError = ref('')
-const onboardingEnvironment = ref(null)
-const onboardingEnvironmentBusy = ref(false)
-const dataPrivacyState = ref({ backups: [], backupStorage: {}, privacy: { paused: false, capabilities: [] }, migrations: {} })
-const dataPrivacyLoading = ref(false)
-const dataPrivacyBusy = ref('')
-const appDialog = reactive({
-  open: false,
-  mode: 'confirm',
-  title: '请确认',
-  message: '',
-  value: '',
-  confirmText: '确定',
-  cancelText: '取消',
-  danger: false,
-  multiline: false,
-  resolve: null,
-})
 
-function settleAppDialog(result) {
-  const resolve = appDialog.resolve
-  appDialog.open = false
-  appDialog.resolve = null
-  if (resolve) resolve(result)
-}
-
-function showAppConfirm({ title = '请确认', message = '', confirmText = '确定', cancelText = '取消', danger = false } = {}) {
-  return new Promise((resolve) => {
-    Object.assign(appDialog, {
-      open: true,
-      mode: 'confirm',
-      title,
-      message,
-      value: '',
-      confirmText,
-      cancelText,
-      danger,
-      multiline: false,
-      resolve,
-    })
-  })
-}
-
-function showAppPrompt({ title, message = '', value = '', confirmText = '保存', multiline = false } = {}) {
-  return new Promise((resolve) => {
-    Object.assign(appDialog, {
-      open: true,
-      mode: 'prompt',
-      title,
-      message,
-      value,
-      confirmText,
-      cancelText: '取消',
-      danger: false,
-      multiline,
-      resolve,
-    })
-  })
-}
-
-function confirmAppDialog() {
-  settleAppDialog(appDialog.mode === 'prompt' ? appDialog.value : true)
-}
-
-function cancelAppDialog() {
-  settleAppDialog(appDialog.mode === 'prompt' ? null : false)
-}
-
-const messages = ref([])
-const conversations = ref([])
 const selectedConversationId = ref(workspaceSearchParams.get('conversation_id') || localStorage.getItem(conversationStorageKey) || '')
-watch(selectedConversationId, async (conversationId) => {
+const { refreshSourceHandoff, disposeHandoff } = useTaskHandoff({
+  selectedConversationId, latestTaskHandoff, isAgentWorkspace,
+  get handoffLoadVersion() { return handoffLoadVersion },
+})
+watch(selectedConversationId, (conversationId) => {
   const next = new URL(window.location.href)
   if (conversationId) next.searchParams.set('conversation_id', conversationId)
   else next.searchParams.delete('conversation_id')
   if (next.href !== window.location.href) window.history.replaceState(window.history.state, '', next)
-  const version = ++handoffLoadVersion
+  ++handoffLoadVersion
   latestTaskHandoff.value = null
-  if (!conversationId || isAgentWorkspace) return
-  try {
-    const result = await request(`/api/agent/work/handoff/source/${encodeURIComponent(conversationId)}`)
-    if (version === handoffLoadVersion) latestTaskHandoff.value = result.handoff || null
-  } catch {
-    // A missing historical notice must not prevent loading the conversation.
-  }
+  void refreshSourceHandoff()
 }, { immediate: true })
-const diaries = ref([])
-const selectedDiary = ref(null)
-const diarySearch = ref('')
+const {
+  diaries,
+  selectedDiary,
+  diarySearch,
+  statsData,
+  statsLoading,
+  statsError,
+  statsLoaded,
+  diaryBusy,
+  memoryTab,
+  memoryData,
+  runtimeSummaryDraft,
+  newThreadContent,
+  newThreadFollowUp,
+  newProfileNote,
+  newConversationSummary,
+  newStructuredMemory,
+  memoryBusy,
+  dailyReviews,
+  weeklyReviews,
+  monthlyReviews,
+  selectedDailyDate,
+  selectedWeeklyStart,
+  selectedMonthlyMonth,
+  memoryLoading,
+  memoryError,
+  memoryLoaded,
+  reviewBusy,
+} = createRecordsState()
+
 let diarySearchTimer = null
 let diarySearchRequestId = 0
-const statsData = ref({ summary: {}, calendar: [], mood_trend: [], year: 0, month: 0, logical_date: '' })
-const statsLoading = ref(false)
-const statsError = ref('')
-const statsLoaded = ref(false)
-const agentTasks = ref([])
-const tasksLoading = ref(false)
-const tasksError = ref('')
-const tasksLoaded = ref(false)
-const taskBusy = ref('')
-const taskStatusFilter = ref('all')
-const taskCenterTab = ref('actions')
-const autonomyData = ref({
-  policy: {
-    paused: false,
-    autonomy_level: 'suggest',
-    quiet_start_hour: 22,
-    quiet_end_hour: 8,
-    minimum_interval_minutes: 120,
-    daily_behavior_limit: 3,
-    daily_budget_yuan: 0.05,
-    capability_overrides: {},
-  },
-  goals: [],
-  events: [],
-  behaviors: [],
-  usage: {},
-})
-const autonomyLoading = ref(false)
-const autonomyError = ref('')
-const autonomyLoaded = ref(false)
-const autonomyBusy = ref('')
-const newAutonomyGoalTitle = ref('')
-const newAutonomyGoalCapability = ref('follow_up_reminder')
-const draft = ref('')
-const sending = ref(false)
-const loading = ref(true)
-const errorMessage = ref('')
-const chatScroll = ref(null)
-const fileInput = ref(null)
-const modelPicker = ref(null)
-const tokenUsageDialog = ref(null)
-const providerDialog = ref(null)
+
+const {
+  agentTasks,
+  tasksLoading,
+  tasksError,
+  tasksLoaded,
+  taskBusy,
+  taskStatusFilter,
+  taskCenterTab,
+  autonomyData,
+  autonomyLoading,
+  autonomyError,
+  autonomyLoaded,
+  autonomyBusy,
+  newAutonomyGoalTitle,
+  newAutonomyGoalCapability,
+} = createTasksState()
+
 const modelStorageKey = isAgentWorkspace ? 'mio_agent_model_id' : 'mio_model_id'
 const reasoningStorageKey = isAgentWorkspace ? 'mio_agent_reasoning_level' : 'mio_reasoning_level'
 if (!isAgentWorkspace && localStorage.getItem('mio_auto_router_version') !== '1') {
@@ -1028,248 +1027,47 @@ if (!isAgentWorkspace && localStorage.getItem('mio_auto_router_version') !== '1'
   localStorage.setItem('mio_auto_router_version', '1')
 }
 const reasoningLevel = ref(localStorage.getItem(reasoningStorageKey) || 'auto')
+const modelCatalogLoading=ref(false),modelCatalogError=ref(''),modelSelectionNotice=ref('')
 const selectedModel = ref(localStorage.getItem(modelStorageKey) || 'auto')
 const creationWorkflowId = ref(localStorage.getItem('mio_agent_creation_workflow') || '')
 watch(creationWorkflowId, value => localStorage.setItem('mio_agent_creation_workflow', value))
-const chatVoiceLanguage = ref('auto')
-const showModelMenu = ref(false)
-const modelMenuSection = ref('root')
-const contextUsage = ref({ used_tokens: 0, max_tokens: DEFAULT_CONTEXT_MAX_TOKENS, percent: 0, has_summary: false })
-const attachments = ref([])
-const isFileDragging = ref(false)
-const qqBusy = ref('')
-const qqQrImageUrl = ref('')
-const qqQrLoading = ref(false)
-const qqQrError = ref('')
-const qqAccountDraft = ref('')
-const qqTestTargetDraft = ref('')
-const qqSetupResult = ref(null)
-const startupGreetingEnabled = ref(true)
-const groupChatSettings = ref({
-  enabled: false,
-  group_ids: [],
-  mention_required: true,
-  context_message_count: 0,
-  active_group_count: 0,
-})
-const groupIdsDraft = ref('')
-const companionBusy = ref('')
-const petChatDraft = ref('')
-const petChatSending = ref(false)
-const petChatImages = ref([])
-const petCallActive = ref(false)
-const petCallState = ref('idle')
-const petCallError = ref('')
-const petCallSettings = ref({
-  pet_call_asr_engine: 'auto',
-  pet_call_input_language: 'zh',
-  pet_call_silence_ms: 650,
-  pet_call_voice_threshold: 0.018,
-  pet_call_min_speech_ms: 280,
-  pet_call_max_turn_seconds: 18,
-})
-let petCallStream = null
-let petCallAudioContext = null
-let petCallSource = null
-let petCallProcessor = null
-let petCallMonitorTimer = null
-let petCallFrames = []
-let petCallPreRoll = []
-let petCallSpeechStartedAt = 0
-let petCallSpeechCandidateStartedAt = 0
-let petCallLastVoiceAt = 0
-let petCallTurnPending = false
-let petCallInterruptSent = false
-let petCallBargeInStartedAt = 0
-let petCallSessionId = ''
-let petCallNextTurnId = 1
-let petCallResponseId = ''
-let petCallAwaitingVoiceSince = 0
-const companionAvatarNonce = ref(Date.now())
-const observationMode = ref('game')
-const screenScope = ref('primary')
-const observationInterval = ref(1000)
-const gameWindows = ref([])
-const selectedGameHwnd = ref('')
-const gameWindowsLoading = ref(false)
-const companionStatus = ref({
-  pet: {
-    running: false,
-    avatar_available: false,
-    sprite_states: [],
-    sprite_set_ready: false,
-    sprite_expected_count: 6,
-    activity: { state: 'idle', label: '安静待机', emotion: 'neutral', emotion_label: '自然' },
-    settings: {
-      voice_enabled: true,
-      voice_startup_enabled: false,
-      voice_idle_timeout_seconds: 180,
-      voice_engine: 'gpt_sovits',
-      local_voice_runtime: 'genie',
-      default_voice_profile_id: 'mio',
-      voice_profiles: {
-        mio: {
-          name: 'Mio 专属音色',
-          engine: 'gpt_sovits',
-          gpt_sovits_ref_audio: '',
-          gpt_sovits_prompt_text: '',
-          gpt_sovits_prompt_language: 'ja',
-          gpt_sovits_text_language: 'auto',
-          gpt_sovits_translate_to_japanese: false,
-          gpt_sovits_gpt_weights: '',
-          gpt_sovits_sovits_weights: '',
-          use_emotion_references: true,
-        },
-      },
-      chat_model_id: 'auto',
-      chat_reasoning_level: 'auto',
-      pet_chat_model_id: 'auto',
-      pet_chat_reasoning_level: 'auto',
-      pet_call_asr_engine: 'auto',
-      pet_call_input_language: 'zh',
-      speech_translation_model_id: 'deepseek-v4-flash',
-      pet_call_silence_ms: 650,
-      pet_call_voice_threshold: 0.018,
-      pet_call_min_speech_ms: 280,
-      pet_call_max_turn_seconds: 18,
-      voice_volume: 85,
-      voice_streaming_enabled: true,
-      pet_speech_language: 'zh',
-      speak_proactive: false,
-      speak_screen_observations: false,
-      speak_game_observations: true,
-      qq_voice_mode: 'adaptive',
-      gpt_sovits_url: 'http://127.0.0.1:9880',
-      indextts2_url: 'http://127.0.0.1:11996',
-      indextts2_ref_audio: '',
-      local_voice_runtime: 'genie',
-      gpt_sovits_ref_audio: '',
-      gpt_sovits_prompt_text: '',
-      gpt_sovits_prompt_language: 'ja',
-      gpt_sovits_text_language: 'auto',
-      gpt_sovits_translate_to_japanese: false,
-      gpt_sovits_gpt_weights: '',
-      gpt_sovits_sovits_weights: '',
-      screen_ai_enabled: true,
-      screen_audio_enabled: true,
-      screen_audio_model: 'base',
-      screen_audio_language: 'auto',
-      screen_audio_chunk_seconds: 5,
-      screen_vision_route: 'local',
-      screen_vision_model_id: 'auto-fast',
-      screen_direct_voice_enabled: true,
-      screen_change_threshold: 4,
-      screen_analysis_interval_seconds: 5,
-      screen_request_timeout_seconds: 25,
-      screen_voice_cooldown_seconds: 5,
-      screen_minimum_importance: 0.62,
-      screen_daily_cost_limit_yuan: 5,
-      bubble_seconds: 9,
-      pet_size_percent: 150,
-      live2d_click_through_locked: false,
-      live2d_speech_bubble_enabled: true,
-      live2d_keep_visible: false,
-    },
-  },
-  screen: { running: false, preview_available: false, change_percent: 0, title: '主屏幕', error: '', capture_backend: 'imagegrab', capture_backend_error: '', interval_ms: 1000, screen_scope: 'primary' },
-  screen_analysis: {
-    enabled: true,
-    capture_only: false,
-    vision_available: false,
-    vision_model_options: [],
-    selected_vision_model_id: '',
-    in_progress: false,
-    last_analyzed_at: '',
-    last_reply: '',
-    last_error: '',
-    last_model: '',
-    last_cost_yuan: null,
-    change_threshold: 4,
-    minimum_interval_seconds: 30,
-    budget: {
-      paused: false,
-      paused_reason: '',
-      session_request_count: 0,
-      session_cost_yuan: 0,
-      session_unknown_cost_count: 0,
-      daily: { request_count: 0, total_cost_yuan: 0, unknown_cost_count: 0 },
-      daily_cost_limit_yuan: 5,
-    },
-    pipeline_timings: {},
-  },
-  voice_runtime: { engine: 'gpt_sovits', engine_label: 'GPT-SoVITS', service_running: false, service_loading: false, managed_running: false, reference_ready: false, reference_name: '', prompt_ready: false, emotion_reference_ready: false, emotion_reference_count: 0, active_weights: { gpt: '', sovits: '' }, last_error: '', weights: { gpt: [], sovits: [] } },
-  voice_training: {
-    source_ready: false,
-    environment_ready: false,
-    pretrained_ready: false,
-    trained_ready: false,
-    model_count: 0,
-    expected_model_count: 9,
-    material_count: 0,
-    stage: '',
-    message: '',
-  },
-})
-const companionStatusReady = ref(false)
-const companionStatusError = ref('')
-const diaryBusy = ref('')
-const memoryTab = ref('notebook')
-const memoryData = ref({
-  threads: [],
-  summaries: [],
-  structured: [],
-  structured_candidates: [],
-  structured_history: [],
-  follow_up_results: [],
-  profile: null,
-  runtime_summary: null,
-})
-const runtimeSummaryDraft = ref('')
-const newThreadContent = ref('')
-const newThreadFollowUp = ref('')
-const newProfileNote = ref('')
-const newConversationSummary = ref('')
-const newStructuredMemory = ref({ layer: 'L0', category: 'preference', memory_key: '', content: '' })
-const memoryBusy = ref('')
-const dailyReviews = ref([])
-const weeklyReviews = ref([])
-const monthlyReviews = ref([])
-const selectedDailyDate = ref('')
-const selectedWeeklyStart = ref('')
-const selectedMonthlyMonth = ref('')
-const memoryLoading = ref(false)
-const memoryError = ref('')
-const memoryLoaded = ref(false)
-const reviewBusy = ref('')
-const copiedTurnId = ref('')
-const speakingPartId = ref('')
-const voiceLoadingPartId = ref('')
-const modelTestBusy = ref('')
-const modelTestStatus = ref({})
-const showProviderPanel = ref(false)
-const showTokenUsagePanel = ref(false)
-const tokenUsageLoading = ref(false)
-const tokenUsageError = ref('')
-const tokenUsageData = ref({ today: {}, total: {}, days: [], logical_day_boundary_hour: 4 })
-const providerBusy = ref(false)
-const providerDiscoveryBusy = ref(false)
-const providerDiscoveryWarning = ref('')
-const providerDiscoveryMeta = ref(null)
-const discoveredModels = ref([])
-const providerForm = ref({
-  preset_id: '',
-  provider_kind: 'relay',
-  provider_protocol: 'openai',
-  default_api_mode: 'auto',
-  provider_name: '',
-  model: '',
-  base_url: '',
-  api_key: '',
-  supports_vision: false,
-  cached_input_price_cny_per_million: 0,
-  input_price_cny_per_million: 0,
-  output_price_cny_per_million: 0,
-})
+
+const {
+  qqBusy,
+  qqQrImageUrl,
+  qqQrLoading,
+  qqQrError,
+  qqAccountDraft,
+  qqTestTargetDraft,
+  qqSetupResult,
+  startupGreetingEnabled,
+  groupChatSettings,
+  groupIdsDraft,
+} = createQqState()
+
+const {
+  companionBusy,
+  petChatDraft,
+  petChatSending,
+  petChatImages,
+  petCallActive,
+  petCallState,
+  petCallError,
+  petCallSettings,
+  companionAvatarNonce,
+  observationMode,
+  screenScope,
+  observationInterval,
+  gameWindows,
+  selectedGameHwnd,
+  gameWindowsLoading,
+  companionStatus,
+  companionStatusReady,
+  companionStatusError,
+} = createCompanionState()
+
+const petCallRuntime = createPetCallRuntime()
+
 let pollTimer = null
 let dashboardPollTimer = null
 let qqStatusPollTimer = null
@@ -1460,9 +1258,7 @@ const activeModel = computed(() => {
   return modelOptions.value.find((item) => item.id === selectedModel.value) || bootstrap.value?.model || null
 })
 const isAutoRouting = computed(() => selectedModel.value === 'auto')
-const activeModelSupportsVision = computed(() => isAutoRouting.value
-  ? modelOptions.value.some((item) => item.supports_vision)
-  : Boolean(activeModel.value?.supports_vision))
+const activeModelSupportsVision = computed(() => true)
 const activeReasoningOptions = computed(() => {
   if (isAutoRouting.value) {
     return [{ id: 'auto', label: '自动', description: '根据当前话题难度选择模型原生思考方式' }]
@@ -1775,7 +1571,7 @@ const activeViewSubtitle = computed(() => ({
 }[activeView.value] || '今天也陪你一起生活'))
 const stateHistory = computed(() => bootstrap.value?.state_history || [])
 const autoDiaryStatus = computed(() => bootstrap.value?.auto_diary || {})
-const stateAnalyzeBusy = ref(false)
+
 const moodScore = computed(() => Math.max(0, Math.min(5, Number(todayState.value.mood_score || 0))))
 const moodTrend = computed(() => {
   if (!logicalDate.value) return []
@@ -1834,77 +1630,7 @@ const autoDiaryStatusLabel = computed(() => {
     not_checked: '等待首次自动检查',
   }[status.result] || `${date} 自动检查完成`
 })
-const statsSummary = computed(() => statsData.value.summary || {})
-const statsMonthLabel = computed(() => statsData.value.year && statsData.value.month
-  ? `${statsData.value.year} 年 ${statsData.value.month} 月`
-  : '正在读取')
-const statsCalendarCells = computed(() => {
-  const year = Number(statsData.value.year || 0)
-  const month = Number(statsData.value.month || 0)
-  if (!year || !month) return []
-  const entryMap = new Map((statsData.value.calendar || []).map((item) => [item.date, item]))
-  const firstDay = new Date(Date.UTC(year, month - 1, 1))
-  const offset = (firstDay.getUTCDay() + 6) % 7
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate()
-  const cells = Array.from({ length: offset }, (_, index) => ({ key: `blank-${index}`, blank: true }))
-  for (let day = 1; day <= daysInMonth; day += 1) {
-    const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    const entry = entryMap.get(date)
-    cells.push({
-      key: date,
-      blank: false,
-      day,
-      date,
-      title: entry?.title || '',
-      status: date > statsData.value.logical_date ? 'future' : (entry?.daily_thirty_status || 'unknown'),
-      hasDiary: Boolean(entry),
-      isToday: date === statsData.value.logical_date,
-    })
-  }
-  return cells
-})
-const statsDistribution = computed(() => {
-  const byStatus = statsSummary.value.by_status || {}
-  const config = [
-    { key: 'done', label: '完成', color: '#388166' },
-    { key: 'partial', label: '部分完成', color: '#b17a32' },
-    { key: 'missed', label: '未完成', color: '#b24b4b' },
-    { key: 'unknown', label: '未记录', color: '#94a0a9' },
-  ]
-  const total = config.reduce((sum, item) => sum + Number(byStatus[item.key] || 0), 0)
-  let offset = 0
-  return config.map((item) => {
-    const value = Number(byStatus[item.key] || 0)
-    const percent = total ? (value / total) * 100 : 0
-    const segment = { ...item, value, percent, offset, total }
-    offset += percent
-    return segment
-  })
-})
-const statsMoodSeries = computed(() => {
-  const logical = statsData.value.logical_date
-  if (!logical) return []
-  const byDate = new Map((statsData.value.mood_trend || []).map((item) => [item.date, item]))
-  const current = new Date(`${logical}T00:00:00Z`)
-  return Array.from({ length: 30 }, (_, index) => {
-    const target = new Date(current)
-    target.setUTCDate(current.getUTCDate() - (29 - index))
-    const date = target.toISOString().slice(0, 10)
-    const item = byDate.get(date) || {}
-    const score = Math.max(0, Math.min(5, Number(item.mood_score || 0)))
-    return {
-      date,
-      mood: item.mood || '',
-      score,
-      x: 42 + (index / 29) * 638,
-      y: score ? 18 + ((5 - score) / 4) * 150 : 0,
-    }
-  })
-})
-const statsMoodPoints = computed(() => statsMoodSeries.value.filter((item) => item.score))
-const statsMoodPath = computed(() => statsMoodPoints.value
-  .map((item, index) => `${index ? 'L' : 'M'}${item.x.toFixed(1)} ${item.y.toFixed(1)}`)
-  .join(' '))
+const { statsSummary, statsMonthLabel, statsCalendarCells, statsDistribution, statsMoodSeries, statsMoodPoints, statsMoodPath } = useStatsPresentation(statsData)
 const visibleMessages = computed(() => messages.value
   .map((item) => ({ ...item, content: cleanDisplayContent(item.content) }))
   .filter((item) => item.content || item.attachments?.length))
@@ -2007,7 +1733,6 @@ const profileRows = computed(() => {
   ].filter(([, value]) => value)
 })
 
-
 function ensureReasoningForActiveModel() {
   if (isAutoRouting.value) {
     reasoningLevel.value = 'auto'
@@ -2024,14 +1749,7 @@ function ensureReasoningForActiveModel() {
   persistReasoning()
 }
 
-
 const toolReceiptLabels = executionActionLabels
-
-
-async function request(url, options = {}) {
-  return apiRequest(url, options)
-}
-
 
 const petCallStateLabel = computed(() => ({
   idle: '语音聊天',
@@ -2043,7 +1761,6 @@ const petCallStateLabel = computed(() => ({
   error: '通话异常',
 }[petCallState.value] || '语音聊天'))
 
-
 function showSettingsFeedback(section, type, message) {
   settingsFeedback.value = { section, type, message }
   window.setTimeout(() => {
@@ -2052,7 +1769,6 @@ function showSettingsFeedback(section, type, message) {
     }
   }, 3200)
 }
-
 
 provide('mio-settings-page', reactive({
   openAgentCreationSettings,
@@ -2234,6 +1950,16 @@ provide('mio-chat-page', reactive({
   createNewConversation,
   contextPercent,
   contextRingStyle,
+  modelCatalogLoading,
+  modelCatalogError,
+  modelSelectionNotice,
+  refreshModelCatalog,
+  references,
+  elementReference,
+  failedChatDrafts,
+  restoreChatDraft,
+  replayTurn,
+  loadHistoryToMessage,
   contextUsage,
   contextUsageLabel,
   controlQq,
@@ -2332,7 +2058,7 @@ provide('mio-records-page', reactive({
   autoDiaryStatusLabel,
   async retryAutoDiary() {
     try {
-      await request('/api/diary/automatic/check', { method: 'POST', body: '{}' })
+      await appRuntimeApi.checkAutomaticDiary()
       await refreshDayDashboard()
     } catch (error) { errorMessage.value = error.message }
   },
@@ -2463,7 +2189,7 @@ function markAppReady() {
   document.documentElement.dataset.mioReady = 'true'
   window.dispatchEvent(new CustomEvent('mio:app-ready'))
   if (isAgentWorkspace) return
-  void request('/api/companion/app-ready', { method: 'POST' }).catch(() => {
+  void appRuntimeApi.reportAppReady().catch(() => {
     // UI readiness must not be blocked by optional local-voice warm-up.
   })
 }
@@ -2483,18 +2209,22 @@ async function syncActiveViewState(
 
 function handleVisibilityChange() {
   void syncActiveViewState()
-  if (!document.hidden) void refreshModelCatalog()
+  if (!document.hidden) { void refreshModelCatalog(); void refreshSourceHandoff() }
 }
+
+function handleHandoffFocus() { void refreshSourceHandoff() }
 
 let catalogRefresh = null
 function refreshModelCatalog() {
   if (catalogRefresh) return catalogRefresh
-  catalogRefresh = request('/api/agent/models/catalog').then(data => {
+  modelCatalogLoading.value=true;modelCatalogError.value=''
+  catalogRefresh = appRuntimeApi.loadModelCatalog().then(data => {
     bootstrap.value = mergeModelCatalog(bootstrap.value, data)
     if (selectedModel.value !== 'auto' && !data.models.some(item => item.id === selectedModel.value)) {
+      modelSelectionNotice.value='之前选择的模型已不可用，已切换为自动；可重新选择已连接的模型。'
       selectedModel.value = 'auto'; persistSelectedModel()
     }
-  }).catch(() => {}).finally(() => { catalogRefresh = null })
+  }).catch(cause => {modelCatalogError.value=`模型列表刷新失败，已保留原选择：${cause.message}`}).finally(() => { catalogRefresh = null;modelCatalogLoading.value=false })
   return catalogRefresh
 }
 
@@ -2511,10 +2241,11 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('storage', handleAppPreferencesStorage)
   if (!isAgentWorkspace && returnToChatRequested) {
-    window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`)
     localStorage.removeItem('mio_return_to_chat')
   }
   window.addEventListener('focus', refreshModelCatalog)
+  window.addEventListener('focus', handleHandoffFocus)
   window.addEventListener('mio-model-catalog-changed', refreshModelCatalog)
   window.addEventListener('mio:open-pet-chat', focusDesktopPetChat)
   try {
@@ -2558,7 +2289,10 @@ onMounted(async () => {
     void requestStartupGreeting()
   }
   if (window.location.hash === '#desktop-pet-chat') focusDesktopPetChat()
-  pollTimer = window.setInterval(refreshMessages, 5000)
+  pollTimer = window.setInterval(() => {
+    void refreshMessages()
+    if (!document.hidden) void refreshSourceHandoff()
+  }, 5000)
   if (!isAgentWorkspace) {
     dashboardPollTimer = window.setInterval(refreshDayDashboard, 15000)
     qqStatusPollTimer = window.setInterval(refreshQqStatus, 10000)
@@ -2617,6 +2351,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener('storage', handleAppPreferencesStorage)
   window.removeEventListener('focus', refreshModelCatalog)
+  window.removeEventListener('focus', handleHandoffFocus)
+  disposeHandoff()
   window.removeEventListener('mio-model-catalog-changed', refreshModelCatalog)
   window.removeEventListener('mio:open-pet-chat', focusDesktopPetChat)
   if (pollTimer) window.clearInterval(pollTimer)
@@ -2637,10 +2373,7 @@ function handlePetChatHidden() {
 
 async function setPetChatWindowState(open) {
   try {
-    await request('/api/companion/chat-window/state', {
-      method: 'POST',
-      body: JSON.stringify({ open: Boolean(open) }),
-    })
+    await appRuntimeApi.reportPetChatWindow(open)
   } catch (_) {}
 }
 </script>
@@ -2749,7 +2482,7 @@ async function setPetChatWindowState(open) {
           <button v-for="item in navGroups[0].items" :key="item.id" type="button" :class="['nav-item', { active: isPrimaryNavActive(item.id) }]" :title="item.label" @click="navigatePrimaryView(item.id)"><component :is="item.icon" :size="18" /><span>{{ item.label }}</span></button>
         </nav>
         <div class="sidebar-footer pet-launcher">
-          <button type="button" :title="companionStatus.pet?.running ? '停止桌宠' : '启动桌宠'" :disabled="Boolean(companionBusy)" @click="controlCompanion(companionStatus.pet?.running ? 'stop' : 'start')"><component :is="companionStatus.pet?.running ? Power : Play" :size="17" /><span><strong>桌宠</strong><small>{{ companionStatus.pet?.running ? '运行中' : '未启动' }}</small></span><i :class="{ online: companionStatus.pet?.running }" /></button>
+          <button type="button" :title="companionStatus.pet?.running ? '停止桌宠' : '启动桌宠'" :disabled="Boolean(companionBusy)" @click="controlCompanion(companionStatus.pet?.running ? 'stop' : 'start')"><component :is="companionStatus.pet?.running ? Power : Play" :size="17" /><span><strong>桌宠</strong><small>{{ petStartupPresentation(companionStatus.pet, companionBusy).label }}</small></span><i :class="{ online: petStartupPresentation(companionStatus.pet, companionBusy).ready }" /></button>
         </div>
       </template>
     </aside>
@@ -2758,7 +2491,7 @@ async function setPetChatWindowState(open) {
       <div v-if="errorMessage" class="error-banner"><span>{{ errorMessage }}</span><button type="button" title="关闭" @click="errorMessage = ''"><X :size="16" /></button></div>
       <AgentHomePage v-if="isAgentWorkspace && activeView === 'home'" @navigate="navigatePrimaryView" />
       <AgentSettingsPage v-else-if="isAgentWorkspace && activeView === 'settings'" @preferences-change="applyAgentPreferences" @return="returnToApp" />
-      <HomePage v-else-if="activeView === 'home'" :logical-date="logicalDate" :context-usage="contextUsage" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="Boolean(companionStatus.pet?.running)" @navigate="activeView = $event" @open-diary="openDiary" @open-thread="openHomeThread" />
+      <HomePage v-else-if="activeView === 'home'" :logical-date="logicalDate" :context-usage="contextUsage" :today-state="todayState" :today-state-details="todayStateDetails" :diaries="diaries" :memory-data="memoryData" :display-name="mioDisplayName" :user-address="preferredUserAddress" :companion-running="petStartupPresentation(companionStatus.pet, companionBusy).ready" @navigate="activeView = $event" @open-diary="openDiary" @open-thread="openHomeThread" />
       <ChatPage v-else-if="activeView === 'chat'" />
       <RecordsPage v-else-if="['diaries', 'stats', 'memory'].includes(activeView)" :thread-focus="homeThreadFocus" />
       <AgentWorkspaceHub v-else-if="isAgentWorkspace && activeView === 'projects'" @open-conversation="async (id) => { await selectConversation(id); activeView = 'chat' }" />
@@ -2791,7 +2524,7 @@ async function setPetChatWindowState(open) {
       <section class="rail-services">
         <button type="button" title="QQ通道" @click="openSettingsSection('qq')"><component :is="qqConnected ? Wifi : WifiOff" :size="17" /><span><strong>QQ</strong><small>{{ qqConnected ? '在线' : '离线' }}</small></span><i :class="{ online: qqConnected }" /></button>
         <button type="button" title="语音服务" @click="openSettingsSection('pet')"><Volume2 :size="17" /><span><strong>语音</strong><small>{{ companionStatus.voice_runtime?.service_running ? '在线' : '未启动' }}</small></span><i :class="{ online: companionStatus.voice_runtime?.service_running }" /></button>
-        <button type="button" title="桌宠状态" @click="activeView = 'companion'"><Gamepad2 :size="17" /><span><strong>桌宠</strong><small>{{ companionStatus.pet?.running ? '运行中' : '未启动' }}</small></span><i :class="{ online: companionStatus.pet?.running }" /></button>
+        <button type="button" title="桌宠状态" @click="activeView = 'companion'"><Gamepad2 :size="17" /><span><strong>桌宠</strong><small>{{ petStartupPresentation(companionStatus.pet, companionBusy).label }}</small></span><i :class="{ online: petStartupPresentation(companionStatus.pet, companionBusy).ready }" /></button>
         <button type="button" title="屏幕观察" @click="openCompanionSection('screen-panel')"><Monitor :size="17" /><span><strong>观察</strong><small>{{ companionStatus.screen?.running ? (companionStatus.screen.title || '进行中') : '未启动' }}</small></span><i :class="{ online: companionStatus.screen?.running }" /></button>
       </section>
       <button class="rail-token" type="button" title="查看 Token 统计" @click="openTokenUsagePanel"><Activity :size="17" /><span><small>今日 Token</small><strong>{{ todayTokenUsage.toLocaleString('zh-CN') }}</strong></span></button>
@@ -2828,7 +2561,7 @@ async function setPetChatWindowState(open) {
             <span><small>今日输入</small><b>{{ formatTokenCount(tokenUsageData.today?.prompt_tokens) }}</b></span>
             <span><small>今日输出</small><b>{{ formatTokenCount(tokenUsageData.today?.completion_tokens) }}</b></span>
             <span><small>今日推理</small><b>{{ formatTokenCount(tokenUsageData.today?.reasoning_tokens) }}</b></span>
-            <span title="命中率 = 上游报告缓存输入 ÷ 今日总输入，按 token 加权，包含未报告缓存的调用。横线表示暂无可确认比例，可能尚无输入、缓存为 0 或上游未报告。"><small>缓存输入 · {{ messageCacheRateLabel(tokenUsageData.today) }}</small><b>{{ formatTokenCount(tokenUsageData.today?.cached_prompt_tokens) }}</b></span>
+            <span :title="messageTokenUsageTitle(tokenUsageData.today)"><small>缓存输入 · {{ messageCacheRateLabel(tokenUsageData.today) }}</small><b>{{ formatTokenCount(tokenUsageData.today?.cached_prompt_tokens) }}</b></span>
           </div>
           <div class="token-day-list" role="region" aria-label="每日 Token 用量" tabindex="0">
             <header><span>日期</span><span>对话</span><span>观察</span><span>合计</span></header>
@@ -2849,16 +2582,16 @@ async function setPetChatWindowState(open) {
           <button type="button" :class="{ active: providerForm.provider_kind === 'local' }" @click="selectProviderKind('local')">本地模型</button>
         </div>
         <div v-if="providerForm.provider_kind !== 'relay'" class="provider-official-picker">
-          <select :value="providerForm.preset_id" @change="selectProviderPreset($event.target.value)">
+          <SelectField :value="providerForm.preset_id" @change="selectProviderPreset($event.target.value)">
             <option value="">选择常用供应商</option>
             <option v-for="preset in providerPresets.filter(item => providerForm.provider_kind === 'local' ? item.kind === 'local' : item.kind !== 'local')" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
-          </select>
+          </SelectField>
         </div>
         <label>供应商名称<input v-model.trim="providerForm.provider_name" :disabled="Boolean(providerForm.preset_id)" autofocus placeholder="例如 OpenAI 中转站" /></label>
         <label>API地址<input v-model.trim="providerForm.base_url" :disabled="Boolean(providerForm.preset_id) && providerForm.provider_kind !== 'local'" :placeholder="providerForm.provider_kind === 'local' ? 'http://127.0.0.1:1234/v1' : 'https://example.com/v1'" /></label>
         <label>{{ providerForm.provider_kind === 'local' ? 'API Key（未启用鉴权可留空）' : 'API Key' }}<input v-model="providerForm.api_key" type="password" autocomplete="off" placeholder="sk-..." /></label>
         <p v-if="providerForm.provider_kind === 'local'" class="provider-privacy-note">在 LM Studio 或 Ollama 启动服务后，填写服务地址并获取模型。Agent 需要所选模型及模板支持工具调用；连接测试只验证聊天。</p>
-        <label>接口模式<select v-model="providerForm.default_api_mode"><option value="auto">自动识别</option><option value="responses">Responses API（Codex）</option><option value="chat_completions">Chat Completions</option></select></label>
+        <label>接口模式<SelectField v-model="providerForm.default_api_mode"><option value="auto">自动识别</option><option value="responses">Responses API（Codex）</option><option value="chat_completions">Chat Completions</option></SelectField></label>
         <div class="provider-discovery-bar">
           <span>{{ providerForm.provider_kind === 'official' ? '按官方模型接口获取' : 'OpenAI 兼容 / New API 中转站' }}</span>
           <button type="button" :disabled="providerDiscoveryBusy" @click="discoverProviderModels">
@@ -2896,7 +2629,7 @@ async function setPetChatWindowState(open) {
         <div class="provider-privacy-note">
           API Key 只保存在本机 D 盘数据目录，不会在页面中回显。
         </div>
-        <label class="checkbox-field"><input v-model="providerForm.supports_vision" type="checkbox" />支持图片识别</label>
+        <p class="form-hint">默认允许发送图片；若模型或接口不支持，会说明原因并提示更换模型。</p>
         <label v-if="providerForm.provider_kind === 'local'" class="checkbox-field"><input v-model="providerForm.supports_tool_calls" type="checkbox" />模型支持工具调用（用于自动选择）</label>
         <footer>
           <button type="button" @click="closeProviderPanel">取消</button>

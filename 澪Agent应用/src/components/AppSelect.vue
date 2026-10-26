@@ -1,9 +1,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import { Check, ChevronDown } from '@lucide/vue'
+import { Check, ChevronDown } from '../icons/index.js'
 
+defineOptions({ inheritAttrs: false })
 const props = defineProps({
-  modelValue: { type: String, default: '' },
+  modelValue: { type: [String, Number, Boolean], default: '' },
   options: { type: Array, default: () => [] },
   label: { type: String, required: true },
   disabled: Boolean,
@@ -21,10 +22,16 @@ let lastKey = 0
 
 function close() { opened.value = false }
 function reveal() {
-  nextTick(() => menu.value?.children[active.value]?.scrollIntoView({ block: 'nearest' }))
+  nextTick(() => {
+    const list = menu.value, item = list?.children[active.value]
+    if (!list || !item) return
+    if (item.offsetTop < list.scrollTop) list.scrollTop = item.offsetTop
+    else if (item.offsetTop + item.offsetHeight > list.scrollTop + list.clientHeight) {
+      list.scrollTop = item.offsetTop + item.offsetHeight - list.clientHeight
+    }
+  })
 }
-function open() {
-  if (props.disabled || !props.options.length) return
+function place() {
   const rect = trigger.value.getBoundingClientRect()
   const below = window.innerHeight - rect.bottom - 12
   const above = rect.top - 12
@@ -35,13 +42,17 @@ function open() {
     maxHeight: `${Math.max(60, Math.min(300, up ? above : below))}px`,
     ...(up ? { bottom: `${window.innerHeight - rect.top + 5}px` } : { top: `${rect.bottom + 5}px` }),
   }
+}
+function open() {
+  if (props.disabled || !props.options.length) return
+  place()
   active.value = Math.max(0, props.options.findIndex(item => item.value === props.modelValue))
   opened.value = true
   reveal()
 }
 function choose(index) {
   const option = props.options[index]
-  if (!option) return
+  if (!option || option.disabled) return
   emit('update:modelValue', option.value)
   close()
   trigger.value?.focus()
@@ -75,7 +86,11 @@ function outside(event) {
   if (!trigger.value?.contains(event.target) && !menu.value?.contains(event.target)) close()
 }
 function scroll(event) {
-  if (!menu.value?.contains(event.target)) close()
+  if (opened.value && !menu.value?.contains(event.target)) {
+    const rect = trigger.value?.getBoundingClientRect()
+    if (!rect || rect.bottom < 0 || rect.top > window.innerHeight) close()
+    else place()
+  }
 }
 onMounted(() => {
   document.addEventListener('pointerdown', outside)
@@ -91,7 +106,7 @@ watch(() => [props.options, props.disabled], close)
 </script>
 
 <template>
-  <button ref="trigger" class="app-select" type="button" role="combobox" aria-haspopup="listbox"
+  <button v-bind="$attrs" ref="trigger" class="app-select" type="button" role="combobox" aria-haspopup="listbox"
     :aria-label="label" :aria-expanded="opened" :aria-controls="`${id}-list`"
     :aria-activedescendant="opened ? `${id}-${active}` : undefined"
     :disabled="disabled || !options.length" @click="opened ? close() : open()" @keydown="keydown" @blur="close">
@@ -100,7 +115,7 @@ watch(() => [props.options, props.disabled], close)
   <Teleport to="body">
     <ul v-if="opened" :id="`${id}-list`" ref="menu" class="app-select-menu" role="listbox" :aria-label="label" :style="position" @pointerdown.prevent>
       <li v-for="(option, index) in options" :id="`${id}-${index}`" :key="option.value" role="option"
-        :aria-selected="option.value === modelValue" :class="{ highlighted: index === active }"
+        :aria-selected="option.value === modelValue" :aria-disabled="Boolean(option.disabled)" :class="{ highlighted: index === active, 'disabled-option': option.disabled }"
         @pointermove="active = index" @click="choose(index)">
         <span>{{ option.label }}</span><Check v-if="option.value === modelValue" :size="15" />
       </li>
@@ -120,4 +135,5 @@ watch(() => [props.options, props.disabled], close)
 .app-select-menu li.highlighted { background: var(--accent-soft); }
 .app-select-menu li[aria-selected=true] { color: var(--accent-dark); font-weight: 650; }
 .app-select-menu svg { flex-shrink: 0; }
+.app-select-menu li.disabled-option { opacity: .5; cursor: default; }
 </style>

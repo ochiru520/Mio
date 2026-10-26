@@ -1,3 +1,5 @@
+
+import * as tasksApi from '../services/tasksApi.js'
 /** Tasks operations. Reactive values and cross-domain callbacks are explicitly injected.
  * This module owns behavior, not application-global mutable state.
  * Dependencies are accessors so async callbacks see the latest state.
@@ -10,7 +12,7 @@ export function useTasks(deps) {
     deps.tasksLoading.value = true
     deps.tasksError.value = ''
     try {
-      deps.agentTasks.value = await deps.request('/api/agent/tasks?limit=200')
+      deps.agentTasks.value = await tasksApi.loadTasksByLimit200({}, deps.request)
       deps.tasksLoaded.value = true
     } catch (error) {
       deps.tasksError.value = error.message
@@ -176,7 +178,7 @@ export function useTasks(deps) {
     if (deps.taskBusy.value) return
     deps.taskBusy.value = `approve-${task.id}`
     try {
-      const updated = await deps.request(`/api/agent/tasks/${task.id}/approve`, { method: 'POST', body: '{}' })
+      const updated = await tasksApi.submitTaskApprove(task.id, {}, deps.request)
       deps.agentTasks.value = deps.agentTasks.value.map((item) => item.id === updated.id ? updated : item)
       if (task.conversation_id === deps.selectedConversationId.value) await deps.refreshMessages()
     } catch (error) {
@@ -189,7 +191,7 @@ export function useTasks(deps) {
     if (deps.taskBusy.value) return
     deps.taskBusy.value = `cancel-${task.id}`
     try {
-      const updated = await deps.request(`/api/agent/tasks/${task.id}/cancel`, { method: 'POST', body: '{}' })
+      const updated = await tasksApi.submitTaskCancel(task.id, {}, deps.request)
       deps.agentTasks.value = deps.agentTasks.value.map((item) => item.id === updated.id ? updated : item)
       if (task.conversation_id === deps.selectedConversationId.value) await deps.refreshMessages()
     } catch (error) {

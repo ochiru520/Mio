@@ -1,3 +1,7 @@
+
+import * as companionApi from '../services/companionApi.js'
+
+import * as selfStateApi from '../services/selfStateApi.js'
 /** Bootstrap operations. Reactive values and cross-domain callbacks are explicitly injected.
  * This module owns behavior, not application-global mutable state.
  * Dependencies are accessors so async callbacks see the latest state.
@@ -13,7 +17,7 @@ export function useBootstrap(deps) {
     const conversationId = deps.selectedConversationId.value
     if (!conversationId) return
     try {
-      const usage = await deps.request(`/api/agent/context-usage?conversation_id=${encodeURIComponent(conversationId)}`)
+      const usage = await chatApi.loadContextUsageByConversationId(conversationId, {}, deps.request)
       if (deps.selectedConversationId.value === conversationId) deps.contextUsage.value = usage
     } catch {
       // Context usage is supplementary and must not block chatting.
@@ -38,7 +42,7 @@ export function useBootstrap(deps) {
     deps.tokenUsageLoading.value = true
     deps.tokenUsageError.value = ''
     try {
-      const data = await deps.request('/api/agent/token-usage?days=30')
+      const data = await chatApi.loadTokenUsageByDays30({}, deps.request)
       if (version === tokenUsageVersion) deps.tokenUsageData.value = data
     } catch (error) {
       if (version === tokenUsageVersion) deps.tokenUsageError.value = error.message
@@ -54,7 +58,7 @@ export function useBootstrap(deps) {
     deps.stateAnalyzeBusy.value = true
     deps.errorMessage.value = ''
     try {
-      await deps.request('/api/state/analyze-today', { method: 'POST', body: '{}' })
+      await selfStateApi.submitAnalyzeToday({}, deps.request)
       await refreshDayDashboard()
     } catch (error) {
       deps.errorMessage.value = error.message
@@ -126,8 +130,8 @@ export function useBootstrap(deps) {
         deps.contextUsage.value = data.context_usage || deps.contextUsage.value
       } else {
         const [selectedMessages, selectedUsage] = await Promise.all([
-          deps.request(`/api/agent/messages?limit=120&conversation_id=${encodeURIComponent(deps.selectedConversationId.value)}`),
-          deps.request(`/api/agent/context-usage?conversation_id=${encodeURIComponent(deps.selectedConversationId.value)}`),
+          chatApi.loadMessagesByLimit120ConversationId(deps.selectedConversationId.value, {}, deps.request),
+          chatApi.loadContextUsageByConversationId(deps.selectedConversationId.value, {}, deps.request),
         ])
         deps.messages.value = selectedMessages
         deps.contextUsage.value = selectedUsage
@@ -146,7 +150,7 @@ export function useBootstrap(deps) {
   }
   async function loadStartupGreetingSetting() {
     try {
-      const data = await deps.request('/api/companion/startup-greeting')
+      const data = await companionApi.loadStartupGreeting({}, deps.request)
       deps.startupGreetingEnabled.value = Boolean(data.enabled)
       deps.savedStartupGreeting.value = deps.startupGreetingEnabled.value
     } catch {
@@ -197,7 +201,7 @@ export function useBootstrap(deps) {
   }
   async function loadQqStartupSetting() {
     try {
-      const data = await deps.request('/api/companion/qq-startup')
+      const data = await companionApi.loadQqStartup({}, deps.request)
       deps.qqStartupEnabled.value = Boolean(data.enabled)
       deps.savedQqStartupEnabled.value = deps.qqStartupEnabled.value
     } catch {
@@ -206,10 +210,7 @@ export function useBootstrap(deps) {
   }
   async function saveStartupGreetingSetting() {
     try {
-      const greeting = await deps.request('/api/companion/startup-greeting', {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled: deps.startupGreetingEnabled.value }),
-      })
+      const greeting = await companionApi.updateStartupGreeting({ enabled: deps.startupGreetingEnabled.value }, {}, deps.request)
       deps.startupGreetingEnabled.value = Boolean(greeting.enabled)
       deps.savedStartupGreeting.value = deps.startupGreetingEnabled.value
       return true
@@ -221,10 +222,7 @@ export function useBootstrap(deps) {
   }
   async function saveQqStartupSetting() {
     try {
-      const qqStartup = await deps.request('/api/companion/qq-startup', {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled: deps.qqStartupEnabled.value }),
-      })
+      const qqStartup = await companionApi.updateQqStartup({ enabled: deps.qqStartupEnabled.value }, {}, deps.request)
       deps.qqStartupEnabled.value = Boolean(qqStartup.enabled)
       deps.savedQqStartupEnabled.value = deps.qqStartupEnabled.value
       return true

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { ArrowDownToLine, RefreshCw, ShieldCheck, PackageCheck, Info } from '@lucide/vue'
+import { ArrowDownToLine, RefreshCw, ShieldCheck, PackageCheck, Info } from '../icons/index.js'
 import { useUpdates } from '../composables/useUpdates.js'
 const { state, error, available, working, progress, invoke } = useUpdates()
 const confirmInstall = ref(false)
@@ -67,9 +67,9 @@ async function install() {
 .update-version-icon { display: grid; place-items: center; flex: 0 0 48px; height: 48px; border-radius: 14px; background: var(--accent-soft); color: var(--accent-dark); }
 .update-version-copy { display: grid; gap: 5px; flex: 1; min-width: 0; }
 .update-version-copy > span { display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--fs, 1)); color: var(--muted); }
-.update-version-copy b { padding: 2px 7px; font-size: calc(10px * var(--fs, 1)); font-weight: 500; border-radius: 5px; background: var(--accent-soft); color: var(--accent-dark); }
+.update-version-copy b { padding: 2px 7px; font-size: calc(12px * var(--fs, 1)); font-weight: 500; border-radius: 5px; background: var(--accent-soft); color: var(--accent-dark); }
 .update-version-copy > strong { font-size: calc(23px * var(--fs, 1)); letter-spacing: .3px; overflow-wrap: anywhere; }
-.update-version-copy > small { font-size: calc(11px * var(--fs, 1)); color: var(--muted); line-height: 1.6; }
+.update-version-copy > small { font-size: calc(12px * var(--fs, 1)); color: var(--muted); line-height: 1.6; }
 .update-preferences { border-top: 1px solid var(--line); border-radius: 12px; }
 .update-preferences .settings-item { min-height: 74px; gap: 18px; padding: 15px 20px; cursor: pointer; }
 .update-preferences .settings-item > span { min-width: 0; }
@@ -79,7 +79,7 @@ async function install() {
 .update-preferences input.update-switch:checked { background: var(--accent); }
 .update-preferences input.update-switch:checked::after { background: var(--accent-contrast); transform: translateX(15px); }
 .update-preferences input.update-switch:disabled { opacity: .45; cursor: default; }
-.update-note { font-size: calc(11px * var(--fs, 1)); color: var(--muted); line-height: 1.7; }
+.update-note { font-size: calc(12px * var(--fs, 1)); color: var(--muted); line-height: 1.7; }
 .update-privacy { display: flex; align-items: center; gap: 7px; margin-top: 20px; }
 .update-privacy svg { flex-shrink: 0; }
 .update-status { display: flex; align-items: flex-start; gap: 9px; padding: 13px 15px; margin: 14px 0; border-radius: 9px; background: var(--surface-soft); color: var(--muted); font-size: calc(12px * var(--fs, 1)); line-height: 1.6; overflow-wrap: anywhere; }
@@ -89,7 +89,7 @@ async function install() {
 .update-release { padding: 16px; border: 1px solid var(--line); border-radius: 10px; font-size: calc(13px * var(--fs, 1)); }
 .update-notes { white-space: pre-wrap; line-height: 1.7; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 .update-actions { display: flex; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
-.update-progress { display: grid; gap: 8px; margin: 18px 0; font-size: calc(11px * var(--fs, 1)); color: var(--muted); }
+.update-progress { display: grid; gap: 8px; margin: 18px 0; font-size: calc(12px * var(--fs, 1)); color: var(--muted); }
 .update-progress progress { appearance: none; width: 100%; height: 6px; border: 0; border-radius: 8px; overflow: hidden; }
 .update-progress progress::-webkit-progress-bar { background: var(--line); }
 .update-progress progress::-webkit-progress-value { background: var(--accent); border-radius: 8px; }

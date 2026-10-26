@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import base64
-from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
+from .repositories import creation_repository as repository
 
 from . import db
 from .config import settings
@@ -31,9 +32,8 @@ def use_reference(arguments: dict, context) -> dict:
         asset = save_job_output_as_asset(job_id, index)
     else:
         message_id = message_id or context.source_message_id
-        with closing(db.get_conn()) as conn:
-            row = conn.execute('SELECT attachments_json FROM messages WHERE id=? AND conversation_id=?',
-                               (message_id, context.conversation_id)).fetchone()
+        with repository.transaction() as conn:
+            row = repository.message_attachment(conn, (message_id, context.conversation_id)).fetchone()
         if row is None:
             raise ValueError('没有找到当前会话的参考图片消息。')
         attachments = [x for x in json.loads(row['attachments_json'] or '[]') if x.get('kind') == 'image']
@@ -53,8 +53,8 @@ def use_reference(arguments: dict, context) -> dict:
             raise ValueError('参考图片超过允许的大小。')
         content = path.read_bytes()
         digest = hashlib.sha256(content).hexdigest()
-        with closing(db.get_conn()) as conn:
-            existing = conn.execute('SELECT id FROM creation_assets WHERE sha256=? ORDER BY created_at DESC LIMIT 1', (digest,)).fetchone()
+        with repository.transaction() as conn:
+            existing = repository.asset_id_by_hash(conn, (digest,)).fetchone()
         asset = get_asset(existing['id']) if existing else None
         if not asset:
             mime = str(attachment.get('mime_type') or 'image/png')

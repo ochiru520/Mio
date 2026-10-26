@@ -1,6 +1,8 @@
 <script setup>
+import SelectField from './SelectField.vue'
+import * as workspaceApi from '../services/workspaceApi.js'
+
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { apiRequest } from '../services/api.js'
 
 const props = defineProps({ mobile: Boolean })
 const emit = defineEmits(['expired'])
@@ -24,11 +26,11 @@ const filteredSkills = computed(() => {
     return true
   })
 })
-async function api(url, method = 'GET', body) {
-  try { return await apiRequest(url, { method, headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {}, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }) }
+async function withSession(operation) {
+  try { return await operation }
   catch (cause) { if (cause.status === 401 && props.mobile) emit('expired'); throw cause }
 }
-async function refresh() { const response = await api('/api/workspace/skills'); if (!disposed) skills.value = response.skills || [] }
+async function refresh() { const response = await withSession(workspaceApi.loadSkills({ headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} })); if (!disposed) skills.value = response.skills || [] }
 async function act(fn) {
   if (busy.value) return
   busy.value = true; error.value = ''; notice.value = ''
@@ -36,11 +38,11 @@ async function act(fn) {
   finally { if (!disposed) busy.value = false }
 }
 async function full(id, revision = 0) {
-  let page = await api(`/api/workspace/skills/${encodeURIComponent(id)}?revision=${revision}`)
+  let page = await withSession(workspaceApi.loadSkillByRevision(id, revision, { headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} }))
   const first = page; let content = page.content || ''
   while (page.has_more) {
     const offset = page.next_offset
-    page = await api(`/api/workspace/skills/${encodeURIComponent(id)}?revision=${first.revision}&offset=${offset}`)
+    page = await withSession(workspaceApi.loadSkillByRevisionOffset(id, first.revision, offset, { headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} }))
     if (page.content_hash !== first.content_hash || page.current_revision !== first.current_revision || page.next_offset <= offset) throw new Error('读取期间技能已变化，请重新打开；原草稿保留。')
     content += page.content || ''
     if (content.length > 100000) throw new Error('技能正文超过可编辑容量。')
@@ -59,18 +61,18 @@ function create() { selected.value = null; history.value = null; Object.assign(d
 async function save() {
   const item = selected.value, payload = { ...draft, expected_revision: item?.current_revision || 0 }
   await act(async () => {
-    await api('/api/workspace/skills' + (item ? `/${encodeURIComponent(item.id)}` : ''), item ? 'PUT' : 'POST', payload)
+    await withSession(workspaceApi.saveSkill(item?.id || '', payload, { headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} }))
     if (disposed) return
     editing.value = false; selected.value = null; await refresh(); notice.value = '技能已保存，澪可按任务自主选用。'
   })
 }
-async function toggle(item) { await act(async () => { await api(`/api/workspace/skills/${encodeURIComponent(item.id)}/enabled`, 'POST', { enabled: !item.enabled, expected_revision: item.revision }); await refresh() }) }
+async function toggle(item) { await act(async () => { await withSession(workspaceApi.submitSkillEnabled(item.id, { enabled: !item.enabled, expected_revision: item.revision }, { headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} })); await refresh() }) }
 async function importSource(item = null) {
   const path = item?.source_path || sourcePath.value
-  await act(async () => { await api('/api/workspace/skills/import', 'POST', { path, skill_id: item?.id || '', expected_revision: item?.revision || 0 }); await refresh(); if (!disposed) { sourcePath.value = ''; notice.value = '已导入授权文件，内容作为指导保存。' } })
+  await act(async () => { await withSession(workspaceApi.submitSkillsImport({ path, skill_id: item?.id || '', expected_revision: item?.revision || 0 }, { headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} })); await refresh(); if (!disposed) { sourcePath.value = ''; notice.value = '已导入授权文件，内容作为指导保存。' } })
 }
 async function readHistory() { const item = selected.value; await act(async () => { const value = await full(item.id, Number(historyRevision.value)); if (!disposed) history.value = value }) }
-async function rollback(item) { await act(async () => { await api(`/api/workspace/skills/${encodeURIComponent(item.id)}/rollback`, 'POST', { revision: item.revision - 1, expected_revision: item.revision }); await refresh(); notice.value = '已恢复上一版，原版本记录保留。' }) }
+async function rollback(item) { await act(async () => { await withSession(workspaceApi.submitSkillRollback(item.id, { revision: item.revision - 1, expected_revision: item.revision }, { headers: props.mobile ? { 'X-Mio-Mobile': '1' } : {} })); await refresh(); notice.value = '已恢复上一版，原版本记录保留。' }) }
 onMounted(() => act(refresh))
 onUnmounted(() => { disposed = true })
 </script>
@@ -82,8 +84,8 @@ onUnmounted(() => { disposed = true })
     <details v-if="!mobile"><summary>高级：导入与筛选</summary><form class="import" @submit.prevent="importSource()"><label>授权文件路径<input v-model="sourcePath" placeholder="已授权目录中的 .md 或 .txt" :disabled="busy || editing" /></label><button :disabled="busy || editing || !sourcePath.trim()">导入技能</button></form>
     <div class="filters" role="search" aria-label="筛选技能">
       <label class="search">搜索技能<input v-model="query" type="search" placeholder="名称或简介" /></label>
-      <label>启用状态<select v-model="enabledFilter"><option value="all">全部</option><option value="enabled">已启用</option><option value="disabled">已停用</option></select></label>
-      <label>来源状态<select v-model="sourceFilter"><option value="all">全部来源</option><option value="available">可用</option><option value="changed">来源已变化</option><option value="unavailable">来源不可用</option><option value="unverified">待核对</option></select></label>
+      <label>启用状态<SelectField v-model="enabledFilter"><option value="all">全部</option><option value="enabled">已启用</option><option value="disabled">已停用</option></SelectField></label>
+      <label>来源状态<SelectField v-model="sourceFilter"><option value="all">全部来源</option><option value="available">可用</option><option value="changed">来源已变化</option><option value="unavailable">来源不可用</option><option value="unverified">待核对</option></SelectField></label>
     </div>
     </details>
     <form v-if="editing" class="editor" @submit.prevent="save">

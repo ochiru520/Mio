@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, onBeforeUnmount, ref } from 'vue'
-import { Download, Minus, Plus, X } from '@lucide/vue'
+import { Download, Minus, Plus, X } from '../icons/index.js'
 
 const props = defineProps({ attachment: { type: Object, required: true } })
 const emit = defineEmits(['close'])

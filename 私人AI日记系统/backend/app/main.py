@@ -29,7 +29,7 @@ from . import (
     subservice_health,
     weekly_review_service,
 )
-from . import model_runtime
+from . import model_runtime, onebot_transport_service
 from . import capability_checks
 from . import mobile_task_service, wechat_service
 from . import creative_batch_service, routine_service, media_compose_service, browser_service
@@ -93,6 +93,8 @@ def initialize_runtime() -> None:
     settings.ensure_directories()
     companion_service.cleanup_legacy_preview()
     db.init_db()
+    from . import agent_input_service
+    agent_input_service.initialize()
     model_runtime.initialize()
     from . import artifact_service
     artifact_service.initialize()
@@ -164,7 +166,7 @@ async def app_lifespan(app: FastAPI):
             await creation_service.shutdown()
             await browser_service.shutdown()
             await _stop_background_tasks(app, exclude={"runtime_diagnostics_task"})
-            await onebot.disconnect_all_connections(reason="Mio 正在执行数据维护")
+            await onebot_transport_service.disconnect_all_connections(reason="Mio 正在执行数据维护")
             await asyncio.to_thread(maintenance_service.wait_for_quiescence, 30)
             return maintenance_service.status()
         except BaseException:
@@ -202,7 +204,7 @@ async def app_lifespan(app: FastAPI):
         from . import self_upgrade_service
         self_upgrade_service.stop_all()
         try:
-            await onebot.disconnect_all_connections(reason="Mio 后端正在关闭")
+            await onebot_transport_service.disconnect_all_connections(reason="Mio 后端正在关闭")
         except Exception:
             logger.exception("关闭后端时断开 QQ 连接失败")
         try:

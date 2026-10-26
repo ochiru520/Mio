@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -10,6 +9,7 @@ import logging
 import re
 import secrets
 
+from .repositories import mobile_task_service_repository as repository
 from . import db, agent_task_service as tasks, maintenance_service
 from .config import settings
 from .model_runtime import operation, OperationStopped
@@ -35,38 +35,9 @@ FOLLOWUP_SCHEMA = {'type': 'function', 'function': {
 
 
 def initialize() -> None:
-    tasks.initialize()
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript('''
-            CREATE TABLE IF NOT EXISTS mobile_task_bindings (
-                task_id TEXT PRIMARY KEY, self_id TEXT NOT NULL, user_id TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS mobile_task_owner ON mobile_task_bindings(self_id,user_id,created_at);
-            CREATE TABLE IF NOT EXISTS mobile_task_events (
-                event_key TEXT PRIMARY KEY, self_id TEXT NOT NULL, user_id TEXT NOT NULL,
-                status TEXT NOT NULL, created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS mobile_task_outbox (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, dedupe_key TEXT UNIQUE NOT NULL,
-                task_id TEXT NOT NULL DEFAULT '', self_id TEXT NOT NULL, user_id TEXT NOT NULL,
-                payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-                error TEXT NOT NULL DEFAULT '', receipt_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS mobile_task_pending ON mobile_task_outbox(status,id);
-            CREATE TABLE IF NOT EXISTS mobile_task_confirmations (
-                token TEXT PRIMARY KEY, task_id TEXT NOT NULL, action_id INTEGER NOT NULL,
-                revision INTEGER NOT NULL, expires_at TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(task_id,action_id,revision)
-            );
-            CREATE TABLE IF NOT EXISTS mobile_task_attachments (
-                id TEXT PRIMARY KEY, self_id TEXT NOT NULL, user_id TEXT NOT NULL,
-                file_id TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL,
-                size INTEGER NOT NULL, sha256 TEXT NOT NULL, task_id TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL, UNIQUE(self_id,user_id,file_id)
-            );
-        ''')
+
+    with repository.transaction() as conn:
+        conn.initialize_initialize_mobile_task_bindings()
 
 
 def valid_origin(origin: dict | None) -> bool:
@@ -104,15 +75,14 @@ def request_key(event: dict, origin: dict) -> str:
 
 def claim_event(key: str, origin: dict) -> bool:
     initialize()
-    with closing(db.get_conn()) as conn, conn:
-        inserted = conn.execute('INSERT OR IGNORE INTO mobile_task_events VALUES(?,?,?,?,?)',
-            (key, origin['self_id'], origin['user_id'], 'processing', db.now_iso())).rowcount == 1
-        return inserted or conn.execute("UPDATE mobile_task_events SET status='processing' WHERE event_key=? AND status='interrupted'", (key,)).rowcount == 1
+    with repository.transaction() as conn:
+        inserted = conn.claim_event_insert_mobile_task_events((key, origin['self_id'], origin['user_id'], 'processing', db.now_iso())) == 1
+        return inserted or conn.claim_event_update_mobile_task_events((key,)) == 1
 
 
 def finish_event(key: str, *, interrupted: bool = False) -> None:
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('UPDATE mobile_task_events SET status=? WHERE event_key=?', ('interrupted' if interrupted else 'handled', key))
+    with repository.transaction() as conn:
+        conn.finish_event_update_mobile_task_events(('interrupted' if interrupted else 'handled', key))
 
 
 def short_id(task_id: str) -> str:
@@ -123,10 +93,8 @@ def owner_tasks(origin: dict) -> list[dict]:
     if not valid_origin(origin):
         return []
     initialize()
-    with closing(db.get_conn()) as conn:
-        ids = [row[0] for row in conn.execute(
-            'SELECT task_id FROM mobile_task_bindings WHERE self_id=? AND user_id=? ORDER BY created_at DESC,task_id DESC LIMIT 100',
-            (origin['self_id'], origin['user_id']))]
+    with repository.read() as conn:
+        ids = [row[0] for row in conn.owner_tasks_find_mobile_task_bindings((origin['self_id'], origin['user_id']))]
     return [task for identifier in ids if (task := tasks.get(identifier))
             and not db.conversation_deleted(task['conversation_id'])]
 
@@ -151,32 +119,31 @@ def queue(origin: dict, text: str, *, key: str, task_id: str = '', artifact_id: 
     if not record_history:
         payload['record_history'] = False
     values = (key, task_id, origin['self_id'], origin['user_id'], json.dumps(payload, ensure_ascii=False), db.now_iso(), db.now_iso())
-    sql = 'INSERT OR IGNORE INTO mobile_task_outbox(dedupe_key,task_id,self_id,user_id,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)'
     def insert(connection):
-        connection.execute(sql, values)
+        connection = repository.bind(connection)
+        connection.insert_insert_mobile_task_outbox(values)
         if channel(origin) == 'wechat':
             from .wechat_history import archive_outbox
-            archive_outbox(connection, connection.execute('SELECT * FROM mobile_task_outbox WHERE dedupe_key=?', (key,)).fetchone())
+            archive_outbox(connection.history(), connection.insert_find_mobile_task_outbox((key,)))
     if conn is not None:
         insert(conn)
     else:
         initialize()
-        with closing(db.get_conn()) as connection, connection:
+        with repository.transaction() as connection:
             insert(connection)
 
 
 def bind_handoff(conn, task_id: str, origin: dict) -> None:
     if not valid_origin(origin):
         raise ValueError('QQ 任务账号未授权。')
-    current = conn.execute('SELECT * FROM mobile_task_bindings WHERE task_id=?', (task_id,)).fetchone()
+    conn = repository.bind(conn)
+    current = conn.bind_handoff_find_mobile_task_bindings((task_id,))
     if current and (current['self_id'], current['user_id']) != (origin['self_id'], origin['user_id']):
         raise ValueError('任务来源不一致。')
-    conn.execute('INSERT OR IGNORE INTO mobile_task_bindings VALUES(?,?,?,?)',
-                 (task_id, origin['self_id'], origin['user_id'], db.now_iso()))
+    conn.bind_handoff_insert_mobile_task_bindings((task_id, origin['self_id'], origin['user_id'], db.now_iso()))
     # Consume only the attachment IDs shown to this model/request, never a later upload.
     for identifier in origin.get('attachment_ids', []):
-        conn.execute("UPDATE mobile_task_attachments SET task_id=? WHERE id=? AND self_id=? AND user_id=? AND task_id=''",
-                     (task_id, identifier, origin['self_id'], origin['user_id']))
+        conn.bind_handoff_update_mobile_task_attachments((task_id, identifier, origin['self_id'], origin['user_id']))
     queue(origin, f'已接下任务 #{short_id(task_id)}，电脑会在后台处理。\n'
           '你可以补充要求，或发送“/任务 状态”“/任务 暂停”。完成后会在这里回传结果。',
           key=f'created:{task_id}', task_id=task_id, conn=conn)
@@ -184,9 +151,8 @@ def bind_handoff(conn, task_id: str, origin: dict) -> None:
 
 def input_context(origin: dict) -> tuple[dict, str]:
     initialize()
-    with closing(db.get_conn()) as conn:
-        rows = conn.execute("SELECT id,name,path FROM mobile_task_attachments WHERE self_id=? AND user_id=? AND task_id='' ORDER BY created_at DESC LIMIT 8",
-                            (origin['self_id'], origin['user_id'])).fetchall()
+    with repository.read() as conn:
+        rows = conn.input_context_find_mobile_task_attachments((origin['self_id'], origin['user_id']))
     target = {**origin, 'attachment_ids': [row['id'] for row in rows]}
     text = '手机任务规则：需要执行、多步处理或生成成果时调用 handoff_to_agent。'
     text += '对已有任务补充要求时调用 follow_up_mobile_task；不要把闲聊当任务。确认操作只通过明确确认码执行。'
@@ -202,10 +168,7 @@ def input_context(origin: dict) -> tuple[dict, str]:
 
 
 def _cancel_old_confirmations(conn, task_id: str) -> None:
-    run_ids = 'SELECT run_id FROM agent_task_runs WHERE task_id=?'
-    for table, column in [('companion_actions', 'agent_run_id'), ('agent_run_steps', 'run_id'), ('tool_execution_receipts', 'agent_run_id')]:
-        conn.execute(f"UPDATE {table} SET status='cancelled' WHERE {column} IN ({run_ids}) AND status='needs_confirmation'", (task_id,))
-    conn.execute('UPDATE mobile_task_confirmations SET used=1 WHERE task_id=?', (task_id,))
+    repository.bind(conn).cancel_old_confirmations(task_id)
 
 
 async def amend(origin: dict, identifier: str, instruction: str) -> dict:
@@ -222,17 +185,15 @@ async def amend(origin: dict, identifier: str, instruction: str) -> dict:
         if _origin.get('attachment_ids'):
             contexts.append({'role': 'system', 'content': attachments})
         message_id = db.save_message('user', instruction.strip(), source=channel(origin), conversation_id=task['conversation_id'])
-        with closing(db.get_conn()) as conn, conn:
+        with repository.transaction() as conn:
             _cancel_old_confirmations(conn, task['id'])
             snapshot = {**task['snapshot'], 'updates': [*task['snapshot'].get('updates', []), instruction.strip()][-30:],
                         'blocker': '', 'next_step': '按用户补充继续；重新判断旧方案和已有成果是否仍适用。'}
             snapshot['source_message_id'] = message_id
-            conn.execute('UPDATE agent_tasks SET snapshot_json=?,context_json=?,revision=revision+1,updated_at=? WHERE id=?',
-                         (tasks._json(snapshot), tasks._json(contexts[-80:]), db.now_iso(), task['id']))
+            conn.amend_update_agent_tasks((tasks._json(snapshot), tasks._json(contexts[-80:]), db.now_iso(), task['id']))
             for identifier in _origin.get('attachment_ids', []):
-                conn.execute("UPDATE mobile_task_attachments SET task_id=? WHERE id=? AND self_id=? AND user_id=? AND task_id=''",
-                             (task['id'], identifier, origin['self_id'], origin['user_id']))
-            conn.execute("UPDATE mobile_task_outbox SET status='superseded' WHERE task_id=? AND status='pending' AND dedupe_key LIKE 'report:%'", (task['id'],))
+                conn.amend_update_mobile_task_attachments((task['id'], identifier, origin['self_id'], origin['user_id']))
+            conn.amend_update_mobile_task_outbox((task['id'],))
         result = tasks.resume(task['id'])
     return {'task_id': task['id'], 'status': result['status'],
             'message': f'已将你的补充加入任务 #{short_id(task["id"])}，会按新要求继续。'}
@@ -243,8 +204,8 @@ def status_text(task: dict) -> str:
     for key, title in [('blocker', '当前情况'), ('next_step', '下一步')]:
         if value := task['snapshot'].get(key):
             text += f'\n{title}：{str(value)[:700]}'
-    with closing(db.get_conn()) as conn:
-        problem = conn.execute("SELECT status FROM mobile_task_outbox WHERE task_id=? AND status IN ('unknown','failed') ORDER BY id DESC LIMIT 1", (task['id'],)).fetchone()
+    with repository.read() as conn:
+        problem = conn.status_text_find_mobile_task_outbox((task['id'],))
     if problem:
         text += '\n有结果未取得发送确认；请先查看是否已收到，需要时发送“/任务 重发”。'
     return text
@@ -283,8 +244,8 @@ async def handle_command(event: dict, origin: dict, message: str, event_key: str
             items = owner_tasks(origin)[:10]
             reply = '\n'.join(f'#{short_id(t["id"])} {STATUS.get(t["status"],t["status"])} · {t["original_goal"][:80]}' for t in items) or '你还没有手机任务。发送“/任务 新建 要求”即可开始。'
         elif action == '清空附件':
-            with closing(db.get_conn()) as conn, conn:
-                conn.execute("UPDATE mobile_task_attachments SET task_id='discarded' WHERE self_id=? AND user_id=? AND task_id=''", (origin['self_id'], origin['user_id']))
+            with repository.transaction() as conn:
+                conn.handle_command_update_mobile_task_attachments((origin['self_id'], origin['user_id']))
             reply = '待处理附件已移出任务输入，不会自动用于后续任务。'
         elif action == '新建':
             if not arguments or len(arguments) > 12000:
@@ -346,17 +307,13 @@ def action_prompts(task: dict, *, refresh_expired: bool = False) -> list[str]:
         if action is None or action['status'] != 'needs_confirmation':
             continue
         expiry = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute('INSERT OR IGNORE INTO mobile_task_confirmations VALUES(?,?,?,?,?,0)',
-                (secrets.token_hex(5).upper(), task['id'], item['action_id'], task['revision'], expiry))
-            row = conn.execute('SELECT * FROM mobile_task_confirmations WHERE task_id=? AND action_id=? AND revision=?',
-                               (task['id'], item['action_id'], task['revision'])).fetchone()
+        with repository.transaction() as conn:
+            conn.action_prompts_insert_mobile_task_confirmations((secrets.token_hex(5).upper(), task['id'], item['action_id'], task['revision'], expiry))
+            row = conn.action_prompts_find_mobile_task_confirmations((task['id'], item['action_id'], task['revision']))
             expired = datetime.fromisoformat(row['expires_at']) <= datetime.now(timezone.utc)
             if expired and not row['used'] and refresh_expired:
-                conn.execute('UPDATE mobile_task_confirmations SET token=?,expires_at=? WHERE token=?',
-                             (secrets.token_hex(5).upper(), expiry, row['token']))
-                row = conn.execute('SELECT * FROM mobile_task_confirmations WHERE task_id=? AND action_id=? AND revision=?',
-                                   (task['id'], item['action_id'], task['revision'])).fetchone()
+                conn.action_prompts_update_mobile_task_confirmations((secrets.token_hex(5).upper(), expiry, row['token']))
+                row = conn.action_prompts_find_mobile_task_confirmations_2((task['id'], item['action_id'], task['revision']))
                 expired = False
         if not row['used'] and not expired:
             # Only expose the actual pending action, not model-generated confirmation text.
@@ -367,8 +324,8 @@ def action_prompts(task: dict, *, refresh_expired: bool = False) -> list[str]:
 
 async def confirm(origin: dict, token: str, *, accept: bool) -> str:
     initialize()
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM mobile_task_confirmations WHERE token=?', (token,)).fetchone()
+    with repository.read() as conn:
+        row = conn.confirm_find_mobile_task_confirmations((token,))
     if not row:
         raise ValueError('确认码不存在或已失效，请查看任务状态。')
     task = owned_task(origin, row['task_id'])
@@ -380,12 +337,12 @@ async def confirm(origin: dict, token: str, *, accept: bool) -> str:
         task = owned_task(origin, row['task_id'])
         if task['revision'] != row['revision'] or task['status'] != 'waiting_confirmation':
             raise ValueError('任务状态已改变，请重新查看。')
-        with closing(db.get_conn()) as conn, conn:
-            if not conn.execute('UPDATE mobile_task_confirmations SET used=1 WHERE token=? AND used=0', (token,)).rowcount:
+        with repository.transaction() as conn:
+            if not conn.confirm_update_mobile_task_confirmations((token,)):
                 raise ValueError('确认码已经使用。')
         if not accept:
             await tasks.pause(task['id'])
-            with closing(db.get_conn()) as conn, conn:
+            with repository.transaction() as conn:
                 _cancel_old_confirmations(conn, task['id'])
             return f'已拒绝操作并暂停任务 #{short_id(task["id"])}。可以补充新要求。'
         from .companion_action_service import approve_companion_action
@@ -413,11 +370,10 @@ def artifacts_for(task: dict) -> list[dict]:
 
 
 def report_task(task: dict, *, force_key: str = '') -> None:
-    with closing(db.get_conn()) as conn:
-        binding = conn.execute('SELECT * FROM mobile_task_bindings WHERE task_id=?', (task['id'],)).fetchone()
-        last_run = conn.execute('SELECT request_id FROM agent_task_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1', (task['id'],)).fetchone()
-        message = conn.execute("SELECT id,content,attachments_json FROM messages WHERE conversation_id=? AND role='assistant' AND request_id=? ORDER BY id DESC LIMIT 1",
-                               (task['conversation_id'], last_run[0] if last_run else '')).fetchone()
+    with repository.read() as conn:
+        binding = conn.report_task_find_mobile_task_bindings((task['id'],))
+        last_run = conn.report_task_find_agent_task_runs((task['id'],))
+        message = conn.report_task_find_messages((task['conversation_id'], last_run[0] if last_run else ''))
     if not binding or not valid_origin(dict(binding)) or db.conversation_deleted(task['conversation_id']):
         return
     if not force_key and task['status'] not in {'waiting_confirmation','waiting_user','waiting_jobs','completed','failed','budget_exhausted','paused','cancelled'}:
@@ -452,28 +408,27 @@ def report_task(task: dict, *, force_key: str = '') -> None:
 
 def recover_delivery() -> None:
     initialize()
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute("UPDATE mobile_task_outbox SET status='unknown',error='程序重启，之前的发送结果待核对。' WHERE status='sending'")
-        conn.execute("UPDATE mobile_task_events SET status='interrupted' WHERE status='processing'")
+    with repository.transaction() as conn:
+        conn.recover_delivery_update_mobile_task_outbox()
+        conn.recover_delivery_update_mobile_task_events()
 
 
 @operation('agent', automatic=True, persist=False)
 async def flush_outbox() -> int:
     if tasks.automatic_work_paused() or maintenance_service.status().get('blocked'):
         return 0
-    from .routes import onebot
+    from . import onebot_transport_service as onebot
     from . import artifact_service, wechat_service
-    with closing(db.get_conn()) as conn:
-        owners = [dict(row) for row in conn.execute("SELECT DISTINCT self_id,user_id FROM mobile_task_outbox WHERE status='pending'")]
+    with repository.read() as conn:
+        owners = [dict(row) for row in conn.flush_outbox_find_mobile_task_outbox()]
     # An offline account's backlog must not block another connected channel.
     available = [origin for origin in owners if valid_origin(origin) and
                  (wechat_service.connected(origin) if channel(origin) == 'wechat' else
                   settings.qq_bot_enabled and onebot.has_task_connection(origin['self_id']))]
     rows = []
-    with closing(db.get_conn()) as conn:
+    with repository.read() as conn:
         for origin in available:
-            rows.extend(conn.execute("SELECT * FROM mobile_task_outbox WHERE status='pending' AND self_id=? AND user_id=? ORDER BY id LIMIT 20",
-                                     (origin['self_id'], origin['user_id'])).fetchall())
+            rows.extend(conn.flush_outbox_find_mobile_task_outbox_2((origin['self_id'], origin['user_id'])))
     count = 0
     for row in rows:
         origin = dict(row)
@@ -485,8 +440,8 @@ async def flush_outbox() -> int:
             try:
                 owned_task(origin, row['task_id'])
             except ValueError:
-                with closing(db.get_conn()) as conn, conn:
-                    conn.execute("UPDATE mobile_task_outbox SET status='superseded' WHERE id=?", (row['id'],))
+                with repository.transaction() as conn:
+                    conn.flush_outbox_update_mobile_task_outbox_5((row['id'],))
                 continue
         payload = json.loads(row['payload_json'])
         try:
@@ -500,11 +455,11 @@ async def flush_outbox() -> int:
                 action, params = 'send_private_msg', {'user_id': row['user_id'],
                     'message': [{'type': 'text', 'data': {'text': payload['text']}}]}
         except (OSError, ValueError) as exc:
-            with closing(db.get_conn()) as conn, conn:
-                conn.execute("UPDATE mobile_task_outbox SET status='failed',error=? WHERE id=?", (str(exc)[:300], row['id']))
+            with repository.transaction() as conn:
+                conn.flush_outbox_update_mobile_task_outbox_2((str(exc)[:300], row['id']))
             continue
-        with closing(db.get_conn()) as conn, conn:
-            if not conn.execute("UPDATE mobile_task_outbox SET status='sending',updated_at=? WHERE id=? AND status='pending'", (db.now_iso(), row['id'])).rowcount:
+        with repository.transaction() as conn:
+            if not conn.flush_outbox_update_mobile_task_outbox_3((db.now_iso(), row['id'])):
                 continue
         try:
             if is_wechat:
@@ -513,16 +468,15 @@ async def flush_outbox() -> int:
                 response = await onebot.request_task_api(origin, action, params)
             state, error = 'sent', ''
         except asyncio.CancelledError:
-            with closing(db.get_conn()) as conn, conn:
-                conn.execute("UPDATE mobile_task_outbox SET status='unknown',error='发送被中断，需核对回执。' WHERE id=?", (row['id'],))
+            with repository.transaction() as conn:
+                conn.flush_outbox_update_mobile_task_outbox_4((row['id'],))
             raise
         except (onebot.TaskApiRejected, wechat_service.ApiRejected) as exc:
             response, state, error = {}, 'failed', str(exc)[:300]
         except Exception:
             response, state, error = {}, 'unknown', '发送回执未知；为避免重复发送，请先核对，必要时手动重发。'
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute('UPDATE mobile_task_outbox SET status=?,error=?,receipt_json=?,updated_at=? WHERE id=?',
-                (state, error, json.dumps({'status': response.get('status'), 'retcode': response.get('retcode'),
+        with repository.transaction() as conn:
+            conn.flush_outbox_update_mobile_task_outbox((state, error, json.dumps({'status': response.get('status'), 'retcode': response.get('retcode'),
                                          'message_id': (response.get('data') if isinstance(response.get('data'), dict) else {}).get('message_id')}, ensure_ascii=False), db.now_iso(), row['id']))
         count += 1
     return count
@@ -533,8 +487,8 @@ async def delivery_loop() -> None:
     while True:
         try:
             if not tasks.automatic_work_paused() and not maintenance_service.status().get('blocked'):
-                with closing(db.get_conn()) as conn:
-                    ids = [row[0] for row in conn.execute('SELECT task_id FROM mobile_task_bindings')]
+                with repository.read() as conn:
+                    ids = [row[0] for row in conn.delivery_loop_find_mobile_task_bindings()]
                 for identifier in ids:
                     task = tasks.get(identifier)
                     if task:

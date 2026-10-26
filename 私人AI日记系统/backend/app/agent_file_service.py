@@ -16,7 +16,8 @@ from urllib.parse import quote
 from docx import Document
 import pypdfium2
 
-from . import db
+from .repositories import agent_file_repository as repository
+
 from .config import settings
 
 TEXT = {".txt", ".md", ".json", ".csv", ".tsv", ".yaml", ".yml"}
@@ -45,8 +46,8 @@ def _private_path(path: Path, *, grant: bool = False) -> bool:
 def roots(changes: list[str] | None = None) -> list[str]:
     from .agent_task_service import initialize
     initialize()
-    with db.get_conn() as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS agent_file_roots(path TEXT PRIMARY KEY)")
+    with repository.unit_of_work() as conn:
+        conn.ensure_roots_table()
         if changes is not None:
             resolved = []
             for item in changes:
@@ -54,9 +55,9 @@ def roots(changes: list[str] | None = None) -> list[str]:
                 if not path.is_dir() or path.parent == path or _private_path(path, grant=True):
                     raise ValueError("请选择具体资料目录，不能授权整个磁盘或 Mio 私人数据根目录。")
                 resolved.append(str(path))
-            conn.execute("DELETE FROM agent_file_roots")
-            conn.executemany("INSERT OR IGNORE INTO agent_file_roots VALUES(?)", [(p,) for p in resolved])
-        values = [row[0] for row in conn.execute("SELECT path FROM agent_file_roots ORDER BY path")]
+            conn.clear_roots()
+            conn.insert_roots([(p,) for p in resolved])
+        values = [row[0] for row in conn.list_roots()]
     values = [value for value in values if not _private_path(Path(value).resolve(), grant=True)]
     return list(dict.fromkeys([str(workspace()), *values]))
 
@@ -82,26 +83,40 @@ def resolve_read(value: str, *, task_id: str = "") -> Path:
     return path
 
 
-def list_files(path: str = "", limit: int = 100) -> dict:
+def list_files(path: str = "", limit: int = 100, *, offset: int = 0, query: str = "",
+               directories_only: bool = False) -> dict:
     if not path:
         from .execution_policy_service import document_roots
         return {"roots": document_roots(roots()), "output_root": str(workspace())}
     directory = resolve_read(path)
     if not directory.is_dir():
         raise ValueError("需要目录路径。")
+    if offset < 0 or limit < 1:
+        raise ValueError("文件列表分页参数无效。")
+    query = query.casefold()
     items = []
+    matched = 0
     for item in sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold())):
         if item.name.startswith('.') or (item.is_file() and item.suffix.lower() not in READABLE):
             continue
+        if (directories_only and not item.is_dir()) or (query and query not in item.name.casefold()):
+            continue
         try:
             target = resolve_read(str(item))
+            entry = {"path": str(target), "name": item.name, "directory": target.is_dir(),
+                     "size": target.stat().st_size if target.is_file() else 0}
         except (ValueError, OSError):
             continue
-        items.append({"path": str(target), "name": item.name, "directory": target.is_dir(),
-                      "size": target.stat().st_size if target.is_file() else 0})
-        if len(items) >= limit:
+        matched += 1
+        if matched <= offset:
+            continue
+        items.append(entry)
+        if len(items) > limit:
             break
-    return {"files": items, "root": str(directory)}
+    has_more = len(items) > limit
+    page = items[:limit]
+    return {"files": page, "root": str(directory), "offset": offset, "limit": limit,
+            "has_more": has_more, "next_offset": offset + len(page) if has_more else None}
 
 
 def read_document(path: str, offset: int = 0, max_chars: int = 16000, *, task_id: str = "") -> dict:

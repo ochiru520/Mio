@@ -1,3 +1,5 @@
+
+import * as companionApi from '../services/companionApi.js'
 /** PetCall operations. Reactive values and cross-domain callbacks are explicitly injected.
  * This module owns behavior, not application-global mutable state.
  * Dependencies are accessors so async callbacks see the latest state.
@@ -55,15 +57,12 @@ export function usePetCall(deps) {
     deps.petCallTurnPending = true
     deps.petCallState.value = 'thinking'
     try {
-      const result = await deps.request('/api/companion/call/turn', {
-        method: 'POST',
-        body: JSON.stringify({
+      const result = await companionApi.submitCallTurn({
           wav_base64: bytesToBase64(encodePcmWav(samples, deps.petCallAudioContext.sampleRate)),
           language: deps.petCallSettings.value.pet_call_input_language || 'zh',
           call_session_id: callSessionId,
           turn_id: turnId,
-        }),
-      })
+        }, {}, deps.request)
       if (!deps.petCallActive.value || deps.petCallSessionId !== callSessionId) return
       deps.petCallNextTurnId = Math.max(deps.petCallNextTurnId, Number(result.turn_id || turnId) + 1)
       if (result.heard) {
@@ -131,10 +130,7 @@ export function usePetCall(deps) {
       deps.petCallPreRoll = []
       if (deps.petCallState.value === 'speaking' && !deps.petCallInterruptSent) {
         deps.petCallInterruptSent = true
-        void deps.request('/api/companion/call/interrupt', {
-          method: 'POST',
-          body: JSON.stringify({ call_session_id: deps.petCallSessionId, response_id: deps.petCallResponseId }),
-        }).catch(() => {})
+        void companionApi.submitCallInterrupt({ call_session_id: deps.petCallSessionId, response_id: deps.petCallResponseId }, {}, deps.request).catch(() => {})
         deps.petCallState.value = 'listening'
       }
     }
@@ -157,15 +153,13 @@ export function usePetCall(deps) {
     const releaseStaleStartup = async () => {
       for (const track of startingStream?.getTracks?.() || []) track.stop()
       if (startingContext) await startingContext.close().catch(() => {})
-      if (startingSessionId) await deps.request('/api/companion/call/stop', {
-        method: 'POST', body: JSON.stringify({ call_session_id: startingSessionId, response_id: '' }),
-      }).catch(() => {})
+      if (startingSessionId) await companionApi.submitCallStop({ call_session_id: startingSessionId, response_id: '' }, {}, deps.request).catch(() => {})
     }
     deps.petCallError.value = ''
     deps.petCallState.value = 'connecting'
     try {
       acquireAudioOwner('pet-call')
-      const result = await deps.request('/api/companion/call/start', { method: 'POST' })
+      const result = await companionApi.submitCallStart({}, deps.request)
       startingSessionId = String(result.call_session_id || '')
       if (generation !== callGeneration) { await releaseStaleStartup(); return }
       deps.petCallSessionId = startingSessionId
@@ -198,9 +192,7 @@ export function usePetCall(deps) {
       deps.petCallProcessor.connect(deps.petCallAudioContext.destination)
       const microphoneTrack = deps.petCallStream.getAudioTracks()[0]
       const microphoneSettings = microphoneTrack?.getSettings?.() || {}
-      void deps.request('/api/companion/call/device', {
-        method: 'POST',
-        body: JSON.stringify({
+      void companionApi.submitCallDevice({
           call_session_id: deps.petCallSessionId,
           device_id: String(microphoneSettings.deviceId || ''),
           label: String(microphoneTrack?.label || ''),
@@ -209,15 +201,14 @@ export function usePetCall(deps) {
           echo_cancellation: typeof microphoneSettings.echoCancellation === 'boolean' ? microphoneSettings.echoCancellation : null,
           noise_suppression: typeof microphoneSettings.noiseSuppression === 'boolean' ? microphoneSettings.noiseSuppression : null,
           auto_gain_control: typeof microphoneSettings.autoGainControl === 'boolean' ? microphoneSettings.autoGainControl : null,
-        }),
-      }).catch(() => {})
+        }, {}, deps.request).catch(() => {})
       resetPetCallCapture()
       deps.petCallActive.value = true
       deps.petCallState.value = 'listening'
       deps.petCallMonitorTimer = window.setInterval(async () => {
         if (!deps.petCallActive.value || !deps.petCallSessionId) return
         try {
-          const status = await deps.request('/api/companion/call/status')
+          const status = await companionApi.loadCallStatus({}, deps.request)
           if (String(status.call_session_id || '') !== deps.petCallSessionId) return
           if (!status.active) {
             await stopPetCall({ notifyServer: false, preserveError: true })
@@ -287,10 +278,7 @@ export function usePetCall(deps) {
     if (!preserveError) deps.petCallState.value = 'idle'
     if (stoppedContext) await stoppedContext.close().catch(() => {})
     if (notifyServer && wasActive && callSessionId) {
-      await deps.request('/api/companion/call/stop', {
-        method: 'POST',
-        body: JSON.stringify({ call_session_id: callSessionId, response_id: responseId }),
-      }).catch(() => {})
+      await companionApi.submitCallStop({ call_session_id: callSessionId, response_id: responseId }, {}, deps.request).catch(() => {})
     }
   }
   async function togglePetCall() {
@@ -307,10 +295,7 @@ export function usePetCall(deps) {
     deps.petChatSending.value = true
     deps.errorMessage.value = ''
     try {
-      const result = await deps.request('/api/companion/chat', {
-        method: 'POST',
-        body: JSON.stringify({ message: content, images, client_request_id: clientRequestId }),
-      })
+      const result = await companionApi.submitChat({ message: content, images, client_request_id: clientRequestId }, {}, deps.request)
       if (result.voice_attempted && !result.spoken && !result.voice_delegated) {
         deps.errorMessage.value = `桌宠已经回复，但语音没有播放：${result.voice_error || '未知原因'}`
       }

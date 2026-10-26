@@ -5,7 +5,8 @@ import asyncio
 import hashlib
 import json
 import uuid
-from contextlib import closing
+
+from .repositories import creative_batch_repository as repository
 
 from . import db, agent_task_service as tasks, creation_service as creation
 from .creation_models import CreationJobRequest
@@ -13,31 +14,21 @@ from .workspace_service import encode
 
 
 def initialize():
-    with closing(db.get_conn()) as conn, conn:
-        conn.executescript('''
-        CREATE TABLE IF NOT EXISTS creative_batches(
-          id TEXT PRIMARY KEY,task_id TEXT NOT NULL,conversation_id TEXT NOT NULL,name TEXT NOT NULL,
-          status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS creative_batch_items(
-          batch_id TEXT NOT NULL,ordinal INTEGER NOT NULL,spec_json TEXT NOT NULL,
-          job_id TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending',error TEXT NOT NULL DEFAULT '',
-          PRIMARY KEY(batch_id,ordinal));
-        ''')
+    repository.initialize()
 
 
 def get(batch_id):
     initialize()
-    with closing(db.get_conn()) as conn:
-        row = conn.execute('SELECT * FROM creative_batches WHERE id=?', (batch_id,)).fetchone()
-        if row is None:
-            raise ValueError('找不到批量任务。')
-        result = dict(row)
-        result['items'] = []
-        for row in conn.execute('SELECT * FROM creative_batch_items WHERE batch_id=? ORDER BY ordinal', (batch_id,)):
-            item = dict(row)
-            item['spec'] = json.loads(item.pop('spec_json'))
-            item['job'] = creation.get_job(item['job_id']) if item['job_id'] else None
-            result['items'].append(item)
+    row, rows = repository.get(batch_id)
+    if row is None:
+        raise ValueError('找不到批量任务。')
+    result = dict(row)
+    result['items'] = []
+    for row in rows:
+        item = dict(row)
+        item['spec'] = json.loads(item.pop('spec_json'))
+        item['job'] = creation.get_job(item['job_id']) if item['job_id'] else None
+        result['items'].append(item)
     return result
 
 
@@ -62,11 +53,11 @@ def create(name, items, context):
     digest = hashlib.sha256(encode([context.task_id, context.source_message_id, name, parsed]).encode()).hexdigest()[:24]
     batch_id = 'batch_' + digest
     now = db.now_iso()
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('INSERT OR IGNORE INTO creative_batches VALUES(?,?,?,?,?,?,?)', (batch_id, context.task_id, context.conversation_id, name, 'queued', now, now))
+    def records():
         for index, spec in enumerate(parsed):
             spec['idempotency_key'] = f'{batch_id}:{index}:0'
-            conn.execute('INSERT OR IGNORE INTO creative_batch_items(batch_id,ordinal,spec_json) VALUES(?,?,?)', (batch_id, index, encode(spec)))
+            yield index, encode(spec)
+    repository.create(batch_id, context.task_id, context.conversation_id, name, now, records())
     return {'batch': get(batch_id), 'message': '已加入持久队列，顺序调用原工作流；需要费用确认的项目仍等待确认。'}
 
 
@@ -84,14 +75,12 @@ async def control(batch_id, action, index=None):
             raise ValueError('上次结果未知，请先核对回执。')
         spec = item['spec']
         spec['idempotency_key'] = f'{batch_id}:{index}:{uuid.uuid4().hex}'
-        with closing(db.get_conn()) as conn, conn:
-            conn.execute("UPDATE creative_batch_items SET spec_json=?,job_id='',status='pending',error='' WHERE batch_id=? AND ordinal=?", (encode(spec), batch_id, index))
+        repository.reset_item(encode(spec), batch_id, index)
     if action == 'cancel':
         for item in batch['items']:
             if item['job'] and item['job']['status'] not in creation.TERMINAL_STATUSES:
                 await creation.cancel_job(item['job_id'])
-    with closing(db.get_conn()) as conn, conn:
-        conn.execute('UPDATE creative_batches SET status=?,updated_at=? WHERE id=?', ({'pause':'paused','resume':'queued','retry':'queued','cancel':'cancelled'}[action], db.now_iso(), batch_id))
+    repository.update_status({'pause':'paused','resume':'queued','retry':'queued','cancel':'cancelled'}[action], db.now_iso(), batch_id)
     parent=tasks.get(batch['task_id'])
     if action in {'resume','retry'} and parent and parent['status']=='completed':
         tasks.update(parent['id'],status='waiting_jobs',snapshot={'waiting_batches':list(dict.fromkeys([*parent['snapshot'].get('waiting_batches',[]),batch_id]))})
@@ -102,8 +91,7 @@ async def tick():
     initialize()
     if tasks.automatic_work_paused():
         return
-    with closing(db.get_conn()) as conn:
-        ids = [row[0] for row in conn.execute("SELECT id FROM creative_batches WHERE status IN ('queued','running') ORDER BY created_at,id")]
+    ids = repository.active_ids()
     for batch_id in ids:
         batch = get(batch_id)
         parent = tasks.get(batch['task_id'])
@@ -114,33 +102,27 @@ async def tick():
             job = item['job']
             state = job['status'] if job else item['status']
             if job:
-                with closing(db.get_conn()) as conn, conn:
-                    conn.execute('UPDATE creative_batch_items SET status=?,error=? WHERE batch_id=? AND ordinal=?', (state, job.get('error') or '', batch_id, item['ordinal']))
+                repository.update_item_result(state, job.get('error') or '', batch_id, item['ordinal'])
             if state not in {'completed','failed','timed_out','cancelled','unknown'}:
                 pending = item
                 break
         if pending is None:
             statuses = [(item['job'] or {}).get('status', item['status']) for item in batch['items']]
             status = 'completed' if all(s == 'completed' for s in statuses) else 'needs_attention'
-            with closing(db.get_conn()) as conn, conn:
-                conn.execute('UPDATE creative_batches SET status=?,updated_at=? WHERE id=?', (status, db.now_iso(), batch_id))
+            repository.update_status(status, db.now_iso(), batch_id)
             continue
         if pending['job_id']:
             return  # Do not fill the GPU while a previously submitted item is unresolved.
-        with closing(db.get_conn()) as conn:
-            busy = conn.execute("SELECT 1 FROM creation_jobs WHERE status IN ('created','submitted','queued','running','cancel_requested') LIMIT 1").fetchone()
+        busy = repository.creation_busy()
         if busy:
             return
         try:
             job, _ = creation.create_job(CreationJobRequest.model_validate(pending['spec']), source='desktop', conversation_id=batch['conversation_id'], task_id=batch['task_id'])
-            with closing(db.get_conn()) as conn, conn:
-                conn.execute('UPDATE creative_batch_items SET job_id=?,status=? WHERE batch_id=? AND ordinal=?', (job['id'], job['status'], batch_id, pending['ordinal']))
-                conn.execute("UPDATE creative_batches SET status='running',updated_at=? WHERE id=?", (db.now_iso(), batch_id))
+            repository.attach_job(job['id'], job['status'], batch_id, pending['ordinal'], db.now_iso())
         except ValueError as exc:
             if '已有一项创作任务' in str(exc):
                 return
-            with closing(db.get_conn()) as conn, conn:
-                conn.execute("UPDATE creative_batch_items SET status='failed',error=? WHERE batch_id=? AND ordinal=?", (str(exc)[:1000], batch_id, pending['ordinal']))
+            repository.fail_item(str(exc)[:1000], batch_id, pending['ordinal'])
         return
 
 

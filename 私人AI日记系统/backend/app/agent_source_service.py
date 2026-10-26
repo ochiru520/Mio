@@ -3,22 +3,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import closing
 
-from . import db, knowledge_service as knowledge
+from .repositories import agent_source_repository as repository
+
+from . import knowledge_service as knowledge
 
 
 def listing(task_id: str, *, after_id: int = 0, limit: int = 50) -> dict:
     limit = max(1, min(int(limit), 200))
     after_id = max(0, int(after_id))
-    with closing(db.get_conn()) as conn:
-        rows = conn.execute("""
-            SELECT s.id,s.run_id,s.result_json FROM agent_run_steps s
-            JOIN agent_task_runs r ON r.run_id=s.run_id
-            WHERE r.task_id=? AND s.id>? AND s.step_kind='tool_call'
-              AND s.tool_name='knowledge_search' AND s.status='completed'
-            ORDER BY s.id LIMIT ?
-        """, (task_id, after_id, limit + 1)).fetchall()
+    with repository.unit_of_work(write=False) as conn:
+        rows = conn.completed_search_steps((task_id, after_id, limit + 1))
     sources, seen, checked = [], set(), {}
     for row in rows[:limit]:
         try:

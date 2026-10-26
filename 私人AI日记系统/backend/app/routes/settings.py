@@ -11,7 +11,7 @@ from ..config import load_runtime_settings, save_runtime_settings, settings, run
 from ..documents import load_manual_statuses
 from ..llm import config_status
 from ..mio_profile import load_mio_profile, save_mio_profile_from_settings
-from .onebot import active_websocket_count
+from ..onebot_transport_service import active_websocket_count
 from ..web import templates
 from ..web_search_service import perform_web_lookup, should_use_web_lookup
 

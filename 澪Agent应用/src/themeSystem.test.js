@@ -111,6 +111,23 @@ test('主题 id 唯一，且每个主题都有可预览的三色样本', () => {
   }
 })
 
+test('字号阶梯与全应用的字号下限：不再出现小于 12px 的文字', () => {
+  const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dir)
+    if (entry.isDirectory()) return entry.name === 'icons' ? [] : walk(full)
+    return /\.(css|vue)$/.test(entry.name) ? [full] : []
+  })
+  const offenders = []
+  for (const file of walk(new URL('./', import.meta.url))) {
+    const text = fs.readFileSync(file, 'utf8')
+    for (const match of text.matchAll(/calc\((\d+(?:\.\d+)?)px\s*\*\s*var\(--fs|font-size:\s*(\d+(?:\.\d+)?)px/g)) {
+      const px = parseFloat(match[1] ?? match[2])
+      if (px < 12) offenders.push(`${file.pathname.split('/src/')[1]}: ${match[0]}`)
+    }
+  }
+  assert.deepEqual(offenders.slice(0, 10), [], '界面文字最小 12px，请使用字号令牌（--text-xs 起）')
+})
+
 test('令牌层是唯一的颜色来源，其它样式表不再写死颜色', () => {
   const styleFiles = [
     'styles.css',
@@ -125,6 +142,7 @@ test('令牌层是唯一的颜色来源，其它样式表不再写死颜色', ()
     'styles/creation.css',
     'styles/agent-workspace.css',
     'styles/agent-settings.css',
+    'styles/calm.css',
   ]
 
   // var(--x, #fallback) 里的兜底值不算，那是有意为之的降级

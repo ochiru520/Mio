@@ -3,13 +3,16 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import vm from 'node:vm'
 import { computed, nextTick, reactive, ref, watch } from 'vue'
+import * as creationApi from './services/creationApi.js'
 
 function setup(name, props, mocks, exports) {
   const file = fs.readFileSync(new URL(`./components/${name}.vue`, import.meta.url), 'utf8')
   const script = file.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
   const context = { computed, nextTick, reactive, ref, watch, onMounted() {}, onBeforeUnmount() {},
     defineProps: () => props, defineEmits: () => () => {},
-    CheckCircle2: null, CircleHelp: null, CircleAlert: null, ...mocks, result: null }
+    CheckCircle2: null, CircleHelp: null, CircleAlert: null,
+    creationApi: { submitJob: (...args) => creationApi.submitJob(...args, mocks.apiRequest) },
+    ...mocks, result: null }
   vm.runInNewContext(script + `\nresult = { ${exports} };`, context)
   return context.result
 }

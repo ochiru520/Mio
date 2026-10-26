@@ -36,6 +36,7 @@ from PIL import Image
 from . import cloud_tts, speech_translation_service, system_audio_service
 from .config import settings
 from .companion_observation_service import GameObserver, WindowObserver, cleanup_legacy_preview
+from .companion.pet_startup import STARTUP_TIMEOUT_SECONDS, startup_status
 
 
 logger = logging.getLogger(__name__)
@@ -199,7 +200,12 @@ LIVE2D_EXPRESSION_SLOT_IDS = frozenset(
 
 _pet_process: subprocess.Popen | None = None
 _pet_runtime_kind = ""
+_pet_launch_id = ""
+_pet_show_request_id = ""
+_pet_started_at = 0.0
+_pet_last_error = ""
 _pet_lock = threading.Lock()
+_pet_start_lock = threading.Lock()
 _pet_activity_lock = threading.Lock()
 _pet_activity_revision = 0
 _pet_activity: dict[str, Any] = {
@@ -319,18 +325,38 @@ def _external_pet_renderer_connected() -> bool:
 
 
 def pet_running() -> bool:
-    global _pet_process, _pet_runtime_kind
+    global _pet_process, _pet_runtime_kind, _pet_last_error
     with _pet_lock:
         if _pet_process is not None:
             if _pet_process.poll() is None:
                 return True
+            _pet_last_error = f"桌宠进程已退出（退出码 {_pet_process.returncode}），请查看 startup-process.log。"
             _pet_process = None
             _pet_runtime_kind = ""
     return str(load_config().get("pet_renderer") or "classic") == "live2d" and _external_pet_renderer_connected()
 
 
+def _pet_state_directory() -> Path:
+    configured = os.getenv("MIO_DESKTOP_STATE_DIR", "").strip()
+    root = Path(configured) if configured else (Path("D:/Mio数据") if Path("D:/").exists()
+        else Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "MioAgent")
+    return root / "Live2D桌宠"
+
+
+def pet_show_request_id() -> str:
+    return _pet_show_request_id
+
+
 def start_pet() -> dict[str, Any]:
-    global _pet_process, _pet_runtime_kind
+    # Serialize user start/restart requests, but leave status and WebSocket replies free.
+    with _pet_start_lock:
+        return _start_pet()
+
+
+def _start_pet() -> dict[str, Any]:
+    global _pet_process, _pet_runtime_kind, _pet_launch_id, _pet_show_request_id, _pet_started_at, _pet_last_error
+    from . import pet_event_service
+
     with _pet_lock:
         if _pet_process is not None and _pet_process.poll() is None:
             already_running = True
@@ -338,39 +364,62 @@ def start_pet() -> dict[str, Any]:
             already_running = True
         else:
             already_running = False
+            _pet_launch_id = uuid.uuid4().hex
+            _pet_show_request_id = ""
+            _pet_started_at = time.monotonic()
+            _pet_last_error = ""
             env = os.environ.copy()
             env["MIO_RUNTIME_ROOT"] = str(settings.project_root)
             env["MIO_PET_API_BASE"] = os.getenv(
                 "MIO_PET_API_BASE",
                 f"http://127.0.0.1:{settings.app_port}",
             ).rstrip("/")
-            configured_state_root = os.getenv("MIO_DESKTOP_STATE_DIR", "").strip()
-            state_root = Path(configured_state_root) if configured_state_root else (
-                Path("D:/Mio数据")
-                if Path("D:/").exists()
-                else Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "MioAgent"
-            )
-            env["MIO_PET_STATE_DIR"] = str(state_root / "Live2D桌宠")
+            state_dir = _pet_state_directory()
+            env["MIO_PET_STATE_DIR"] = str(state_dir)
+            env["MIO_PET_LAUNCH_ID"] = _pet_launch_id
             env["MIO_AGENT_PARENT_PID"] = str(os.getpid())
             env["MIO_PET_DISABLE_GPU"] = (
                 "1" if load_config().get("live2d_disable_gpu", False) else "0"
             )
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             command, _pet_runtime_kind = _pet_command()
-            _pet_process = subprocess.Popen(
-                command,
-                env=env,
-                cwd=str(settings.backend_dir),
-                creationflags=flags,
-            )
+            state_dir.mkdir(parents=True, exist_ok=True)
+            process_log = state_dir / "startup-process.log"
+            if process_log.exists() and process_log.stat().st_size > 1024 * 1024:
+                process_log.replace(state_dir / "startup-process.log.1")
+            try:
+                with process_log.open("ab") as stream:
+                    _pet_process = subprocess.Popen(command, env=env, cwd=str(settings.backend_dir),
+                        creationflags=flags, stdout=stream, stderr=subprocess.STDOUT)
+            except OSError as exc:
+                _pet_last_error = f"无法启动桌宠程序：{exc}"
+                raise
     if already_running:
-        return pet_status()
-    time.sleep(0.35)
-    return pet_status()
+        _pet_show_request_id = uuid.uuid4().hex
+        _pet_started_at = time.monotonic()
+        _pet_last_error = ""
+        if _pet_process is None:
+            _pet_launch_id = ""
+        pet_event_service.publish("show_pet", {"request_id": _pet_show_request_id})
+    launch_id, show_id = _pet_launch_id, _pet_show_request_id
+    deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
+    while True:
+        if (_pet_launch_id, _pet_show_request_id) != (launch_id, show_id):
+            raise OSError("本次桌宠启动已被停止或新的操作取消。")
+        result = pet_status()
+        state = result["startup"]["state"]
+        if state in {"ready", "unverified"}:
+            return result
+        if state in {"failed", "stopped"}:
+            raise OSError(result["startup"]["message"])
+        if time.monotonic() >= deadline:
+            _pet_last_error = "桌宠未确认显示，请查看桌宠日志或点击重启；旧版桌宠需随完整程序更新。"
+            raise OSError(_pet_last_error)
+        time.sleep(0.1)
 
 
 def stop_pet() -> dict[str, Any]:
-    global _pet_process, _pet_runtime_kind
+    global _pet_process, _pet_runtime_kind, _pet_launch_id, _pet_show_request_id, _pet_started_at, _pet_last_error
     external_renderer = _external_pet_renderer_connected()
     if external_renderer:
         from . import pet_event_service
@@ -385,7 +434,14 @@ def stop_pet() -> dict[str, Any]:
             process.wait(timeout=3)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=3)
+    if external_renderer:
+        deadline = time.monotonic() + 2
+        while _external_pet_renderer_connected() and time.monotonic() < deadline:
+            time.sleep(0.05)
     _pet_runtime_kind = ""
+    _pet_launch_id = _pet_show_request_id = _pet_last_error = ""
+    _pet_started_at = 0.0
     return pet_status()
 
 
@@ -516,13 +572,24 @@ def pet_activity_status() -> dict[str, Any]:
 def pet_status() -> dict[str, Any]:
     from . import pet_event_service
 
+    exit_code = _pet_process.poll() if _pet_process is not None else None
     running = pet_running()
+    runtime = pet_event_service.status()
+    kind = _pet_runtime_kind if _pet_process is not None else ("external_renderer" if running else "")
+    startup = startup_status(alive=running, runtime_kind=kind,
+        renderers=runtime.get("desktop_renderers", []), launch_id=_pet_launch_id,
+        show_request_id=_pet_show_request_id, elapsed=max(0, time.monotonic() - _pet_started_at),
+        last_error=_pet_last_error or (f"桌宠进程已退出（退出码 {exit_code}），请查看 startup-process.log。"
+            if exit_code is not None else ""))
     sprites = pet_sprite_manifest()
     external_renderer = running and _pet_process is None
     public_settings = dict(load_config())
     public_settings['cloud_tts_api_key'] = ''
     return {
         "running": running,
+        "startup": startup,
+        "log_path": str(_pet_state_directory() / "desktop-pet.log"),
+        "process_log_path": str(_pet_state_directory() / "startup-process.log"),
         "pid": _pet_process.pid if running and _pet_process is not None else None,
         "runtime_kind": _pet_runtime_kind if _pet_process is not None else ("external_renderer" if external_renderer else ""),
         "electron_available": _electron_pet_command() is not None,

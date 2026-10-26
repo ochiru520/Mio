@@ -1,4 +1,5 @@
 <script>
+import SelectField from './SelectField.vue'
 import { inject } from 'vue'
 import {
   Download,
@@ -6,7 +7,7 @@ import {
   Sparkles,
   Upload,
   UserRound,
-} from '@lucide/vue'
+} from '../icons/index.js'
 import {
   PRESET_CARDS,
   RELATION_TEMPLATES,
@@ -23,7 +24,7 @@ import {
 
 export default {
   name: 'CharacterCardPanel',
-  components: {
+  components: { SelectField,
     Download,
     RefreshCw,
     Sparkles,
@@ -178,19 +179,19 @@ export default {
         <label class="profile-wide-field"><span>一句话人设</span><textarea v-model.trim="draft.identity.core" rows="2" maxlength="2000" placeholder="例如：温柔体贴的陪伴型伙伴，记得你的小事" /></label>
         <label class="profile-wide-field"><span>对你的称呼</span><input v-model.trim="draft.preferences.user_address" type="text" maxlength="80" placeholder="例如：你 / 小落" /></label>
         <label class="profile-wide-field"><span>关系与亲密程度</span>
-          <select :value="relationKey" @change="handleRelationChange">
+          <SelectField :value="relationKey" @change="handleRelationChange">
             <option value="">选择关系（可再自由编辑）</option>
             <option v-for="option in relationOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
             <option value="custom">自定义</option>
-          </select>
+          </SelectField>
           <textarea v-model.trim="draft.preferences.relationship_distance" rows="2" maxlength="2000" />
         </label>
         <label class="profile-wide-field"><span>语气基调</span>
-          <select :value="toneKey" @change="handleToneChange">
+          <SelectField :value="toneKey" @change="handleToneChange">
             <option value="">选择语气（可再自由编辑）</option>
             <option v-for="option in toneOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
             <option value="custom">自定义</option>
-          </select>
+          </SelectField>
           <textarea v-model.trim="draft.speaking_style.tone" rows="2" maxlength="3000" />
         </label>
       </div>
@@ -201,10 +202,10 @@ export default {
       <div class="character-preset-picker">
         <label class="character-preset-selection">
           <span>选择预设</span>
-          <select v-model="selectedPresetId" aria-label="选择角色预设">
+          <SelectField v-model="selectedPresetId" aria-label="选择角色预设">
             <option value="">选择预设…</option>
             <option v-for="card in presetCards" :key="card.id" :value="card.id">{{ card.name }}</option>
-          </select>
+          </SelectField>
         </label>
         <p class="character-preset-description">{{ selectedPreset?.tagline || '温柔陪伴、轻松聊天，或专注做事。' }}</p>
         <button type="button" class="character-preset-apply" :disabled="!selectedPreset" @click="applyPreset(selectedPreset)">套用预设</button>
@@ -239,7 +240,7 @@ export default {
 .character-preset-apply { flex-shrink: 0; min-height: 38px; padding: 8px 14px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: var(--accent-contrast); font: inherit; font-size: calc(12px * var(--fs, 1)); cursor: pointer; white-space: nowrap; }
 .character-preset-apply:disabled { opacity: 1; cursor: default; color: var(--text-muted); background: var(--surface-soft); border-color: var(--border-strong); }
 .character-preset-apply:hover:not(:disabled) { filter: brightness(.95); }
-.character-preset-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 12px; color: var(--muted); font-size: calc(11px * var(--fs, 1)); line-height: 1.7; }
+.character-preset-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 12px; color: var(--muted); font-size: calc(12px * var(--fs, 1)); line-height: 1.7; }
 .character-preset-clear { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; border: 0; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
 .character-preset-clear:hover { color: var(--accent-dark); }
 .character-preset-picker select:focus-visible, .character-preset-apply:focus-visible, .character-preset-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

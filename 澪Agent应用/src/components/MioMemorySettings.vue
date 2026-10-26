@@ -1,6 +1,7 @@
 <script setup>
+import * as memoryApi from '../services/memoryApi.js'
+
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { apiRequest } from '../services/api.js'
 const data = ref(null), draft = ref(''), baseline = ref(''), loading = ref(false), saving = ref(false), error = ref(''), notice = ref('')
 const dirty = computed(() => draft.value !== baseline.value)
 const groups = computed(() => ['L0', 'L1', 'L2'].map(layer => ({ layer, name: { L0: '核心记忆', L1: '近期状态', L2: '长期经历' }[layer], items: (data.value?.structured || []).filter(item => item.layer === layer) })))
@@ -9,7 +10,7 @@ async function load() {
   if (loading.value || saving.value) return
   loading.value = true; error.value = ''; controller = new AbortController()
   try {
-    const value = await apiRequest('/api/memory', { signal: controller.signal })
+    const value = await memoryApi.loadMemoryResponse({signal: controller.signal})
     if (disposed) return
     const preserve = dirty.value; data.value = value; baseline.value = value.runtime_summary?.content || ''
     if (!preserve) {
@@ -23,7 +24,7 @@ async function load() {
 async function save() {
   if (saving.value || !draft.value.trim() || !dirty.value) return
   saving.value = true; error.value = ''; notice.value = ''
-  try { const result = await apiRequest('/api/memory/runtime-summary', { method: 'PUT', body: JSON.stringify({ content: draft.value }) }); if (!disposed) { const content = typeof result?.content === 'string' ? result.content : draft.value; draft.value = content; baseline.value = content; sessionStorage.removeItem('mio_memory_settings_draft'); notice.value = '运行摘要已保存，聊天和 Agent 共用。' } }
+  try { const result = await memoryApi.saveRuntimeSummaryByPayload({ content: draft.value }, {}); if (!disposed) { const content = typeof result?.content === 'string' ? result.content : draft.value; draft.value = content; baseline.value = content; sessionStorage.removeItem('mio_memory_settings_draft'); notice.value = '运行摘要已保存，聊天和 Agent 共用。' } }
   catch (cause) { if (!disposed) error.value = cause.message }
   finally { if (!disposed) saving.value = false }
 }

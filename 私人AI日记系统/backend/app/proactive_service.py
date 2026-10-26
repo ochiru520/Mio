@@ -24,7 +24,7 @@ from .napcat_service import (
     napcat_auto_recovery_allowed,
     run_napcat_control,
 )
-from .routes.onebot import active_websocket_count, send_private_message
+from .onebot_transport_service import active_websocket_count, send_private_message
 
 
 logger = logging.getLogger(__name__)

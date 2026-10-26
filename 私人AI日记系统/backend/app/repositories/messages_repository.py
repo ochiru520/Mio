@@ -61,11 +61,23 @@ class MessagesRepository:
         first_token_latency_ms: float | None = None,
         total_latency_ms: float | None = None,
         delivery_key: str = "",
+        cached_tokens_reporting: str = "unknown",
+        input_tokens_reported: bool = False,
+        cache_write_tokens: int | None = None,
+        expected_history_revision: int | None = None,
     ) -> int:
         with self._dep_get_conn() as conn:
             normalized_delivery_key = str(delivery_key or "")[:160]
             conn.execute("BEGIN IMMEDIATE")
             self.assert_conversation_writable(conversation_id, conn)
+            if expected_history_revision is not None:
+                exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_rewinds'").fetchone()
+                revision = int(conn.execute('SELECT COALESCE(MAX(revision),0) FROM conversation_rewinds WHERE conversation_id=?', (conversation_id,)).fetchone()[0]) if exists else 0
+                if revision != expected_history_revision:
+                    raise ValueError('会话历史已变化，拒绝过期回复写入。')
+            if role == 'assistant' and request_id and conn.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_invalidated_requests'").fetchone():
+                if conn.execute('SELECT 1 FROM conversation_invalidated_requests WHERE request_id=? AND conversation_id=?', (request_id, conversation_id)).fetchone():
+                    raise ValueError('回复来源历史已回退，拒绝迟到写入。')
             if role == "assistant" and request_id and conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_task_runs'").fetchone():
                 stopped = conn.execute("SELECT 1 FROM agent_task_runs r JOIN agent_tasks t ON t.id=r.task_id WHERE r.request_id=? AND t.status IN ('paused','cancelled')", (request_id,)).fetchone()
                 if stopped:
@@ -78,9 +90,10 @@ class MessagesRepository:
                         model_id, provider_model, reasoning_level, prompt_tokens, cached_prompt_tokens,
                         completion_tokens, reasoning_tokens, request_cost_yuan,
                         request_cost_source, attachments_json, emotion,
-                        first_token_latency_ms, total_latency_ms, delivery_key
+                        first_token_latency_ms, total_latency_ms, delivery_key,
+                        cached_tokens_reporting, input_tokens_reported, cache_write_tokens
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         role,
@@ -103,6 +116,9 @@ class MessagesRepository:
                         float(first_token_latency_ms) if first_token_latency_ms is not None else None,
                         float(total_latency_ms) if total_latency_ms is not None else None,
                         normalized_delivery_key,
+                        cached_tokens_reporting if cached_tokens_reporting in {'reported', 'partial'} else 'unknown',
+                        int(bool(input_tokens_reported)),
+                        max(0, int(cache_write_tokens)) if cache_write_tokens is not None else None,
                     ),
                 )
                 return int(cursor.lastrowid)
@@ -202,6 +218,15 @@ class MessagesRepository:
             )
 
 
+    def get_desktop_chat_request(self, client_request_id: str, conversation_id: str):
+        """Scope reconciliation to the selected desktop conversation and surface."""
+        from contextlib import closing
+        with closing(self._dep_get_conn()) as conn:
+            return conn.execute(
+                "SELECT * FROM chat_requests WHERE client_request_id=? AND conversation_id=? AND source IN ('desktop', 'desktop_pet')",
+                (client_request_id,conversation_id),
+            ).fetchone()
+
     def chat_request_payload(self, row: sqlite3.Row, field: str) -> dict[str, object]:
         try:
             value = json.loads(str(row[field] or "{}"))
@@ -232,7 +257,7 @@ class MessagesRepository:
         first_date = current_date - timedelta(days=day_count - 1)
         first_started_at, _ = self._dep_logical_day_bounds(first_date.isoformat())
 
-        def empty_usage(target_date: str = "") -> dict[str, int | str]:
+        def empty_usage(target_date: str = "") -> dict:
             return {
                 "date": target_date,
                 "prompt_tokens": 0,
@@ -242,7 +267,40 @@ class MessagesRepository:
                 "chat_tokens": 0,
                 "screen_tokens": 0,
                 "total_tokens": 0,
+                'usage_samples': 0, 'input_reported_samples': 0, 'cache_reported_samples': 0,
+                'partial_cache_samples': 0, 'reported_prompt_tokens': 0,
+                'cache_reported_prompt_tokens': 0, 'cache_reported_cached_tokens': 0,
             }
+
+        def add_coverage(usage, row):
+            if row['request_cost_source'] == 'shared_request':
+                return
+            if not (row['model_id'] or row['provider_model'] or row['prompt_tokens'] or row['completion_tokens'] or row['input_tokens_reported']):
+                return  # Local deterministic replies have no provider request.
+            usage['usage_samples'] += 1
+            measured = bool(row['input_tokens_reported'])
+            if measured:
+                usage['input_reported_samples'] += 1
+                usage['reported_prompt_tokens'] += max(0, int(row['prompt_tokens'] or 0))
+            if row['cached_tokens_reporting'] == 'partial':
+                usage['partial_cache_samples'] += 1
+            if measured and row['cached_tokens_reporting'] == 'reported':
+                prompt, cache = max(0, int(row['prompt_tokens'] or 0)), max(0, int(row['cached_prompt_tokens'] or 0))
+                if cache <= prompt:
+                    usage['cache_reported_samples'] += 1
+                    usage['cache_reported_prompt_tokens'] += prompt
+                    usage['cache_reported_cached_tokens'] += cache
+
+        def finalize(usage):
+            samples, measured = usage['usage_samples'], usage['input_reported_samples']
+            comparable, reported = usage['cache_reported_prompt_tokens'], usage['reported_prompt_tokens']
+            usage['usage_reporting_coverage'] = measured / samples if samples else None
+            usage['cache_reporting_coverage'] = usage['cache_reported_samples'] / measured if measured else None
+            usage['cache_input_coverage'] = comparable / reported if reported else None
+            usage['cache_hit_rate'] = usage['cache_reported_cached_tokens'] / comparable if comparable else None
+            usage['cache_reporting'] = ('reported' if measured and usage['cache_reported_samples'] == samples else
+                                        'partial' if usage['cache_reported_samples'] or usage['partial_cache_samples'] else 'unknown')
+            return usage
 
         daily = {
             (first_date + timedelta(days=index)).isoformat(): empty_usage(
@@ -254,11 +312,11 @@ class MessagesRepository:
             message_rows = conn.execute(
                 """
                 SELECT created_at, prompt_tokens, cached_prompt_tokens,
-                       completion_tokens, reasoning_tokens
+                       completion_tokens, reasoning_tokens,cached_tokens_reporting,input_tokens_reported,
+                       model_id,provider_model,request_cost_source
                 FROM messages
-                WHERE role = 'assistant' AND created_at >= ?
+                WHERE role = 'assistant'
                 """,
-                (first_started_at,),
             ).fetchall()
             screen_rows = conn.execute(
                 """
@@ -286,7 +344,9 @@ class MessagesRepository:
                 """
             ).fetchone()
 
+        total, models = empty_usage(), {}
         for row in message_rows:
+            add_coverage(total, row)
             try:
                 logical_date = self._dep_logical_date_for_datetime(datetime.fromisoformat(str(row["created_at"])))
             except (TypeError, ValueError):
@@ -302,6 +362,14 @@ class MessagesRepository:
             usage["reasoning_tokens"] += max(0, int(row["reasoning_tokens"] or 0))
             usage["chat_tokens"] += prompt_tokens + completion_tokens
             usage["total_tokens"] += prompt_tokens + completion_tokens
+            add_coverage(usage, row)
+            model = str(row['model_id'] or row['provider_model'] or 'unknown')
+            grouped = models.setdefault(model, {**empty_usage(), 'model_id': model})
+            for key, value in (('prompt_tokens', prompt_tokens), ('cached_prompt_tokens', max(0, int(row['cached_prompt_tokens'] or 0))),
+                               ('completion_tokens', completion_tokens), ('reasoning_tokens', max(0, int(row['reasoning_tokens'] or 0))),
+                               ('chat_tokens', prompt_tokens + completion_tokens), ('total_tokens', prompt_tokens + completion_tokens)):
+                grouped[key] += value
+            add_coverage(grouped, row)
 
         for row in screen_rows:
             usage = daily.get(str(row["date"] or ""))
@@ -313,7 +381,6 @@ class MessagesRepository:
             usage["screen_tokens"] += screen_tokens
             usage["total_tokens"] += screen_tokens
 
-        total = empty_usage()
         total["prompt_tokens"] = max(0, int(message_total["prompt_tokens"] or 0))
         total["cached_prompt_tokens"] = max(0, int(message_total["cached_prompt_tokens"] or 0))
         total["completion_tokens"] = max(0, int(message_total["completion_tokens"] or 0))
@@ -326,9 +393,12 @@ class MessagesRepository:
 
         return {
             "logical_day_boundary_hour": self._dep_settings().day_boundary_hour,
-            "today": daily[current_date.isoformat()],
-            "total": total,
-            "days": list(reversed(list(daily.values()))),
+            "today": finalize(daily[current_date.isoformat()]),
+            "total": finalize(total),
+            "days": [finalize(item) for item in reversed(list(daily.values()))],
+            'models': [finalize(item) for item in models.values()],
+            'scope': 'saved_messages_and_screen_usage',
+            'notice': '聊天统计仅含已保存的消息用量；缓存比例仅用同组明确上报输入和缓存的样本。屏幕用量另列。后台调用、失败及重试请看请求尝试账本，两者不能相加。',
         }
 
 

@@ -74,11 +74,12 @@ test('public analysis expression persists in shared profile and survives reload'
   state.sandbox.mioProfileDraft.value.speaking_style.analysis_style = style
   state.sandbox.memoryData = { value: {} }
   let stored
-  state.sandbox.request = async (url, options) => {
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, '/api/settings/profile')
+    if (options.method !== 'PATCH') return Response.json({ profile: structuredClone(stored) })
     stored = JSON.parse(options.body).profile
-    return { profile: structuredClone(stored) }
-  }
+    return Response.json({ profile: structuredClone(stored) })
+  })
   const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { setItem() {} } })
   t.after(() => storageDescriptor ? Object.defineProperty(globalThis, 'localStorage', storageDescriptor) : delete globalThis.localStorage)
@@ -86,7 +87,6 @@ test('public analysis expression persists in shared profile and survives reload'
   assert.equal(await state.actions.saveMioProfileSettings(), true)
   assert.equal(stored.speaking_style.analysis_style, style)
   assert.equal(state.sandbox.memoryData.value.profile.speaking_style.analysis_style, style)
-  t.mock.method(globalThis, 'fetch', async () => Response.json({ profile: structuredClone(stored) }))
   await state.actions.loadMioProfileSettings({ quiet: true })
   assert.equal(state.sandbox.mioProfileDraft.value.speaking_style.analysis_style, style)
   assert.equal(state.sandbox.isSettingsSectionDirty(), false)

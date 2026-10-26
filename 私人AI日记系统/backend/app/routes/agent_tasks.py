@@ -1,8 +1,11 @@
+from ..repositories import agent_task_views_repository as repository
 from fastapi import APIRouter, HTTPException, Query, Request
 from urllib.parse import unquote
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 import json
+from types import SimpleNamespace
+from typing import Literal
 
 from .. import agent_task_service as tasks, db
 from .. import agent_file_service as files
@@ -21,6 +24,174 @@ class TaskLimits(BaseModel):
 
 class FileRoots(BaseModel):
     paths: list[str] = Field(default_factory=list, max_length=30)
+
+
+class InputEdit(BaseModel):
+    content: str = Field(min_length=1, max_length=12000)
+    expected_revision: int = Field(ge=1)
+
+
+class BrowserControl(BaseModel):
+    expected_revision: int = Field(ge=1)
+    visible: bool
+    active: bool
+    owner: str = Field(pattern='^(user|agent)$')
+
+
+class BrowserSelection(BaseModel):
+    x: float = Field(ge=0, le=20000)
+    y: float = Field(ge=0, le=20000)
+    expected_revision: int = Field(ge=1)
+
+
+class BrowserUserAction(BaseModel):
+    expected_revision: int = Field(ge=1)
+    operation: Literal['click', 'type', 'press', 'scroll', 'back']
+    x: float = Field(default=0, ge=0, le=20000)
+    y: float = Field(default=0, ge=0, le=20000)
+    value: str = Field(default='', max_length=12000)
+
+
+class TerminalInput(BaseModel):
+    text: str = Field(default='', max_length=12000)
+    close: bool = False
+    waiting_input: bool = False
+
+
+def _context(task_id):
+    task = tasks.get(task_id)
+    if task is None:
+        raise HTTPException(404, '找不到任务。')
+    return SimpleNamespace(task_id=task_id, conversation_id=task['conversation_id'], source='desktop', run_id='owner-preview')
+
+
+@router.get('/notifications')
+async def all_task_notifications(conversation_id: str = ''):
+    from ..repositories import agent_tasks_repository
+    items = agent_tasks_repository.notifications(conversation_id=conversation_id)
+    for item in items:
+        item['target'] = {'task_id': item['task_id'], 'conversation_id': item['conversation_id']}
+    return {'notifications': items}
+
+
+@router.put('/{task_id}/inputs/{input_id}')
+async def edit_task_input(task_id: str, input_id: int, payload: InputEdit):
+    from ..agent_input_service import revise
+    try:
+        return revise(task_id, input_id, **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.delete('/{task_id}/inputs/{input_id}')
+async def withdraw_task_input(task_id: str, input_id: int, expected_revision: int = Query(ge=1)):
+    from ..agent_input_service import revise
+    try:
+        return revise(task_id, input_id, expected_revision=expected_revision, withdraw=True)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get('/{task_id}/browser/pages')
+async def browser_pages(task_id: str):
+    from .. import browser_service
+    return await browser_service.pages(_context(task_id))
+
+
+@router.put('/{task_id}/browser/pages/{page_id}/control')
+async def browser_control(task_id: str, page_id: str, payload: BrowserControl):
+    from .. import browser_service
+    try:
+        return await browser_service.set_control(page_id, _context(task_id), **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get('/{task_id}/browser/pages/{page_id}/frame')
+async def browser_frame(task_id: str, page_id: str):
+    from .. import browser_service
+    try:
+        return Response(await browser_service.frame(page_id, _context(task_id)), media_type='image/png', headers={'Cache-Control': 'no-store'})
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post('/{task_id}/browser/pages/{page_id}/select')
+async def browser_select(task_id: str, page_id: str, payload: BrowserSelection):
+    from .. import browser_service
+    try:
+        return await browser_service.select_element(page_id, _context(task_id), **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post('/{task_id}/browser/pages/{page_id}/user-action')
+async def browser_user_action(task_id: str, page_id: str, payload: BrowserUserAction):
+    from .. import browser_service
+    try:
+        return await browser_service.user_action(page_id, _context(task_id), **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post('/{task_id}/terminal/{job_id}/input')
+async def terminal_input(task_id: str, job_id: str, payload: TerminalInput):
+    from .. import terminal_service
+    import asyncio
+    try:
+        return await asyncio.to_thread(terminal_service.send_input, _context(task_id), job_id, **payload.model_dump())
+    except (ValueError, OSError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get('/{task_id}/notifications')
+async def task_notifications(task_id: str):
+    _context(task_id)
+    from ..repositories import agent_tasks_repository
+    items = agent_tasks_repository.notifications(task_id)
+    for item in items:
+        item['target'] = {'task_id': task_id, 'conversation_id': item['conversation_id']}
+    return {'notifications': items}
+
+
+@router.get('/{task_id}/input-references/{reference_id}')
+async def task_input_reference(task_id: str, reference_id: str, offset: int = Query(0, ge=0), max_chars: int = Query(12000, ge=100, le=16000)):
+    from ..context_reference_service import read
+    try:
+        result = read(_context(task_id), reference_id, offset, max_chars)
+        if result['kind'] == 'image':
+            result['preview_url'] = f'/api/agent/work/{task_id}/input-references/{reference_id}/image'
+        return result
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get('/{task_id}/input-references/{reference_id}/image')
+async def task_input_reference_image(task_id: str, reference_id: str):
+    from ..context_reference_service import image
+    try:
+        raw, media_type = image(_context(task_id), reference_id)
+        return Response(raw, media_type=media_type, headers={'Cache-Control': 'no-store'})
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.post('/{task_id}/notifications/{notification_id}/dismiss')
+async def dismiss_task_notification(task_id: str, notification_id: int):
+    _context(task_id)
+    from ..repositories import agent_tasks_repository
+    if not agent_tasks_repository.dismiss_notification(task_id, notification_id):
+        raise HTTPException(404, '提醒不属于此任务。')
+    return {'dismissed': True, 'resolved': False}
+
+
+@router.post('/{task_id}/notifications/{notification_id}/present')
+async def present_task_notification(task_id: str, notification_id: int):
+    _context(task_id)
+    from ..repositories import agent_tasks_repository
+    if not agent_tasks_repository.present_notification(task_id, notification_id):
+        raise HTTPException(404, '提醒不属于此任务。')
+    return {'presented': True}
 
 
 @router.get("/file-roots")
@@ -58,11 +229,8 @@ def detail(task_id: str):
     task.pop("context", None)
     task.pop("allowed_tools", None)
     task["observations"] = tasks.observations(task_id)
-    with db.get_conn() as conn:
-        row = conn.execute("""SELECT m.content FROM messages m
-            JOIN agent_task_runs r ON (r.request_id=m.request_id OR r.run_id=m.request_id)
-            WHERE r.task_id=? AND m.conversation_id=? AND m.role='assistant'
-            ORDER BY m.id DESC LIMIT 1""", (task['id'], task['conversation_id'])).fetchone()
+    with repository.transaction() as conn:
+        row = conn.last_response((task['id'], task['conversation_id'])).fetchone()
     task['last_response'] = row['content'] if row else ''
     return task
 
@@ -71,11 +239,8 @@ def _run_for_task(task_id: str, run_id: str = ""):
     task = tasks.get(task_id)
     if task is None:
         raise HTTPException(404, "找不到任务。")
-    with db.get_conn() as conn:
-        run_row = conn.execute(
-            "SELECT run_id FROM agent_task_runs WHERE task_id=? AND (?='' OR run_id=?) ORDER BY rowid DESC LIMIT 1",
-            (task_id, run_id, run_id),
-        ).fetchone()
+    with repository.transaction() as conn:
+        run_row = conn.task_run((task_id, run_id, run_id)).fetchone()
     if run_id and run_row is None:
         raise HTTPException(404, "执行轮次不属于该任务。")
     run_id = str(run_row["run_id"] if run_row else "")
@@ -160,10 +325,8 @@ async def get_work_citations(task_id: str, after_id: int = Query(0, ge=0), limit
     from .. import agent_source_service
     import asyncio
     result = await asyncio.to_thread(agent_source_service.listing, task_id, after_id=after_id, limit=limit)
-    with db.get_conn() as conn:
-        rows = conn.execute("""SELECT m.id,m.created_at,m.attachments_json FROM messages m
-            JOIN agent_task_runs r ON (r.request_id=m.request_id OR r.run_id=m.request_id) AND r.task_id=?
-            WHERE m.role='assistant' ORDER BY m.id DESC LIMIT 50""", (task_id,)).fetchall()
+    with repository.transaction() as conn:
+        rows = conn.reply_citations((task_id,)).fetchall()
     from ..agent_citation_service import decode_attachments
     replies = []
     for row in rows:

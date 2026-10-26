@@ -387,7 +387,7 @@ class BackupMigrationTests(unittest.TestCase):
         with (
             patch.dict("app.main.BACKGROUND_TASK_FACTORIES", {}, clear=True),
             patch("app.main.initialize_runtime"),
-            patch("app.main.onebot.disconnect_all_connections"),
+            patch("app.main.onebot_transport_service.disconnect_all_connections"),
             patch.object(backup_service, "restore_backup", return_value=restored),
             TestClient(app) as client,
         ):
@@ -412,7 +412,7 @@ class BackupMigrationTests(unittest.TestCase):
         with (
             patch.dict("app.main.BACKGROUND_TASK_FACTORIES", {}, clear=True),
             patch("app.main.initialize_runtime"),
-            patch("app.main.onebot.disconnect_all_connections"),
+            patch("app.main.onebot_transport_service.disconnect_all_connections"),
             patch.object(
                 backup_service,
                 "restore_backup",
@@ -433,7 +433,7 @@ class BackupMigrationTests(unittest.TestCase):
         with (
             patch.dict("app.main.BACKGROUND_TASK_FACTORIES", {}, clear=True),
             patch("app.main.initialize_runtime"),
-            patch("app.main.onebot.disconnect_all_connections"),
+            patch("app.main.onebot_transport_service.disconnect_all_connections"),
             patch.object(
                 backup_service,
                 "restore_backup",

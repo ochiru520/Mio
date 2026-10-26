@@ -104,6 +104,8 @@ export function useDesktopNavigation(deps) {
   }
   async function switchDesktopWorkspace(target) {
     if (target === 'main') {
+      // The hidden Mio window is already loaded. Ask it to open Chat before
+      // focusing it so returning from Agent never lands on the home view.
       try {
         const marker = String(Date.now())
         if (localStorage.getItem('mio_return_to_chat') === marker) localStorage.removeItem('mio_return_to_chat')
@@ -114,10 +116,12 @@ export function useDesktopNavigation(deps) {
       const next = new URL(window.location.href)
       next.searchParams.delete('view')
       next.searchParams.delete('settings-section')
+      // Conversation stores are separate in both directions. A host fallback
+      // must reopen the destination's own selection, never the source ID.
+      next.searchParams.delete('conversation_id')
       if (target === 'agent') next.searchParams.set('workspace', 'agent')
       else {
         next.searchParams.delete('workspace')
-        next.searchParams.delete('conversation_id')
         next.searchParams.set('mio_return', 'chat')
       }
       window.location.href = next.toString()
@@ -130,21 +134,26 @@ export function useDesktopNavigation(deps) {
           timeoutId = window.setTimeout(() => reject(new Error('窗口切换超时')), deps.workspaceSwitchTimeoutMs || 1800)
         })
         const result = await Promise.race([Promise.resolve().then(() => switcher(target)), timeout])
-        if (result?.ok === false) throw new Error(result.error || '窗口切换失败')
+        if (result?.ok !== true || result.workspace !== target) throw new Error(result?.error || '窗口切换未得到确认')
+        // After a fallback the physical Mio window may display Agent (or the
+        // reverse). Focusing that same native window cannot change its page.
+        if (result.navigation_required) navigateCurrentWindow()
         return
       } catch (error) {
+        // The Agent window must remain recoverable when the host bridge is
+        // unavailable or its main-window switch fails. Load the Mio chat UI
+        // in this window as a fallback instead of leaving the user stranded.
         try {
           navigateCurrentWindow()
         } catch (fallbackError) {
-          deps.errorMessage.value = '窗口切换失败：' + error.message + '；返回页面失败：' + fallbackError.message
+          deps.errorMessage.value = `窗口切换失败：${error.message}；返回页面失败：${fallbackError.message}`
         }
         return
       } finally {
         if (timeoutId !== undefined) window.clearTimeout(timeoutId)
       }
-    } else {
-      navigateCurrentWindow()
     }
+    navigateCurrentWindow()
   }
   function resizeDesktopWindow(direction, event) {
     if (event?.button !== undefined && event.button !== 0) return

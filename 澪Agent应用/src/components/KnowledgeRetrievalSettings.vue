@@ -1,0 +1,10 @@
+<script setup>
+import { onMounted, ref } from 'vue'
+import * as api from '../services/agentExperienceApi.js'
+const options=ref(null),busy=ref(false),error=ref(''),notice=ref('')
+async function load(){try{const data=await api.retrievalOptions();options.value=data.options || data;error.value=''}catch(cause){error.value=cause.message}}
+async function save(){busy.value=true;notice.value='';try{const data=await api.saveRetrievalOptions(options.value);options.value=data.options || data;notice.value='检索设置已保存';error.value=''}catch(cause){error.value=cause.message}finally{busy.value=false}}
+onMounted(load)
+</script>
+<template><details class="retrieval-settings"><summary>知识检索</summary><p>默认使用全文检索。启用后调用你本机已启动的嵌入模型，可选加入重排；失败时继续使用已有检索。</p><p v-if="error" role="alert">{{ error }}<button type="button" @click="load">重新读取</button></p><form v-if="options" @submit.prevent="save"><label><input v-model="options.enabled" type="checkbox" />启用本地语义混合检索</label><template v-if="options.enabled"><label>本地服务地址<input v-model="options.base_url" placeholder="http://127.0.0.1:1234/v1" required /></label><label>嵌入模型<input v-model="options.embedding_model" required /></label><label>重排模型（可选）<input v-model="options.rerank_model" /></label><label>候选上限<input v-model.number="options.candidate_limit" type="number" min="10" max="2000" /></label></template><button type="submit" :disabled="busy">{{ busy ? '保存中…' : '保存检索设置' }}</button><span role="status">{{ notice }}</span></form></details></template>
+<style scoped>.retrieval-settings{padding:16px 0;font-size:calc(13px * var(--fs,1));color:var(--text);line-height:1.8}.retrieval-settings summary{cursor:pointer}.retrieval-settings p{color:var(--text-muted)}form{display:grid;gap:14px}label{display:flex;gap:12px;align-items:center;flex-wrap:wrap}input:not([type=checkbox]){width:100%;padding:9px;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:7px;font:inherit}button{width:max-content;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:7px;color:var(--text);cursor:pointer;font:inherit}</style>

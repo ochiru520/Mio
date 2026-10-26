@@ -10,7 +10,7 @@ from .config import settings
 from .secret_store import protect_secret, unprotect_secret
 
 
-MODEL_REGISTRY_SCHEMA_VERSION = 4
+MODEL_REGISTRY_SCHEMA_VERSION = 5
 _RESPONSES_ONLY_HOSTS = {"aihub.top", "chat.ekti.cc"}
 SUPPORTED_API_MODES = {"auto", "chat_completions", "responses", "messages"}
 
@@ -28,7 +28,7 @@ class ModelProfile:
     provider_id: str = ""
     family_name: str = ""
     variant_name: str = ""
-    supports_vision: bool = False
+    supports_vision: bool = True
     cached_input_price_cny_per_million: float = 0.0
     input_price_cny_per_million: float = 0.0
     output_price_cny_per_million: float = 0.0
@@ -39,6 +39,7 @@ class ModelProfile:
     supports_tool_calls: bool = False
     supports_structured_output: bool = True
     context_window_tokens: int = 32768
+    context_window_source: str = 'unverified_default'
     privacy_location: str = "external_provider"
     is_default: bool = False
     is_custom: bool = False
@@ -179,10 +180,9 @@ def _pricing_values(record: dict[str, object], model: str) -> tuple[float, float
 
 
 def _inferred_vision_support(model: str) -> bool:
-    if model in settings.openai_vision_models:
-        return True
-    lower = model.lower()
-    return any(marker in lower for marker in ("gpt-4o", "gpt-4.1", "gpt-5", "vision", "gemini", "claude"))
+    # Image input is enabled by default. Provider rejections, rather than a
+    # manually maintained name list or legacy checkbox, explain incompatibility.
+    return True
 
 
 def normalize_provider_api_mode(value: object, *, base_url: str = "") -> str:
@@ -243,6 +243,19 @@ def _provider_id(
 
 def _model_id(provider_id: str, provider_model: str) -> str:
     return _stable_id("model", provider_id, provider_model)
+
+
+def context_window_source(record) -> str:
+    source = str(record.get('context_window_source') or '')
+    if source in {'configured', 'provider_catalog', 'unverified_default'}:
+        return source
+    # Older 32768 values were silently supplied by the UI/server, so they
+    # cannot become verified capacity merely by upgrading the registry.
+    try:
+        value = int(record.get('context_window_tokens') or 32768)
+    except (TypeError, ValueError):
+        return 'unverified_default'
+    return 'configured' if value != 32768 else 'unverified_default'
 
 
 def _default_profiles() -> list[ModelProfile]:
@@ -392,10 +405,11 @@ def _legacy_registry(records: list[dict[str, object]]) -> dict[str, object]:
             "display_name": _restored_legacy_display_name(record, model),
             "family_name": str(record.get("family_name") or model).strip() or model,
             "variant_name": str(record.get("variant_name") or "").strip(),
-            "supports_vision": bool(record.get("supports_vision")),
+            "supports_vision": True,
             "supports_tool_calls": bool(record.get("supports_tool_calls")),
             "supports_structured_output": bool(record.get("supports_structured_output", True)),
             "context_window_tokens": max(4096, int(record.get("context_window_tokens") or 32768)),
+            "context_window_source": context_window_source(record),
             "privacy_location": str(record.get("privacy_location") or "external_provider"),
             "api_mode": str(
                 record.get("api_mode")
@@ -473,6 +487,7 @@ def _normalize_registry(document: dict[str, object]) -> tuple[dict[str, object],
             "supports_tool_calls": False,
             "supports_structured_output": True,
             "context_window_tokens": 32768,
+            "context_window_source": context_window_source(model_record),
             "privacy_location": "external_provider",
             "api_mode": inferred_api_mode,
         }
@@ -590,7 +605,7 @@ def _custom_profiles() -> list[ModelProfile]:
                     ).strip().lower(),
                     family_name=str(record.get("family_name") or model).strip() or model,
                     variant_name=str(record.get("variant_name") or "").strip(),
-                    supports_vision=bool(record.get("supports_vision")),
+                    supports_vision=True,
                     cached_input_price_cny_per_million=cached_price,
                     input_price_cny_per_million=input_price,
                     output_price_cny_per_million=output_price,
@@ -601,6 +616,7 @@ def _custom_profiles() -> list[ModelProfile]:
                     supports_tool_calls=bool(record.get("supports_tool_calls")),
                     supports_structured_output=bool(record.get("supports_structured_output", True)),
                     context_window_tokens=max(4096, int(record.get("context_window_tokens") or 32768)),
+                    context_window_source=context_window_source(record),
                     privacy_location=str(record.get("privacy_location") or "external_provider")[:40],
                     is_custom=True,
                 )
@@ -662,6 +678,7 @@ def public_model_profile(profile: ModelProfile) -> dict[str, object]:
         "supports_tool_calls": profile.supports_tool_calls,
         "supports_structured_output": profile.supports_structured_output,
         "context_window_tokens": profile.context_window_tokens,
+        "context_window_source": profile.context_window_source,
         "privacy_location": profile.privacy_location,
         "cached_input_price_cny_per_million": profile.cached_input_price_cny_per_million,
         "input_price_cny_per_million": profile.input_price_cny_per_million,
@@ -736,10 +753,11 @@ def save_custom_provider(
             "display_name": str(record.get("display_name") or model).strip() or model,
             "family_name": str(record.get("family_name") or model).strip() or model,
             "variant_name": str(record.get("variant_name") or "").strip(),
-            "supports_vision": bool(record.get("supports_vision")),
+            "supports_vision": True,
             "supports_tool_calls": bool(record.get("supports_tool_calls")),
             "supports_structured_output": bool(record.get("supports_structured_output", True)),
             "context_window_tokens": max(4096, int(record.get("context_window_tokens") or 32768)),
+            "context_window_source": context_window_source(record),
             "privacy_location": "local_device" if provider_kind == "local" else str(record.get("privacy_location") or "external_provider")[:40],
             "api_mode": str(
                 record.get("api_mode")

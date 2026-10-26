@@ -1,0 +1,4 @@
+{
+  "description": "Transport extraction completed on 2026-10-26. UI and state modules use domain services. Transport budgets are forbidden by the checker.",
+  "transportLimits": {}
+}

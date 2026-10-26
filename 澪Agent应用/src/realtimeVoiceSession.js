@@ -1,4 +1,5 @@
 import { acquireAudioOwner, releaseAudioOwner } from './audioCoordinator.js'
+import { openRealtimeVoiceSocket } from './services/voiceApi.js'
 
 let nextSessionId = 0
 
@@ -124,7 +125,8 @@ export function createRealtimeVoiceSession(options) {
     options.onError(''); options.onState('connecting')
     acquireAudioOwner(owner); owned = true
     try {
-      socket = new environment.WebSocket(options.url())
+      socket = openRealtimeVoiceSocket(environment.location, environment.WebSocket,
+        options.url ? { urlOverride: options.url() } : {})
       socket.onopen = () => {
         if (!active(token)) return
         try { socket.send(JSON.stringify({ type: 'start', instructions: options.instructions?.() || '' })) }

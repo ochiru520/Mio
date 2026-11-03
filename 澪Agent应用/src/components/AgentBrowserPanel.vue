@@ -82,7 +82,7 @@ onBeforeUnmount(()=>{hide();disposed=true;clearInterval(timer);document.removeEv
     <template v-if="page">
       <p class="browser-url">{{ page.url }}</p>
       <div class="browser-controls"><button type="button" :disabled="busy" @click="changeOwner('user')">我来操作</button><button type="button" :disabled="busy" @click="changeOwner('agent')">交给澪</button><button type="button" :disabled="busy || !frame" :aria-pressed="picking" @click="picking=!picking">{{ picking ? '取消点选' : '指出网页元素' }}</button><button type="button" :disabled="busy" @click="refresh">刷新</button></div>
-      <small>{{ page.control?.owner === 'agent' ? '澪正在使用此页面' : '你已接管，可点击画面或输入文字' }} · 面板隐藏或切页后暂停此页面的自动操作</small>
+      <small>{{ page.control?.owner === 'agent' ? '澪正在使用此页面' : '你已接管，可点击画面或输入文字' }}，面板隐藏或切页后暂停此页面的自动操作</small>
       <p v-if="picking">点击画面中的目标；选择会随下一条消息发送。</p>
       <form v-if="page.control?.owner==='user'" class="browser-controls" @submit.prevent="userAction('type',input)"><input v-model="input" aria-label="输入到网页当前焦点" placeholder="输入到网页当前焦点" /><button type="submit" :disabled="busy || !input">输入</button><button type="button" :disabled="busy" @click="userAction('press','Enter')">回车</button><button type="button" :disabled="busy" @click="userAction('scroll','600')">向下滚动</button><button type="button" :disabled="busy" @click="userAction('scroll','-600')">向上滚动</button></form>
       <img v-if="frame" :src="frame" alt="受控浏览器当前画面" :class="{picking}" @click="select" />
@@ -91,5 +91,5 @@ onBeforeUnmount(()=>{hide();disposed=true;clearInterval(timer);document.removeEv
   </section>
 </template>
 <style scoped>
-.browser-panel{display:grid;gap:14px;min-width:0;color:var(--text);font-size:calc(13px * var(--fs,1))}.browser-tabs,.browser-controls{display:flex;flex-wrap:wrap;gap:8px}.browser-tabs button{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.browser-panel button{border:1px solid var(--border);background:var(--surface);border-radius:7px;color:var(--text);padding:7px 10px;font:inherit;cursor:pointer}.browser-panel button.selected,.browser-panel button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent)}.browser-url{overflow-wrap:anywhere;margin:0}.browser-panel small{color:var(--text-muted);line-height:1.8}.browser-panel img{display:block;width:100%;height:auto;border:1px solid var(--border)}.browser-panel img.picking{cursor:crosshair}
+.browser-panel{display:grid;gap:14px;min-width:0;color:var(--text);font-size: var(--text-base)}.browser-tabs,.browser-controls{display:flex;flex-wrap:wrap;gap:8px}.browser-tabs button{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.browser-panel button{border:1px solid var(--border);background:var(--surface);border-radius:7px;color:var(--text);padding:7px 10px;font:inherit;cursor:pointer}.browser-panel button.selected,.browser-panel button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent)}.browser-url{overflow-wrap:anywhere;margin:0}.browser-panel small{color:var(--text-muted);line-height:1.8}.browser-panel img{display:block;width:100%;height:auto;border:1px solid var(--border)}.browser-panel img.picking{cursor:crosshair}
 </style>

@@ -2,7 +2,7 @@
 import * as tasksApi from '../services/tasksApi.js'
 
 import { inject, nextTick, onMounted, ref } from 'vue'
-import { ArrowRight, Archive, Bot, ChevronDown, FileText, FolderOpen, ListChecks, MessageSquareText, Paperclip, Plus, RefreshCw, Settings, Sparkles, X } from '../icons/index.js'
+import { ArrowRight, Archive, FileText, FolderOpen, ListChecks, MessageSquareText, Paperclip, Plus, RefreshCw, Settings, Sparkles, X } from '../icons/index.js'
 import { taskStatusLabel } from '../agentTaskState.js'
 
 const emit = defineEmits(['navigate'])
@@ -33,13 +33,12 @@ async function startWork(value = prompt.value) {
 <template>
   <section class="agent-home">
     <header class="agent-home-header">
-      <div class="agent-home-breadcrumb"><Bot :size="15" /><span>Mio Agent</span><i>/</i><strong>工作</strong></div>
       <div class="agent-mode-switch" role="tablist" aria-label="工作模式"><button type="button" role="tab" aria-selected="false" @click="emit('navigate', 'chat')">聊天</button><button type="button" class="active" role="tab" aria-selected="true">工作</button></div>
-      <div class="agent-home-heading"><span>新任务</span><h1>我们要做什么？</h1><p>描述一个目标，澪会整理计划、调用现有工具并把结果留在项目里。</p></div>
+      <div class="agent-home-heading"><h1>我们要做什么？</h1><p>描述一个目标，澪会整理计划、调用现有工具并把结果留在项目里。</p></div>
     </header>
     <form class="agent-home-prompt" @submit.prevent="startWork()">
       <textarea v-model="prompt" rows="3" aria-label="描述要完成的任务" placeholder="描述你想完成的任务…" @keydown.enter.exact.prevent="startWork()" />
-      <div class="agent-composer-tools"><div><button type="button" title="添加文件" @click="startWork('请处理我接下来提供的文件。')"><Plus :size="17" /></button><button type="button" title="选择工作流" @click="emit('navigate', 'settings')"><Sparkles :size="15" /></button><span>可附文件、图片和工作流</span></div><div><button type="button" class="agent-model-chip" title="当前 Agent 模型">自动 <ChevronDown :size="13" /></button><button type="submit" class="agent-primary-action"><MessageSquareText :size="16" />{{ prompt.trim() ? '开始任务' : '新建任务' }}</button></div></div>
+      <div class="agent-composer-tools"><div><button type="button" title="添加文件" @click="startWork('请处理我接下来提供的文件。')"><Plus :size="17" /></button><button type="button" title="选择工作流" @click="emit('navigate', 'settings')"><Sparkles :size="15" /></button><span>可附文件、图片和工作流</span></div><div><button type="button" class="agent-model-chip" title="当前 Agent 模型">自动</button><button type="submit" class="agent-primary-action"><MessageSquareText :size="16" />{{ prompt.trim() ? '开始任务' : '新建任务' }}</button></div></div>
     </form>
     <section class="agent-suggestions" aria-label="常用工作入口">
       <button type="button" @click="startWork('请帮我整理这份资料，保留可核对的来源。')"><FileText :size="17" /><span><strong>整理资料</strong><small>索引文件并保留可核对来源</small></span><ArrowRight :size="15" /></button>

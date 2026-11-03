@@ -123,6 +123,10 @@ def uninstall(dep_id: str, token: str) -> dict:
         group = ('ollama_vision',) if dep_id == 'ollama_vision' else ('genie_runtime', 'gpt_sovits', 'whisper')
         if any(installer._install_running(item) for item in group):
             raise ValueError('相关组件正在安装，请等待完成后再卸载。')
+        if dep_id == 'ollama_vision':
+            from . import local_vision_models
+            if local_vision_models.download_status().get('active'):
+                raise ValueError('视觉模型正在下载，请先取消下载，再卸载整个视觉功能。')
         root, targets = _targets(dep_id)
         # Freeze managed workers while deleting their files; stop does not switch to cloud.
         if dep_id in {'genie_runtime', 'gpt_sovits'}:
@@ -133,6 +137,7 @@ def uninstall(dep_id: str, token: str) -> dict:
             if not local_vision_service._lifecycle_lock.acquire(blocking=False):
                 raise ValueError('本地视觉正在操作，请稍后再卸载。')
             stack.callback(local_vision_service._lifecycle_lock.release)
+            local_vision_service.assert_model_idle()
         elif dep_id == 'whisper':
             if not system_audio_service._lock.acquire(blocking=False):
                 raise ValueError('声音识别正在启动，请稍后再卸载。')

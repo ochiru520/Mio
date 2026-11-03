@@ -19,7 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app import companion_service as companion, indextts2_service as service
+from app import companion_service as companion, indextts2_service as service, tts_http_audio
 from app.config import settings
 from app.routes.companion import router
 
@@ -132,14 +132,16 @@ def test_config_save_upload_route_and_synthesis_entrypoints(tmp_path):
         assert Path(config["indextts2_ref_audio"]).read_bytes() == wav()
         assert Path(config["indextts2_ref_audio"]).is_relative_to(tmp_path)
     with patch.object(service, "synthesize_wav", return_value=wav()) as synth, patch.object(companion, "_postprocess_speech_wav", side_effect=lambda content, _: content), patch.object(companion, "_ensure_gpt_sovits_service") as legacy:
+        companion.save_config({"voice_volume": 100})
+        expected_stream = tts_http_audio.streaming_header() + tts_http_audio.normalize_wav(wav())[44:]
         assert companion.synthesize_speech_wav("你好") == wav()
-        assert b"".join(companion.iter_speech_wav_stream("你好")) == wav()
+        assert b"".join(companion.iter_speech_wav_stream("你好")) == expected_stream
         with TestClient(app) as client:
             for endpoint in ("audio", "stream"):
                 audio = client.post(f"/api/companion/voice/{endpoint}", json={"text": "你好"})
                 assert audio.status_code == 200
                 assert audio.headers["content-type"].startswith("audio/wav")
-                assert audio.content == wav()
+                assert audio.content == (wav() if endpoint == "audio" else expected_stream)
         result = {}
         fake_winsound = SimpleNamespace(PlaySound=Mock(), SND_MEMORY=4, SND_NODEFAULT=2)
         with patch.dict(sys.modules, {"winsound": fake_winsound}):
@@ -156,9 +158,10 @@ def test_config_save_upload_route_and_synthesis_entrypoints(tmp_path):
         thread.assert_not_called()
     assert companion.voice_runtime_health()["runtime"] == "indextts2"
     assert companion.voice_runtime_health()["desired_running"] is False
-    for control in (companion.start_voice_service, companion.stop_voice_service, companion.restart_voice_service):
-        with pytest.raises(OSError, match="IndexTTS2"):
+    for control in (companion.start_voice_service, companion.restart_voice_service):
+        with pytest.raises(OSError, match="本地启动配置"):
             control()
+    companion.stop_voice_service()  # Missing owned process is a no-op; independent services stay untouched.
     # Existing defaults/providers remain available.
     for engine in ("cloud", "gpt_sovits"):
         assert companion.save_config({"voice_engine": engine})["voice_engine"] == engine

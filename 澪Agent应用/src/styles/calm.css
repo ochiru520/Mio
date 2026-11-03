@@ -10,13 +10,10 @@
  * 不使用图片和动画，只作用于这两个主题。
  * ========================================================================== */
 
-/* ---- 舞台：一整块底色，顶部有一小片淡淡的天光 ---------------------------- */
+/* ---- 舞台：主题实色，强调色留给内容与操作 ------------------------------ */
 .app-shell.integrated-shell[data-theme^="calm-"],
 [data-theme^="calm-"] .mio-agent-surface {
-  background:
-    radial-gradient(60% 40% at 50% -10%, var(--sky-glow), transparent 70%),
-    radial-gradient(40% 40% at 100% 0%, var(--lavender-glow), transparent 70%),
-    var(--bg) !important;
+  background: var(--bg) !important;
 }
 [data-theme^="calm-"] :is(.window-titlebar, .mio-agent-titlebar) {
   background: transparent !important;
@@ -34,7 +31,7 @@
   border-color: var(--border) !important;
   backdrop-filter: none !important;
 }
-[data-theme^="calm-"] .integrated-sidebar.expanded { box-shadow: 0 0 0 1px var(--border), 0 12px 32px var(--shadow-tint) !important; }
+[data-theme^="calm-"] .integrated-sidebar.expanded { box-shadow: var(--shadow-md) !important; }
 [data-theme^="calm-"] .integrated-right-rail > section {
   background: transparent !important;
   border-color: var(--border) !important;
@@ -53,12 +50,12 @@
   color: var(--accent) !important;
 }
 
-/* ---- 当前所在：左侧一条细线，文字与图标用强调色，不填底色 ----------------- */
+/* ---- 当前所在：文字与图标用强调色，浅底色 ---------------------------------- */
 [data-theme^="calm-"] :is(.integrated-sidebar .nav-item.active, .mio-agent-iconbar .selected, .mio-agent-project-sidebar .selected, .mio-settings-sidebar nav button.active, .mio-settings-sidebar nav button[aria-current="page"]) {
   color: var(--accent) !important;
   background: var(--accent-soft) !important;
   border-radius: 10px;
-  box-shadow: inset 2px 0 0 var(--accent) !important;
+  box-shadow: none !important;
 }
 [data-theme^="calm-"] .mio-agent-titlebar nav .selected {
   color: var(--accent) !important;
@@ -89,14 +86,16 @@
 /* ---- 首页版式 -------------------------------------------------------------- */
 [data-theme^="calm-"] .home-page { padding-inline: clamp(8px, 3vw, 40px); }
 [data-theme^="calm-"] .home-today-header { padding: 18px 0 28px; }
-[data-theme^="calm-"] .home-today-header > span {
+[data-theme^="calm-"] .home-today-header > time {
+  display: block;
+  margin-bottom: 8px;
   color: var(--text-muted);
   font-size: var(--text-base);
-  letter-spacing: 0.1em;
+  letter-spacing: 0;
 }
 [data-theme^="calm-"] .home-today-header h1 {
-  margin: 10px 0 8px;
-  font-size: calc(40px * var(--fs));
+  margin: 0 0 6px;
+  font-size: var(--text-2xl);
   font-weight: 600;
   line-height: 1.2;
   color: var(--text);
@@ -104,9 +103,8 @@
 [data-theme^="calm-"] .home-today-header p { color: var(--text-muted); font-size: var(--text-lg); }
 [data-theme^="calm-"] .home-focus-grid { gap: 40px; align-items: stretch; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.8fr); }
 [data-theme^="calm-"] .home-focus-primary { min-height: 0; padding: 30px 32px; border-top-width: 1px; }
-[data-theme^="calm-"] .home-focus-primary h2 { margin: 10px 0 8px; font-size: calc(26px * var(--fs)); font-weight: 600; }
+[data-theme^="calm-"] :is(.home-focus-primary, .home-attention-panel) > h2 { margin: 0 0 8px; font-size: var(--text-lg); font-weight: 600; }
 [data-theme^="calm-"] .home-focus-primary p { margin-bottom: 26px; }
-[data-theme^="calm-"] :is(.home-focus-primary, .home-attention-panel) > span { color: var(--text-muted); font-weight: 600; }
 [data-theme^="calm-"] .home-attention-panel { padding: 8px 0 0; }
 [data-theme^="calm-"] .home-attention-panel > div { border-color: var(--border) !important; }
 [data-theme^="calm-"] :is(.home-activity-section, .home-records-section) { margin-top: 44px; padding: 0; }
@@ -114,7 +112,6 @@
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border);
 }
-[data-theme^="calm-"] :is(.home-activity-section, .home-records-section) header svg { color: var(--text-muted); }
 [data-theme^="calm-"] .home-activity-section header button { color: var(--accent) !important; background: transparent !important; border: 0 !important; font-weight: 600; }
 [data-theme^="calm-"] .home-activity-list { gap: 0; margin-top: 6px; background: transparent; border: 0; }
 [data-theme^="calm-"] .home-activity-list article { min-height: 0; padding: 18px 24px 8px 0; background: transparent !important; border: 0; border-radius: 0; }
@@ -131,7 +128,7 @@
 @media (max-width: 960px) {
   [data-theme^="calm-"] .home-focus-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; }
   [data-theme^="calm-"] .home-focus-primary { padding: 24px; }
-  [data-theme^="calm-"] .home-today-header h1 { font-size: calc(32px * var(--fs)); }
+  [data-theme^="calm-"] .home-today-header h1 { font-size: var(--text-2xl); }
   [data-theme^="calm-"] .home-activity-list { grid-template-columns: minmax(0, 1fr); }
   [data-theme^="calm-"] .home-activity-list article + article { padding-left: 0; border-left: 0; border-top: 1px solid var(--border); }
 }
@@ -212,9 +209,10 @@
 
 /* 主题选择卡片：圆角方块，选中项只换边框与淡底 */
 [data-theme^="calm-"] .theme-picker-option {
+  --theme-option-radius: 14px;
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;
-  border-radius: 14px !important;
+  border-radius: var(--theme-option-radius) !important;
   overflow: hidden;
 }
 [data-theme^="calm-"] .theme-picker-option:hover { border-color: var(--border-strong) !important; background: var(--surface) !important; }
@@ -223,16 +221,15 @@
   background: var(--accent-soft) !important;
   box-shadow: 0 0 0 2px var(--focus-ring);
 }
-[data-theme^="calm-"] .theme-picker-option > i { height: 22px; border-radius: 8px; }
+[data-theme^="calm-"] .theme-picker-option > i { height: 22px; border-radius: max(0px, calc(var(--theme-option-radius) - 11px)); }
 
 /* ---- 记忆页 ---------------------------------------------------------------- */
 [data-theme^="calm-"] .memory-center-heading { padding-inline: clamp(8px, 3vw, 40px); }
 [data-theme^="calm-"] .memory-understanding {
   background: transparent !important;
   border: 0 !important;
-  border-left: 2px solid var(--accent) !important;
   border-radius: 0;
-  padding: 4px 0 4px 18px;
+  padding: 4px 0;
 }
 [data-theme^="calm-"] .memory-understanding span { color: var(--text-muted); font-weight: 600; }
 [data-theme^="calm-"] .memory-understanding p { font-size: var(--text-md); color: var(--text); }
@@ -289,11 +286,11 @@
 [data-theme^="calm-"] .pet-launcher > button:hover { color: var(--accent) !important; border-color: var(--accent) !important; }
 [data-theme^="calm-"] .pet-launcher i { background: var(--success) !important; }
 
-/* 右栏底部的小块：和侧栏一样，选中才有强调色 */
+/* 右栏摘要保持开放布局，当前导航的选中态另行保留。 */
 [data-theme^="calm-"] .integrated-right-rail > section:last-of-type {
   background: transparent !important;
   border: 0 !important;
-  box-shadow: inset 2px 0 0 var(--accent) !important;
+  box-shadow: none !important;
 }
 
 /* ---- 悬停总则 ---------------------------------------------------------------
@@ -361,11 +358,11 @@
 }
 [data-theme^="calm-"] .agent-new-conversation:hover { color: var(--accent) !important; border-color: var(--accent) !important; }
 
-/* 选中项：底色拉开一档，左侧一条强调色细线 */
+/* 选中项：底色拉开一档 */
 [data-theme^="calm-"] :is(.mio-agent-iconbar .selected, .mio-agent-project-sidebar .selected, .agent-content-sidebar .selected) {
   color: var(--accent) !important;
   background: var(--accent-soft) !important;
-  box-shadow: inset 2px 0 0 var(--accent) !important;
+  box-shadow: none !important;
 }
 [data-theme^="calm-"] .mio-agent-titlebar nav .selected { font-weight: 600; }
 

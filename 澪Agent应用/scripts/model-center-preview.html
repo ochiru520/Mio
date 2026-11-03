@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN" data-font-size="medium"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Mio 普通用户界面隔离验收</title><style>html,body,#app{height:auto!important;overflow:visible!important}body{margin:0}main{padding:24px;max-width:1050px;margin:auto;box-sizing:border-box}*{box-sizing:border-box}</style></head><body><div id="app"></div><script type="module">
+import { createApp, h } from 'vue'
+import ModelCenter from '../src/components/ModelCenter.vue'
+import DeviceCheckPanel from '../src/components/DeviceCheckPanel.vue'
+import OnboardingPage from '../src/components/OnboardingPage.vue'
+import DependencyCenter from '../src/components/DependencyCenter.vue'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+const params = new URLSearchParams(location.search)
+const view = params.get('view')
+window.modelCenterNavigation = []
+window.onboardingEvents = []
+const blocked = params.get('blocked') === '1'
+const env = { core_ready:!blocked, optional:[], system:{memory_label:'32 GB',free_disk_label:'100 GB',gpus:[{name:'Synthetic GPU'}]},summary:{required_ready:blocked ? 0 : 1,required_total:1},required:[{id:'core',label:'核心服务',status:blocked ? 'missing' : 'available',detail:blocked ? '核心检查未通过，隔离验收无任何模型' : '隔离验收数据'}] }
+const onboardingProps = { environment:params.get('noenvironment') === '1' ? null : env, environmentBusy:params.get('checking') === '1', review:params.get('review') === '1', onComplete:payload=>window.onboardingEvents.push({event:'complete',payload}), onClose:()=>window.onboardingEvents.push({event:'close'}) }
+createApp({render:()=>h('main',view === 'devices' ? [h(DeviceCheckPanel)] : view === 'dependencies' ? [h(DependencyCenter)] : view === 'onboarding' ? [h(OnboardingPage,onboardingProps)] : [h(ModelCenter,{onNavigate:target=>window.modelCenterNavigation.push(target)})])}).mount('#app')
+</script></body></html>

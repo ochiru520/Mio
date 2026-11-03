@@ -6,8 +6,10 @@ const settingsSource = fs.readFileSync(new URL('./components/SettingsPage.vue', 
 const voiceSource = fs.readFileSync(new URL('./components/VoiceSettingsPanel.vue', import.meta.url), 'utf8')
 const dependencySource = fs.readFileSync(new URL('./components/DependencyCenter.vue', import.meta.url), 'utf8')
 
-test('system audio is presented as part of visual observation', () => {
-  assert.match(settingsSource, /随视觉观察同时开启和停止/)
+test('system audio is an optional part of visual observation', () => {
+  const controls = fs.readFileSync(new URL('./components/ScreenWatchControls.vue', import.meta.url), 'utf8')
+  assert.match(settingsSource, /ScreenWatchControls :settings="companionStatus\.pet\.settings"/)
+  assert.match(controls, /可选，仅在你开始观察后采集/)
   assert.doesNotMatch(settingsSource, /v-model="companionStatus\.pet\.settings\.screen_audio_enabled"/)
 })
 

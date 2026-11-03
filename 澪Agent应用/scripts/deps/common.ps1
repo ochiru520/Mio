@@ -21,7 +21,10 @@ function Write-DepsStatus {
         [long]$TotalBytes = 0,
         [int]$DownloadPercent = 0,
         [string]$TargetPath = "",
-        [double]$SpeedMbS = 0
+        [double]$SpeedMbS = 0,
+        [bool]$CanPause = $false,
+        [bool]$CanResume = $false,
+        [bool]$CanCancel = $false
     )
     $payload = [ordered]@{
         id         = $env:MIO_DEP_ID
@@ -40,6 +43,9 @@ function Write-DepsStatus {
         download_percent = $DownloadPercent
         target_path = $TargetPath
         speed_mb_s = [Math]::Round([Math]::Max(0, $SpeedMbS), 2)
+        can_pause = $CanPause
+        can_resume = $CanResume
+        can_cancel = $CanCancel
         updated_at = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
     }
     try {
@@ -57,8 +63,28 @@ function Write-DepsStatus {
 
 function Write-DepsFail {
     param([string]$Message)
+    if ($script:MioDownloadCancelled) {
+        Write-DepsStatus -Stage "cancelled" -Percent 0 -Message "已取消下载，保留已下载片段，再次安装可继续。" -Done $true
+        return
+    }
     Write-Host ("[失败] " + $Message) -ForegroundColor Red
     Write-DepsStatus -Stage "error" -Percent 0 -Message $Message -ErrorText $Message -Done $true
+}
+
+function Get-DepsDownloadAction {
+    if (-not $env:MIO_DOWNLOAD_CONTROL_FILE) { return "" }
+    try {
+        $control = Get-Content -LiteralPath $env:MIO_DOWNLOAD_CONTROL_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($control.install_id -eq $env:MIO_INSTALL_ID -and $control.action -in @("pause", "resume", "cancel")) {
+            return [string]$control.action
+        }
+    } catch { }
+    return ""
+}
+
+function Stop-DepsOwnedDownload {
+    param([System.Diagnostics.Process]$Process)
+    if ($Process -and -not $Process.HasExited) { $Process.Kill(); $Process.WaitForExit() }
 }
 
 function Find-MioModelPackage {
@@ -230,6 +256,7 @@ function Invoke-Download {
     if ($ExpectedSize -le 0 -or $ExpectedSha256 -notmatch "^[a-fA-F0-9]{64}$") {
         throw "下载缺少可信的固定大小或 SHA-256 校验值，已停止。"
     }
+    $script:MioDownloadCancelled = $false
     $fileName = Split-Path -Leaf $Output
     $expectedHash = $ExpectedSha256.Trim().ToLowerInvariant()
 
@@ -297,6 +324,29 @@ function Invoke-Download {
             $sampleBytes = if (Test-Path -LiteralPath $partial) { (Get-Item -LiteralPath $partial).Length } else { 0L }
             while (-not $proc.HasExited) {
                 Start-Sleep -Milliseconds 500
+                $action = Get-DepsDownloadAction
+                if ($action -eq "pause") {
+                    Stop-DepsOwnedDownload -Process $proc
+                    $pausedBytes = if (Test-Path -LiteralPath $partial) { (Get-Item -LiteralPath $partial).Length } else { 0L }
+                    $pausedPct = [Math]::Min(99, [int](($pausedBytes * 100) / $totalBytes))
+                    Write-DepsStatus -Stage "paused" -Percent ($StartPercent + [int](($EndPercent - $StartPercent) * $pausedPct / 100)) -Message "下载已暂停，点击继续可从原位置恢复。" -FileName $fileName -DownloadedBytes $pausedBytes -TotalBytes $totalBytes -DownloadPercent $pausedPct -TargetPath $Output -CanResume $true -CanCancel $true
+                    while ((Get-DepsDownloadAction) -eq "pause") { Start-Sleep -Milliseconds 500 }
+                    $action = Get-DepsDownloadAction
+                    if ($action -ne "cancel") {
+                        $proc.Dispose()
+                        $proc = New-Object System.Diagnostics.Process
+                        $proc.StartInfo = $psi
+                        if (-not $proc.Start()) { throw "恢复下载进程失败。" }
+                        $sampleAt = Get-Date
+                        $sampleBytes = $pausedBytes
+                    }
+                }
+                if ($action -eq "cancel") {
+                    Stop-DepsOwnedDownload -Process $proc
+                    $script:MioDownloadCancelled = $true
+                    Write-DepsFail -Message "下载已取消。"
+                    throw "MIO_DOWNLOAD_CANCELLED"
+                }
                 $size = 0L
                 if (Test-Path -LiteralPath $partial) {
                     try { $size = (Get-Item -LiteralPath $partial -ErrorAction Stop).Length } catch { $size = 0 }
@@ -309,12 +359,12 @@ function Invoke-Download {
                     $now = Get-Date
                     $elapsed = [Math]::Max(0.001, ($now - $sampleAt).TotalSeconds)
                     $speed = [Math]::Max(0, ($size - $sampleBytes) / 1MB / $elapsed)
-                    Write-DepsStatus -Stage $Stage -Percent $pct -Message ("正在下载" + $Label + "：" + $mb + " / " + $tmb + " MB（" + $downloadPct + "%）") -FileName $fileName -DownloadedBytes $size -TotalBytes $totalBytes -DownloadPercent $downloadPct -TargetPath $Output -SpeedMbS $speed
+                    Write-DepsStatus -Stage $Stage -Percent $pct -Message ("正在下载" + $Label + "：" + $mb + " / " + $tmb + " MB（" + $downloadPct + "%）") -FileName $fileName -DownloadedBytes $size -TotalBytes $totalBytes -DownloadPercent $downloadPct -TargetPath $Output -SpeedMbS $speed -CanPause ([bool]$env:MIO_DOWNLOAD_CONTROL_FILE) -CanCancel ([bool]$env:MIO_DOWNLOAD_CONTROL_FILE)
                     $sampleAt = $now
                     $sampleBytes = $size
                 } else {
                     $mb = [Math]::Round($size / 1MB, 1)
-                    Write-DepsStatus -Stage $Stage -Percent $StartPercent -Message ("正在下载" + $Label + "：已下载 " + $mb + " MB") -FileName $fileName -DownloadedBytes $size -TargetPath $Output
+                    Write-DepsStatus -Stage $Stage -Percent $StartPercent -Message ("正在下载" + $Label + "：已下载 " + $mb + " MB") -FileName $fileName -DownloadedBytes $size -TargetPath $Output -CanPause ([bool]$env:MIO_DOWNLOAD_CONTROL_FILE) -CanCancel ([bool]$env:MIO_DOWNLOAD_CONTROL_FILE)
                 }
             }
             $proc.WaitForExit()
@@ -334,6 +384,7 @@ function Invoke-Download {
             }
             throw ("下载失败，退出码 " + $proc.ExitCode)
         } catch {
+            if ($script:MioDownloadCancelled) { throw }
             $lastError = $_.Exception.Message
             # A complete but corrupt response must not poison every fallback.
             if (Test-Path -LiteralPath $partial) {
@@ -344,6 +395,9 @@ function Invoke-Download {
             }
             Write-Host ("该下载源失败：" + $lastError) -ForegroundColor Yellow
             if (-not $proc.HasExited) { try { $proc.Kill() } catch { } }
+        } finally {
+            Stop-DepsOwnedDownload -Process $proc
+            $proc.Dispose()
         }
     }
     Write-DepsFail -Message ("所有下载源都失败：" + $lastError)

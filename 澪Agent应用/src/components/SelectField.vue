@@ -5,13 +5,15 @@ import AppSelect from './AppSelect.vue'
 function text(children) {
   return Array.isArray(children) ? children.map(child => typeof child === 'object' ? text(child.children) : String(child ?? '')).join('') : String(children ?? '')
 }
-function optionsFrom(nodes, group = '') {
+function optionsFrom(nodes, group = '', groupDisabled = false) {
   return (nodes || []).flatMap(node => {
     if (!node || typeof node !== 'object') return []
     if (node.type === 'option') return [{ value: node.props?.value ?? text(node.children),
-      label: `${group}${text(node.children)}`, disabled: node.props?.disabled === '' || node.props?.disabled === true }]
-    const prefix = node.type === 'optgroup' ? `${node.props?.label || ''} · ` : group
-    return Array.isArray(node.children) ? optionsFrom(node.children, prefix) : []
+      label: `${group}${text(node.children)}`, disabled: groupDisabled || node.props?.disabled === '' || node.props?.disabled === true }]
+    const isGroup = node.type === 'optgroup'
+    const prefix = isGroup ? `${node.props?.label || ''}：` : group
+    const disabled = groupDisabled || (isGroup && (node.props?.disabled === '' || node.props?.disabled === true))
+    return Array.isArray(node.children) ? optionsFrom(node.children, prefix, disabled) : []
   })
 }
 
@@ -23,7 +25,11 @@ export default defineComponent({
     const native = ref(null), label = ref('选择选项'), invalid = ref(false)
     onMounted(() => {
       const parent = native.value?.closest('label')
-      label.value = parent?.querySelector('strong, span')?.textContent?.trim() || parent?.firstChild?.textContent?.trim() || label.value
+      const caption = [...(parent?.querySelectorAll('strong, span') || [])]
+        .find(element => !element.closest('.select-field') && !element.contains(native.value))
+      const directText = [...(parent?.childNodes || [])]
+        .filter(node => node.nodeType === 3).map(node => node.textContent).join('').trim()
+      label.value = caption?.textContent?.trim() || directText || label.value
     })
     function choose(value) {
       let selected = value

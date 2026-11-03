@@ -21,17 +21,16 @@
 :root[data-font-size="large"] { --fs: 1.12; }
 
 :root {
-  /* 字号阶梯。用 calc(--fs × 系数) 而不是 rem，这样字体大小开关只影响
-     文本尺寸，不会连带缩放所有用 rem 表达的间距和圆角。 */
-  --fs: 1;
-  --text-xs: calc(12px * var(--fs));
-  --text-sm: calc(12px * var(--fs));
-  --text-base: calc(13px * var(--fs));
-  --text-md: calc(14px * var(--fs));
+  /* 四个界面文本层级：辅助、正文、小标题、页标题。只缩放文字，
+     小字号模式也保留 12px 下限；Markdown 和用户聊天字号另行控制。 */
+  --text-xs: max(12px, calc(12px * var(--fs)));
+  --text-sm: var(--text-xs);
+  --text-base: calc(14px * var(--fs));
+  --text-md: var(--text-base);
   --text-lg: calc(16px * var(--fs));
-  --text-xl: calc(17px * var(--fs));
-  --text-2xl: calc(21px * var(--fs));
-  --text-3xl: calc(28px * var(--fs));
+  --text-xl: var(--text-lg);
+  --text-2xl: calc(22px * var(--fs));
+  --text-3xl: var(--text-2xl);
 
   --leading-tight: 1.35;
   --leading-normal: 1.6;

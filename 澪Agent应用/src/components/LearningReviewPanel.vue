@@ -25,6 +25,6 @@ onBeforeUnmount(() => { disposed = true; ++version })
     <div class="hub-actions"><div><h2>今日复习</h2><p class="hub-muted">未作答、低分或已到复习时间的题目会集中在这里。</p></div><button :disabled="busy" @click="load">{{ loaded ? '重新检查' : '加载复习题' }}</button></div>
     <p v-if="error" class="hub-error" role="alert">{{ error }}</p>
     <p v-else-if="loaded && !items.length" class="hub-muted">当前没有需要复习的题目。</p>
-    <article v-for="item in items" :key="item.id" class="hub-observation"><strong>{{ item.session_title }} · {{ item.prompt }}</strong><small v-if="item.latest_score !== null && item.latest_score !== undefined">上次得分 {{ Math.round(item.latest_score * 100) }}% · {{ item.latest_feedback }}</small><small v-else>尚未作答</small><small v-if="item.review_at">下次复习：{{ item.review_at }}</small></article>
+    <article v-for="item in items" :key="item.id" class="hub-observation"><strong>{{ item.session_title }}，{{ item.prompt }}</strong><small v-if="item.latest_score !== null && item.latest_score !== undefined">上次得分 {{ Math.round(item.latest_score * 100) }}%，{{ item.latest_feedback }}</small><small v-else>尚未作答</small><small v-if="item.review_at">下次复习：{{ item.review_at }}</small></article>
   </section>
 </template>

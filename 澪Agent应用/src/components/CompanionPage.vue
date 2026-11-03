@@ -2,7 +2,8 @@
 import SelectField from './SelectField.vue'
 import { inject } from 'vue'
 import PetAppearancePanel from './PetAppearancePanel.vue'
-import { Check, Gamepad2, Monitor, Play, Power, RefreshCw, RotateCw, Sparkles, Volume2, Wifi } from '../icons/index.js'
+import ScreenWatchControls from './ScreenWatchControls.vue'
+import { Cat, Check, Gamepad2, Monitor, Play, Power, RefreshCw, RotateCw, Sparkles, Volume2, Wifi } from '../icons/index.js'
 
 const context = inject('mio-companion-page')
 if (!context) throw new Error('桌宠页上下文未初始化')
@@ -11,7 +12,7 @@ if (!context) throw new Error('桌宠页上下文未初始化')
 <template>
   <section class="companion-hub companion-workspace">
     <nav class="companion-tab-bar compact-companion-tabs" aria-label="桌宠功能">
-      <button type="button" :class="{ active: context.activeCompanionSection === 'pet-panel' }" @click="context.activeCompanionSection = 'pet-panel'"><Gamepad2 :size="16" />桌宠</button>
+      <button type="button" :class="{ active: context.activeCompanionSection === 'pet-panel' }" @click="context.activeCompanionSection = 'pet-panel'"><Cat :size="16" />桌宠</button>
       <button type="button" :class="{ active: context.activeCompanionSection === 'voice-panel' }" @click="context.activeCompanionSection = 'voice-panel'"><Volume2 :size="16" />语音</button>
       <button type="button" :class="{ active: context.activeCompanionSection === 'screen-panel' }" @click="context.activeCompanionSection = 'screen-panel'"><Monitor :size="16" />观察</button>
     </nav>
@@ -45,15 +46,16 @@ if (!context) throw new Error('桌宠页上下文未初始化')
 
     <section v-else class="companion-simple-panel observer-simple-panel">
       <header><div><Monitor :size="19" /><span><h2>屏幕观察</h2><p>选择{{ context.mioDisplayName }}现在能看到的范围与识别方式</p></span></div><span :class="['connection-label', { online: context.companionStatus.screen.running }]">{{ context.companionStatus.screen.running ? '观察中' : '未启动' }}</span></header>
+      <ScreenWatchControls :settings="context.companionStatus.pet.settings" :watch="context.companionStatus.screen_analysis?.watch" :running="context.companionStatus.screen.running" />
       <div class="observer-choice-row"><div><strong>观察范围</strong><span>游戏窗口只上传选中的窗口</span></div><div class="observation-mode-switch"><button type="button" :class="{ active: context.observationMode === 'game' }" @click="context.observationMode = 'game'; context.loadGameWindows({ quiet: true })"><Gamepad2 :size="15" />游戏窗口</button><button type="button" :class="{ active: context.observationMode === 'screen' }" @click="context.observationMode = 'screen'"><Monitor :size="15" />整个屏幕</button></div></div>
       <div class="observer-choice-row"><div><strong>视觉方式</strong><span>本地视觉不上传画面，云端视觉响应更稳定</span></div><div class="observation-mode-switch"><button type="button" :class="{ active: context.companionStatus.pet.settings.screen_vision_route === 'local' }" @click="context.companionStatus.pet.settings.screen_vision_route = 'local'"><Monitor :size="15" />本地视觉</button><button type="button" :class="{ active: context.companionStatus.pet.settings.screen_vision_route === 'cloud' }" @click="context.companionStatus.pet.settings.screen_vision_route = 'cloud'"><Wifi :size="15" />云端视觉</button></div></div>
       <div v-if="context.observationMode === 'game'" class="observer-select-row"><SelectField v-model="context.selectedGameHwnd"><option value="">选择要观察的游戏窗口</option><option v-for="item in context.gameWindows" :key="item.hwnd" :value="String(item.hwnd)">{{ item.title }}</option></SelectField><button type="button" title="刷新窗口" @click="context.loadGameWindows()"><RefreshCw :class="{ spin: context.gameWindowsLoading }" :size="15" /></button></div>
       <div v-else class="observer-select-row"><SelectField v-model="context.screenScope"><option value="primary">主屏幕</option><option value="all">全部屏幕</option></SelectField></div>
       <div v-if="context.companionStatus.pet.settings.screen_vision_route === 'cloud'" class="observer-select-row"><SelectField v-model="context.companionStatus.pet.settings.screen_vision_model_id"><option value="auto-fast">自动选择低延迟模型</option><option v-for="item in (context.companionStatus.screen_analysis?.vision_model_options || [])" :key="item.id" :value="item.id">{{ item.label }}</option></SelectField></div>
-      <footer class="companion-action-bar"><button class="primary-button" type="button" :disabled="Boolean(context.companionBusy)" @click="context.controlObservation('start')"><Play :size="15" />开始观察</button><button type="button" :disabled="Boolean(context.companionBusy)" @click="context.controlObservation('stop')"><Power :size="15" />停止</button><button type="button" :disabled="Boolean(context.companionBusy)" @click="context.letMioSeeObservation"><Sparkles :size="15" />让{{ context.mioDisplayName }}看一眼</button><button class="companion-apply-button" type="button" :disabled="Boolean(context.companionBusy)" @click="context.saveCompanionSettings('observation')"><Check :size="15" />应用修改</button></footer>
+      <footer class="companion-action-bar"><button class="primary-button" type="button" :disabled="Boolean(context.companionBusy) || context.observationStarting" @click="context.controlObservation('start')"><Play :size="15" />开始观察</button><button type="button" :disabled="Boolean(context.companionBusy) && context.companionBusy !== 'observation-start'" @click="context.controlObservation('stop')"><Power :size="15" />停止</button><button type="button" :disabled="Boolean(context.companionBusy)" @click="context.letMioSeeObservation"><Sparkles :size="15" />让{{ context.mioDisplayName }}看一眼</button><button class="companion-apply-button" type="button" :disabled="Boolean(context.companionBusy)" @click="context.saveCompanionSettings('observation')"><Check :size="15" />应用修改</button></footer>
       <dl class="observer-diagnostics">
         <div><dt>观察对象</dt><dd>{{ context.companionStatus.screen.title || (context.observationMode === 'game' ? '尚未选择游戏' : context.screenScope === 'all' ? '全部屏幕' : '主屏幕') }}</dd></div>
-        <div><dt>捕获方式</dt><dd>{{ context.companionStatus.screen.process_isolated ? '独立进程 · ' : '' }}{{ context.companionStatus.screen.capture_backend || '未确认' }}</dd></div>
+        <div><dt>捕获方式</dt><dd>{{ context.companionStatus.screen.process_isolated ? '独立进程，' : '' }}{{ context.companionStatus.screen.capture_backend || '未确认' }}</dd></div>
         <div><dt>识别路线</dt><dd>{{ context.companionStatus.screen_analysis?.vision_route_label || (context.companionStatus.pet.settings.screen_vision_route === 'local' ? '本地视觉' : '云端视觉') }}</dd></div>
         <div><dt>视觉模型</dt><dd>{{ context.companionStatus.screen_analysis?.last_model || context.companionStatus.screen_analysis?.local_vision?.model || '等待首次分析' }}</dd></div>
         <div><dt>画面变化</dt><dd>{{ Number(context.companionStatus.screen.change_percent || 0).toFixed(1) }}%</dd></div>

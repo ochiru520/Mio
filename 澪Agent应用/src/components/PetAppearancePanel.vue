@@ -2,7 +2,7 @@
 import SelectField from './SelectField.vue'
 import { computed } from 'vue'
 import { petStartupPresentation } from '../petStartupState.js'
-import { Check, Gamepad2, ImagePlus, Plus, Play, Power, RotateCw, Trash2, Volume2 } from '../icons/index.js'
+import { Cat, Check, ImagePlus, Plus, Play, Power, RotateCw, Trash2, Volume2 } from '../icons/index.js'
 
 const props = defineProps({
   status: { type: Object, required: true },
@@ -88,7 +88,7 @@ function rangeInputStyle(value, minimum, maximum) {
 
 <template>
   <section class="pet-appearance-panel simplified-pet-panel compact-pet-panel">
-    <header class="pet-appearance-heading"><div><Gamepad2 :size="18" /><span><strong>桌宠</strong><small>选择形象，调整桌面上的陪伴方式</small></span></div><span :class="['connection-label', { online: startup.ready }]">{{ startup.label }}</span></header>
+    <header class="pet-appearance-heading"><div><Cat :size="18" /><span><strong>桌宠</strong><small>选择形象，调整桌面上的陪伴方式</small></span></div><span :class="['connection-label', { online: startup.ready }]">{{ startup.label }}</span></header>
     <div v-if="startup.message" class="pet-startup-notice" :class="{ 'pet-startup-error': startup.state === 'failed' }" role="status">
       <p>{{ startup.message }}</p>
       <template v-if="startup.state === 'failed' || startup.state === 'unverified'">

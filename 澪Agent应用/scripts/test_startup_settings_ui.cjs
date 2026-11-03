@@ -82,7 +82,7 @@ async function main() {
     await numeric.click()
     await page.getByRole('option',{name:'一',exact:true}).click()
     assert.deepEqual(await page.evaluate(()=>window.numberChange),{value:'1',type:'number'})
-    await numeric.click();await page.getByRole('option',{name:'分组 · 不可用'}).click({force:true});await page.keyboard.press('Escape')
+    await numeric.click();await page.getByRole('option',{name:'分组：不可用'}).click({force:true});await page.keyboard.press('Escape')
     assert.equal(await page.locator('#number').textContent(),'1')
     checks.push('number modifier, grouped and disabled choices')
     await page.getByRole('combobox',{name:'事件选项'}).click()

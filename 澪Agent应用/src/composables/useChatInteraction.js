@@ -11,9 +11,11 @@ import { normalizeLoadedChatSettings } from '../chatSettingsState.js'
 import * as voiceApi from '../services/voiceApi.js'
 import { voiceLanguageLabel } from '../chatVoice.js'
 import { acquireAudioOwner, releaseAudioOwner } from '../audioCoordinator.js'
+import { createMessageVoicePlayer } from '../messageVoicePlayer.js'
 
 export function useChatInteraction(deps) {
   let voicePlaybackVersion = 0
+  let streamPlayer = null
   async function copyTurn(turn) {
     const content = turn.parts.map((part) => deps.cleanDisplayContent(part.content)).filter(Boolean).join('\n')
     if (!content) return
@@ -38,6 +40,8 @@ export function useChatInteraction(deps) {
     ++voicePlaybackVersion
     deps.voiceAbortController?.abort()
     deps.voiceAbortController = null
+    streamPlayer?.stop()
+    streamPlayer = null
     if (deps.activeMessageAudio) {
       deps.activeMessageAudio.pause()
       deps.activeMessageAudio.src = ''
@@ -70,6 +74,24 @@ export function useChatInteraction(deps) {
     acquireAudioOwner('message-voice')
     deps.voiceAbortController = new AbortController()
     try {
+      if (globalThis.AudioContext || globalThis.webkitAudioContext) {
+        const player = createMessageVoicePlayer({
+          signal: deps.voiceAbortController.signal,
+          onStart: () => {
+            if (version !== voicePlaybackVersion) return
+            deps.voiceLoadingPartId.value = ''
+            deps.speakingPartId.value = playbackId
+          },
+        })
+        streamPlayer = player
+        const response = await companionApi.submitVoiceStream(payload, {
+          signal: deps.voiceAbortController.signal, deadlineClass: 'media', responseType: 'response',
+        })
+        if (version !== voicePlaybackVersion) { player.stop(); return }
+        await player.consume(response)
+        if (version === voicePlaybackVersion) stopMessageVoice()
+        return
+      }
       const audioBlob = await companionApi.submitVoiceAudio(payload, {headers: { 'Content-Type': 'application/json' }, signal: deps.voiceAbortController.signal, deadlineClass: 'media', responseType: 'blob'})
       if (version !== voicePlaybackVersion) return
       deps.activeMessageAudioUrl = URL.createObjectURL(audioBlob)

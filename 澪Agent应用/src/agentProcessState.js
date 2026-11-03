@@ -46,7 +46,7 @@ export function receiptSummary(receipt) {
   if (receipt.tool_name==='agent_task_update') return r.snapshot?.summary || r.snapshot?.next_step || ''
   if (receipt.tool_name==='execution_capabilities') {
     const code=r.code || r.code_workspace || {}, desktop=r.desktop || {}
-    return [code.root, code.write_enabled ? '可提出代码修改' : '', code.execute_enabled ? '可提出终端命令' : '', desktop.enabled ? '电脑控制已启用' : ''].filter(Boolean).join(' · ')
+    return [code.root, code.write_enabled ? '可提出代码修改' : '', code.execute_enabled ? '可提出终端命令' : '', desktop.enabled ? '电脑控制已启用' : ''].filter(Boolean).join('，')
   }
-  return [r.summary,r.path,r.command,typeof r.exit_code==='number' ? `退出码 ${r.exit_code}` : '',r.status].filter(Boolean).join(' · ').slice(0,450)
+  return [r.summary,r.path,r.command,typeof r.exit_code==='number' ? `退出码 ${r.exit_code}` : '',r.status].filter(Boolean).join('，').slice(0,450)
 }

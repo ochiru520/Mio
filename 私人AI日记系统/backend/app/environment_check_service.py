@@ -580,7 +580,12 @@ def _memory_bytes() -> int:
 
 
 def _ollama_model_ready(models_root: Path) -> bool:
-    manifest = models_root / "manifests" / "registry.ollama.ai" / "library" / "qwen2.5vl" / "3b"
+    from .local_vision_models import effective_model, manifest_path
+    try:
+        model = effective_model(models_root.parent)
+    except ValueError:
+        return False
+    manifest = manifest_path(model, models_root.parent)
     return _ollama_manifest_complete(manifest, models_root)
 
 
@@ -867,7 +872,7 @@ def _optional_checks(system: dict[str, object]) -> list[dict[str, object]]:
             "local_vision",
             "本地视觉模型",
             local_vision_state,
-            f"Qwen2.5-VL 3B：{local_recommendation}",
+            f"Qwen3.5-2B：{local_recommendation}",
             action="在环境与模型中心安装、启动或验证" if local_vision_state != "available" else "",
         ),
         _item(

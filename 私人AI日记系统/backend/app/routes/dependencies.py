@@ -23,6 +23,19 @@ class PackageSourceRequest(BaseModel):
     urls: list[str] = Field(default_factory=list, max_length=8)
 
 
+class DownloadControlRequest(BaseModel):
+    action: str = Field(pattern="^(pause|resume|cancel)$")
+
+
+@router.post('/{dep_id}/download-control')
+async def dependencies_download_control(dep_id: str, payload: DownloadControlRequest):
+    from ..dependency_download_control import control_download
+    try:
+        return await asyncio.to_thread(control_download, dep_id, payload.action)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.get('/{dep_id}/package')
 async def dependencies_package(dep_id: str):
     from ..dependency_package_service import package_info

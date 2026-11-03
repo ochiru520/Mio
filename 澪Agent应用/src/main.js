@@ -7,6 +7,7 @@ import App from './App.vue'
 //   3. styles  历史基础样式（正在逐步迁移到令牌）
 //   4. integrated 应用外壳的栅格与各页面布局
 //   5. refinements 最后的针对性修正
+//   6. design 非晴窗/夜窗主题共用的结构层（开放布局、单一强调色）
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles.css'
@@ -16,5 +17,6 @@ import './styles/agent-settings.css'
 import './styles/agent-surface.css'
 import './styles/ui-polish.css'
 import './styles/calm.css'
+import './styles/design.css'
 
 createApp(App).mount('#app')

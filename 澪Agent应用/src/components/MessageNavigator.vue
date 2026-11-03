@@ -67,6 +67,6 @@ onBeforeUnmount(() => { disposed=true;++version; props.scrollElement?.removeEven
       <button v-for="(label, index) in labels" :key="label.anchor" type="button" :aria-label="`跳转到第 ${index + 1} 条用户发言：${label.text.slice(0, 60)}`" :aria-current="current === index ? 'true' : undefined" @mouseenter="show(index, $event)" @focus="show(index, $event)" @blur="preview = null" @click="jump(index, $event)"><i /></button>
     </div>
     <span v-if="jumping" class="navigator-status" role="status">正在定位…</span><span v-if="error" class="navigator-status" role="alert" :title="error">定位暂不可用</span>
-    <div v-if="preview" role="tooltip" class="message-tick-preview" :style="{ top: `${previewTop}px` }"><small>第 {{ preview.index + 1 }} 条发言 · {{ labels.length }} 条用户发言</small><strong>{{ preview.speaker }}</strong><p>{{ preview.text }}</p></div>
+    <div v-if="preview" role="tooltip" class="message-tick-preview" :style="{ top: `${previewTop}px` }"><small>第 {{ preview.index + 1 }} 条发言，{{ labels.length }} 条用户发言</small><strong>{{ preview.speaker }}</strong><p>{{ preview.text }}</p></div>
   </nav>
 </template>

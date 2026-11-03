@@ -407,7 +407,7 @@ class ScreenObserverProcessTests(unittest.TestCase):
         observer._desired_running = True
         observer._cached_preview = b"old-preview"
 
-        with patch.object(observer, "_send_locked", side_effect=RuntimeError("窗口已经关闭")):
+        with patch.object(observer, "_send_locked", side_effect=lambda command, payload: {} if command == "configure_watch" else (_ for _ in ()).throw(RuntimeError("窗口已经关闭"))):
             observer._restore_state_locked()
 
         self.assertFalse(observer._has_selection)

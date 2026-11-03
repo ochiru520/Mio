@@ -19,10 +19,10 @@ onBeforeUnmount(() => { dialog.value?.close(); if (returnFocus?.isConnected) ret
   </Teleport>
 </template>
 <style scoped>
-.project-creation-dialog { width: min(470px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; margin: auto; padding: 24px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-pop); font-size: calc(13px * var(--fs, 1)); }
+.project-creation-dialog { width: min(470px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; margin: auto; padding: 24px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-pop); font-size: var(--text-base); }
 .project-creation-dialog::backdrop { background: var(--overlay); }
 header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 22px; }
-h2 { margin: 0; font-size: calc(18px * var(--fs, 1)); font-weight: 600; }
+h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; }
 header button { display: grid; place-items: center; padding: 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
 header button:hover { background: var(--surface-soft); }
 </style>

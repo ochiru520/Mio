@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -20,7 +21,7 @@ from .ollama_model_files import manifest_complete
 
 DEFAULT_PORT = 11435
 _server_url = ""
-DEFAULT_MODEL = "qwen2.5vl:3b"
+DEFAULT_MODEL = "qwen3.5:2b"
 _lock = threading.Lock()
 _lifecycle_lock = threading.RLock()
 _server_process: subprocess.Popen | None = None
@@ -31,6 +32,48 @@ _probe_cache: dict[str, Any] = {}
 _server_desired_running = False
 _inference_probe_at = 0.0
 _inference_probe_result: dict[str, Any] = {}
+_pull_model = ""
+_active_inferences = 0
+
+
+def selected_model() -> str:
+    from .local_vision_models import effective_model
+    return effective_model()
+
+
+def clear_model_probe() -> None:
+    global _inference_probe_at, _inference_probe_result
+    with _lock:
+        _inference_probe_at = 0.0
+        _inference_probe_result = {}
+    _invalidate_probe()
+
+
+def assert_model_idle() -> None:
+    with _lock:
+        if _active_inferences:
+            raise ValueError('本地视觉正在识图，请先停止观察或等待本次识图完成。')
+
+
+def _begin_image_request() -> str:
+    global _active_inferences
+    # Called by async endpoints on the event-loop thread. Maintenance can hold
+    # this lock across a slow model probe; never block the whole API on it.
+    if not _lifecycle_lock.acquire(blocking=False):
+        raise ValueError('本地视觉模型正在安装、验证或切换，请稍后重试。')
+    try:
+        with _lock:
+            model = selected_model()
+            _active_inferences += 1
+            return model
+    finally:
+        _lifecycle_lock.release()
+
+
+def _end_image_request() -> None:
+    global _active_inferences
+    with _lock:
+        _active_inferences = max(0, _active_inferences - 1)
 
 
 def _ollama_executable() -> Path:
@@ -45,7 +88,8 @@ def _home_dir() -> Path:
     return settings.local_vision_dir / "home"
 
 
-def _model_manifest_path(model: str = DEFAULT_MODEL) -> Path:
+def _model_manifest_path(model: str | None = None) -> Path:
+    model = model or selected_model()
     name, _, tag = model.partition(":")
     return _models_dir() / "manifests" / "registry.ollama.ai" / "library" / name / (tag or "latest")
 
@@ -56,6 +100,8 @@ def _runtime_env() -> dict[str, str]:
     env["OLLAMA_MODELS"] = str(_models_dir())
     env["OLLAMA_HOST"] = _server_url.removeprefix("http://")
     env["OLLAMA_KEEP_ALIVE"] = "5m"
+    env["OLLAMA_NUM_PARALLEL"] = "1"
+    env["OLLAMA_MAX_LOADED_MODELS"] = "1"
     env["HOME"] = str(_home_dir())
     env["USERPROFILE"] = str(_home_dir())
     no_proxy = [item.strip() for item in env.get("NO_PROXY", "").split(",") if item.strip()]
@@ -151,7 +197,7 @@ def status(*, force: bool = False) -> dict[str, Any]:
             loaded_models = _model_names(_request_json("/api/ps"), "models")
     except (OSError, ValueError, httpx.HTTPError) as exc:
         probe_error = str(exc)
-    model = DEFAULT_MODEL
+    model = selected_model()
     pulling = bool(pull_process is not None and pull_process.poll() is None)
     owned_server = bool(server_process is not None and server_process.poll() is None)
     if server_process is not None and not owned_server and _server_desired_running:
@@ -161,11 +207,14 @@ def status(*, force: bool = False) -> dict[str, Any]:
         "server_running": server_running,
         "owned_server": owned_server,
         "model": model,
+        "configured_model": model,
+        "loaded_models": loaded_models,
+        "model_observation_known": bool(server_running and not probe_error),
         "model_installed": installed["model_installed"],
         "model_available": any(_matches_model(name, model) for name in installed_models),
         "base_url": _server_url if owned_server else "",
         "model_loaded": any(_matches_model(name, model) for name in loaded_models),
-        "inference_ready": owned_server and server_running and bool(_inference_probe_result.get("ready")),
+        "inference_ready": owned_server and server_running and _inference_probe_result.get('model', model) == model and bool(_inference_probe_result.get("ready")),
         "inference_state": str(_inference_probe_result.get("state") or "unverified"),
         "inference_error": str(_inference_probe_result.get("error") or ""),
         "inference_probe_at": _inference_probe_result.get("checked_at"),
@@ -181,24 +230,35 @@ def status(*, force: bool = False) -> dict[str, Any]:
 
 
 def probe_inference(*, force: bool = False, timeout: float = 90.0) -> dict[str, Any]:
+    with _lifecycle_lock:
+        return _probe_inference_locked(force=force, timeout=timeout)
+
+
+def _probe_inference_locked(*, force: bool = False, timeout: float = 90.0) -> dict[str, Any]:
     """Run a bounded real Ollama inference probe, without starting the server."""
     global _inference_probe_at, _inference_probe_result, _last_error
     current = status(force=True)
+    model = selected_model()
     now = time.monotonic()
     with _lock:
-        if current["server_running"] and not force and _inference_probe_result and now - _inference_probe_at < 15.0:
+        if current["server_running"] and not force and _inference_probe_result.get('model') == model and now - _inference_probe_at < 15.0:
             return dict(_inference_probe_result)
     checked_at = time.time()
     if not current.get("server_running"):
         result = {"ready": False, "state": "unverified", "error": "Ollama 服务未运行，尚未执行真实推理探针", "checked_at": checked_at}
     elif not current.get("model_installed") or not current.get("model_available"):
-        result = {"ready": False, "state": "missing", "error": f"未找到本地模型 {DEFAULT_MODEL}", "checked_at": checked_at}
+        result = {"ready": False, "state": "missing", "error": f"未找到本地模型 {model}", "checked_at": checked_at}
     else:
         try:
             data = _request_json(
                 "/api/generate", method="POST",
-                payload={"model": DEFAULT_MODEL, "prompt": "Reply with OK.", "stream": False, "keep_alive": 0,
-                         "options": {"num_ctx": 128, "num_predict": 2, "temperature": 0}},
+                # Reasoning-capable models can spend a tiny output budget on
+                # thinking and return no visible response despite working inference.
+                payload={"model": model, "prompt": "Reply with OK.", "stream": False, "keep_alive": "90s",
+                         "think": False,
+                         # Keep the same context as real image requests. A tiny
+                         # probe context followed by unload forced a full reload.
+                         "options": {"num_ctx": 2048, "num_predict": 8, "temperature": 0}},
                 timeout=timeout,
             )
             result = ({"ready": True, "state": "ready", "error": "", "checked_at": checked_at}
@@ -217,6 +277,7 @@ def probe_inference(*, force: bool = False, timeout: float = 90.0) -> dict[str, 
             result = {"ready": False, "state": state, "error": message[:500], "checked_at": checked_at}
             _last_error = message[:500]
     with _lock:
+        result['model'] = model
         _inference_probe_at = now
         _inference_probe_result = dict(result)
         if result.get("ready"):
@@ -229,7 +290,7 @@ def dependency_status() -> dict[str, Any]:
     if not current["runtime_installed"]:
         state, detail = "missing", "Mio 本地视觉运行器尚未安装。"
     elif not current["model_installed"]:
-        state, detail = "missing", f"运行器已安装，但 {DEFAULT_MODEL} 模型文件缺失或不完整。"
+        state, detail = "missing", f"运行器已安装，但 {current['model']} 模型文件缺失或不完整。"
     elif not current["server_running"]:
         state = "degraded" if current["last_error"] else "installed"
         detail = current["last_error"] or "模型文件已完整安装，Mio 本地视觉服务尚未启动。"
@@ -245,6 +306,7 @@ def dependency_status() -> dict[str, Any]:
 def passive_status() -> dict[str, Any]:
     """Return cached local-vision health without contacting Ollama."""
     now = time.monotonic()
+    model = selected_model()
     with _lock:
         cached = dict(_probe_cache)
         probe_at = _probe_at
@@ -262,9 +324,12 @@ def passive_status() -> dict[str, Any]:
     )
     return {
         "runtime_installed": _ollama_executable().is_file(),
-        "model": DEFAULT_MODEL,
+        "model": model,
+        "configured_model": model,
+        "loaded_models": list(cached.get('loaded_models') or []) if owned_server else [],
+        "model_observation_known": bool(owned_server and probe_age is not None and probe_age <= 10 and cached.get('model_observation_known')),
         "model_installed": installation_status()["model_installed"],
-        "inference_ready": owned_server and bool(_inference_probe_result.get("ready")),
+        "inference_ready": owned_server and _inference_probe_result.get('model', model) == model and bool(_inference_probe_result.get("ready")),
         "inference_state": str(_inference_probe_result.get("state") or cached.get("inference_state") or "unverified"),
         "inference_error": str(_inference_probe_result.get("error") or cached.get("inference_error") or ""),
         "model_loaded": bool(cached.get("model_loaded")) if observed_running is not None else None,
@@ -282,6 +347,8 @@ def start_server() -> dict[str, Any]:
     global _server_process, _server_url, _last_error, _server_desired_running
     global _inference_probe_at, _inference_probe_result
     with _lifecycle_lock:
+        from .local_vision_models import pin_current
+        pin_current()
         with _lock:
             _server_desired_running = True
             process = _server_process
@@ -339,7 +406,7 @@ def unload_model() -> dict[str, Any]:
         if current.get("owned_server") and current.get("server_running") and current.get("model_available"):
             try:
                 _request_json("/api/generate", method="POST",
-                              payload={"model": DEFAULT_MODEL, "prompt": "", "keep_alive": 0, "stream": False},
+                              payload={"model": selected_model(), "prompt": "", "keep_alive": 0, "stream": False},
                               timeout=20.0)
             except (OSError, ValueError, httpx.HTTPError):
                 pass
@@ -378,9 +445,17 @@ def restart_server() -> dict[str, Any]:
         return start_server()
 
 
-def start_model_pull() -> dict[str, Any]:
-    global _pull_process, _last_error
+def start_model_pull(model: str | None = None) -> dict[str, Any]:
+    from .local_vision_models import start_download
+    start_download(model or selected_model())
+    return status(force=True)
+
+
+def _start_model_pull(model: str) -> dict[str, Any]:
+    global _pull_process, _last_error, _pull_model
     with _lifecycle_lock:
+        from .local_vision_models import _model
+        model = _model(model or selected_model())
         start_server()
         with _lock:
             pulling = _pull_process is not None and _pull_process.poll() is None
@@ -389,16 +464,32 @@ def start_model_pull() -> dict[str, Any]:
         log_path = settings.local_vision_dir / "模型下载.log"
         with log_path.open("ab") as log_handle:
             process = subprocess.Popen(
-                [str(_ollama_executable()), "pull", DEFAULT_MODEL],
+                [str(_ollama_executable()), "pull", model],
                 cwd=str(_ollama_executable().parent), env=_runtime_env(),
                 stdout=log_handle, stderr=log_handle,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         with _lock:
             _pull_process = process
+            _pull_model = model
             _last_error = ""
         _invalidate_probe()
         return status(force=True)
+
+
+def cancel_model_pull() -> None:
+    global _pull_process, _pull_model
+    with _lifecycle_lock:
+        process = _pull_process
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                process.kill(); process.wait(timeout=3)
+        _pull_process = None
+        _pull_model = ''
+        _invalidate_probe()
 
 
 def activate() -> dict[str, Any]:
@@ -421,7 +512,7 @@ async def ensure_ready() -> dict[str, Any]:
         current = await asyncio.to_thread(start_server)
     if not current.get("model_installed"):
         raise RuntimeError(
-            f"本地视觉模型 {DEFAULT_MODEL} 尚未下载。整屏画面不会转发云端，请先下载模型。"
+            f"本地视觉模型 {selected_model()} 尚未下载。整屏画面不会转发云端，请先下载模型。"
         )
     probe = await asyncio.to_thread(probe_inference)
     if not probe.get("ready"):
@@ -430,12 +521,11 @@ async def ensure_ready() -> dict[str, Any]:
     return current
 
 
-async def analyze_image(*, prompt: str, image: bytes, system_prompt: str) -> CompletionResult:
-    global _last_error
-    await ensure_ready()
-    payload = {
-        "model": DEFAULT_MODEL,
-        "stream": False,
+def _image_payload(*, prompt: str, image: bytes, system_prompt: str, stream: bool, model: str | None = None) -> dict:
+    return {
+        "model": model or selected_model(),
+        "stream": stream,
+        "think": False,
         "keep_alive": "90s",
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -446,9 +536,118 @@ async def analyze_image(*, prompt: str, image: bytes, system_prompt: str) -> Com
             },
         ],
         # The perception response is a compact JSON object. A smaller context
-        # and bounded output materially reduce CPU latency on qwen2.5-vl:3b.
+        # and bounded output keep visual inference small enough alongside TTS.
         "options": {"temperature": 0.1, "num_ctx": 2048, "num_predict": 220},
     }
+
+
+def _record_image_success(model: str | None = None) -> None:
+    global _inference_probe_at, _inference_probe_result, _last_error
+    with _lock:
+        _last_error = ""
+        _inference_probe_at = time.monotonic()
+        _inference_probe_result = {"ready": True, "state": "ready", "error": "", "checked_at": time.time(), 'model': model or selected_model()}
+    _invalidate_probe()
+
+
+async def iter_image_text(*, prompt: str, image: bytes, system_prompt: str,
+                          cancel_event: threading.Event | None = None) -> AsyncIterator[str]:
+    model = _begin_image_request()
+    source = _iter_image_text(prompt=prompt, image=image, system_prompt=system_prompt,
+                              cancel_event=cancel_event, model=model)
+    try:
+        async for piece in source:
+            yield piece
+    finally:
+        try:
+            await source.aclose()
+        finally:
+            _end_image_request()
+
+
+async def _iter_image_text(*, prompt: str, image: bytes, system_prompt: str,
+                           cancel_event: threading.Event | None, model: str) -> AsyncIterator[str]:
+    """Stream visible description text; require a complete Ollama terminal event.
+
+    Callers choose a public description prompt. Internal observation JSON continues
+    to use analyze_image and must never be sent directly to speech synthesis.
+    """
+    global _last_error
+
+    def check_cancel():
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("视觉描述已取消。")
+
+    check_cancel()
+    await ensure_ready()
+    check_cancel()
+    payload = _image_payload(prompt=prompt, image=image, system_prompt=system_prompt, stream=True, model=model)
+    current_task = asyncio.current_task()
+    async def watch_cancel():
+        while cancel_event is not None and not cancel_event.is_set():
+            await asyncio.sleep(.05)
+        if cancel_event is not None and current_task is not None:
+            current_task.cancel()
+
+    watcher = asyncio.create_task(watch_cancel()) if cancel_event is not None else None
+    completed = False
+    received = 0
+    try:
+        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+            async with client.stream("POST", f"{_owned_server_url()}/api/chat", json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    check_cancel()
+                    if not line.strip():
+                        continue
+                    if len(line) > 256 * 1024:
+                        raise ValueError("视觉流事件过大")
+                    event = json.loads(line)
+                    if not isinstance(event, dict) or event.get("error"):
+                        raise ValueError("视觉流返回无效结果或推理错误")
+                    message = event.get("message")
+                    piece = message.get("content", "") if isinstance(message, dict) else ""
+                    if not isinstance(piece, str):
+                        raise ValueError("视觉流正文不是文字")
+                    if piece:
+                        received += len(piece)
+                        if received > 8192:
+                            raise ValueError("视觉描述超过长度限制")
+                        yield piece
+                    if event.get("done") is True:
+                        if event.get("done_reason") == "length":
+                            raise ValueError("视觉描述达到输出上限，结果不完整")
+                        completed = True
+                        break
+        if not completed or not received:
+            raise ValueError("视觉流未完整结束或没有可见描述")
+        _record_image_success(model)
+    except asyncio.CancelledError:
+        check_cancel()
+        raise
+    except (OSError, ValueError, httpx.HTTPError) as exc:
+        check_cancel()
+        _last_error = type(exc).__name__
+        raise RuntimeError(f"本地视觉流式识别失败（{type(exc).__name__}）。") from exc
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+        _invalidate_probe()
+
+
+async def analyze_image(*, prompt: str, image: bytes, system_prompt: str) -> CompletionResult:
+    model = _begin_image_request()
+    try:
+        return await _analyze_image(prompt=prompt, image=image, system_prompt=system_prompt, model=model)
+    finally:
+        _end_image_request()
+
+
+async def _analyze_image(*, prompt: str, image: bytes, system_prompt: str, model: str) -> CompletionResult:
+    global _last_error
+    await ensure_ready()
+    payload = _image_payload(prompt=prompt, image=image, system_prompt=system_prompt, stream=False, model=model)
     try:
         async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
             response = await client.post(f"{_owned_server_url()}/api/chat", json=payload)
@@ -462,11 +661,10 @@ async def analyze_image(*, prompt: str, image: bytes, system_prompt: str) -> Com
     content = str(message.get("content") or "") if isinstance(message, dict) else ""
     if not content.strip():
         raise RuntimeError("本地视觉模型没有返回识别结果")
-    _last_error = ""
-    _invalidate_probe()
+    _record_image_success(model)
     return CompletionResult(
         content=content,
-        model=f"本地 · {DEFAULT_MODEL}",
+        model=f"本地 · {model}",
         prompt_tokens=max(0, int(data.get("prompt_eval_count") or 0)),
         cached_prompt_tokens=0,
         completion_tokens=max(0, int(data.get("eval_count") or 0)),
@@ -479,6 +677,7 @@ async def analyze_image(*, prompt: str, image: bytes, system_prompt: str) -> Com
 __all__ = [
     "DEFAULT_MODEL",
     "analyze_image",
+    "iter_image_text",
     "ensure_ready",
     "passive_status",
     "probe_inference",

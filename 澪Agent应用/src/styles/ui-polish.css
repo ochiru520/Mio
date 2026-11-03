@@ -14,7 +14,7 @@
 }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .window-drag-zone strong { font-weight: 550; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-sidebar { border-right-color: color-mix(in srgb,var(--border) 55%,transparent); padding-top: 18px; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-sidebar .nav-item { border-radius: 9px; font-size: calc(13px * var(--fs)); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-sidebar .nav-item { border-radius: 9px; font-size: var(--text-base); }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-sidebar .nav-item.active { font-weight: 550; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .nav-item.active::before { content: none; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-sidebar.expanded { box-shadow: 4px 0 16px color-mix(in srgb,var(--shadow-tint) 60%,transparent); }
@@ -27,8 +27,8 @@
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-avatar { width: 30px; height: 30px; min-width: 30px; margin-top: 6px; border: 0; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-heading { margin-bottom: 8px; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-body { border: 0; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-heading strong { font-size: calc(13px * var(--fs)); font-weight: 500; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-bubble { font-size: calc(14px * var(--fs)); line-height: 1.9; border: 0; box-shadow: none; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-heading strong { font-size: var(--text-base); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-bubble { font-size: var(--text-base); line-height: 1.9; border: 0; box-shadow: none; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row.assistant .message-bubble { background: transparent; border-radius: 0; padding: 3px 0; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row.assistant .message-bubble::before,
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row.assistant .message-bubble::after { content: none; }
@@ -36,21 +36,21 @@
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-wrap { padding: 10px clamp(16px,3vw,38px) 22px; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer { width: min(840px,100%); padding: 15px 16px 11px; background: var(--surface); backdrop-filter: none; border-radius: 16px; box-shadow: 0 2px 8px color-mix(in srgb,var(--shadow-tint) 40%,transparent); }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer:focus-within { border-color: color-mix(in srgb,var(--accent) 50%,var(--border)) !important; box-shadow: 0 2px 12px color-mix(in srgb,var(--shadow-tint) 60%,transparent) !important; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-input { min-height: 38px; max-height: min(140px,20vh); font-size: calc(14px * var(--fs)); line-height: 1.75; padding: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-input { min-height: 38px; max-height: min(140px,20vh); font-size: var(--text-base); line-height: 1.75; padding: 0; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-input::placeholder { color: var(--text-faint); }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-actions { gap: 9px; margin-top: 8px; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger { border: 0; background: transparent; padding: 5px 7px; font-size: calc(12px * var(--fs)); box-shadow: none; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger small { font-size: calc(12px * var(--fs)); color: var(--text-faint); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger { border: 0; background: transparent; padding: 5px 7px; font-size: var(--text-xs); box-shadow: none; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .model-picker-trigger small { font-size: var(--text-xs); color: var(--text-faint); }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .send-button { border-radius: 50%; width: 32px; min-width: 32px; height: 32px; }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-trigger { border: 0; background: var(--surface-soft); border-radius: 8px; padding: 7px 11px; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-trigger span { font-size: calc(12px * var(--fs)); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-trigger span { font-size: var(--text-xs); }
 .app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer { border-radius: 0; box-shadow: 6px 0 20px color-mix(in srgb,var(--shadow-tint) 60%,transparent); }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-list strong { font-size: calc(13px * var(--fs)); font-weight: 500; }
-.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-list small { font-size: calc(12px * var(--fs)); }
-.mio-settings-content .settings-page-title h1 { font-size: calc(25px * var(--fs)); font-weight: 500; letter-spacing: 0; }
-.mio-agent-project-sidebar button,.agent-content-sidebar button,.agent-personal-menu button,.mio-settings-sidebar nav > button { color: var(--text); font-size: calc(13px * var(--fs,1)); }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-list strong { font-size: var(--text-base); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell) .conversation-drawer-list small { font-size: var(--text-xs); }
+.mio-settings-content .settings-page-title h1 { font-size: var(--text-2xl); font-weight: 500; letter-spacing: 0; }
+.mio-agent-project-sidebar button,.agent-content-sidebar button,.agent-personal-menu button,.mio-settings-sidebar nav > button { color: var(--text); font-size: var(--text-base); }
 .mio-agent-project-sidebar .agent-sidebar-label,.mio-settings-sidebar nav > small { color: var(--text-muted); }
-.mio-settings-content .settings-section-intro,.mio-settings-content .settings-page-title p { line-height: 1.8; font-size: calc(13px * var(--fs)); }
+.mio-settings-content .settings-section-intro,.mio-settings-content .settings-page-title p { line-height: 1.8; font-size: var(--text-base); }
 .mio-settings-content .settings-list { background: transparent; border-radius: 0; box-shadow: none; }
 .mio-settings-content .settings-list { border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .mio-settings-content .settings-item { padding-inline: 0; border-bottom-color: var(--border); }
@@ -62,7 +62,7 @@
 .mio-settings-content .settings-form-grid > label:not(.toggle-row) {
   grid-template-columns: minmax(140px, .8fr) minmax(0, 1.6fr); align-items: start;
   gap: 8px 28px; padding: 18px 0; background: transparent; border-radius: 0;
-  border-bottom: 1px solid var(--border); color: var(--text); font-size: calc(13px * var(--fs, 1));
+  border-bottom: 1px solid var(--border); color: var(--text); font-size: var(--text-base);
 }
 .mio-settings-content .settings-form-grid > label:last-child { border-bottom: 0; }
 .mio-settings-content .settings-form-grid > label:not(.toggle-row) > span:first-child { grid-column: 1; grid-row: 1 / span 2; padding-top: 9px; color: var(--text); }
@@ -77,17 +77,17 @@
 .mio-settings-content .appearance-resource-card { padding: 18px 0; background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
 .mio-settings-content .character-card-panel > .settings-note { padding: 14px 0 0; background: transparent; border: 0; }
 .mio-settings-content .settings-item { gap: 22px; }
-.mio-settings-content .settings-item small,.mio-settings-content .settings-item p { font-size: calc(12px * var(--fs)); line-height: 1.75; }
-.mio-settings-content .settings-item input:not([type=checkbox]),.mio-settings-content .settings-item select,.mio-settings-content .settings-item textarea { border-radius: 8px; padding: 10px 12px; font-size: calc(13px * var(--fs)); }
+.mio-settings-content .settings-item small,.mio-settings-content .settings-item p { font-size: var(--text-xs); line-height: 1.75; }
+.mio-settings-content .settings-item input:not([type=checkbox]),.mio-settings-content .settings-item select,.mio-settings-content .settings-item textarea { border-radius: 8px; padding: 10px 12px; font-size: var(--text-base); }
 .mio-settings-content .settings-page button:not(.theme-option):not(.theme-choice):not(.theme-card) { border-radius: 8px; }
 .mio-settings-sidebar .mio-settings-search input { background: transparent; border: 0; box-shadow: none; }
-.mio-settings-sidebar > button { font-size: calc(13px * var(--fs)); }
-.mio-settings-sidebar .mio-settings-search input { font-size: calc(12px * var(--fs)); }
+.mio-settings-sidebar > button { font-size: var(--text-base); }
+.mio-settings-sidebar .mio-settings-search input { font-size: var(--text-xs); }
 .mio-settings-sidebar nav button:hover,.advanced-navigation > button:hover { background: var(--surface-soft); }
 @media(max-width:760px) {
   .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-list { width: calc(100% - 30px); }
   .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-row { gap: 9px; margin-bottom: 24px; }
-  .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-bubble { font-size: calc(13px * var(--fs)); }
+  .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .message-bubble { font-size: var(--text-base); }
   .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-wrap { padding-inline: 12px; padding-bottom: 15px; }
   .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer { padding: 13px 12px 10px; }
   .app-shell.integrated-shell:not(.agent-workspace-shell) .integrated-chat-layout .composer-actions { gap: 5px; }

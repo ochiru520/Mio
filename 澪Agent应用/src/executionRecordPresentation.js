@@ -116,7 +116,7 @@ export function executionRecordPresentation(record = {}) {
     : payload.command ? `运行命令：${compactExecutionText(payload.command, 95)}`
       : payload.path || payload.file_path ? `文件：${compactExecutionText(payload.path || payload.file_path, 100)}` : ''
   if (!summary && target && ['needs_confirmation', 'queued', 'running', 'executed', 'completed'].includes(record.status)) {
-    summary = `${({ needs_confirmation: '待确认', queued: '待执行', running: '执行中', executed: '已完成', completed: '已完成' })[record.status]} · ${target}`
+    summary = `${({ needs_confirmation: '待确认', queued: '待执行', running: '执行中', executed: '已完成', completed: '已完成' })[record.status]}，${target}`
   }
   if (!summary) summary = ({
     queued: '等待执行。', approved: '已经批准，后续执行结果见正式执行记录。', running: '正在执行，结果尚未返回。', needs_confirmation: '等待你的确认后执行。',

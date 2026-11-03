@@ -143,6 +143,7 @@ test('令牌层是唯一的颜色来源，其它样式表不再写死颜色', ()
     'styles/agent-workspace.css',
     'styles/agent-settings.css',
     'styles/calm.css',
+    'styles/design.css',
   ]
 
   // var(--x, #fallback) 里的兜底值不算，那是有意为之的降级

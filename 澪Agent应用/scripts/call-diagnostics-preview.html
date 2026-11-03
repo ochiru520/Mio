@@ -1,0 +1,18 @@
+<!doctype html><html lang="zh-CN" data-font-size="medium"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>通话延迟隔离验收</title></head><body><div id="app"></div><script type="module">
+import {createApp,h,ref} from 'vue'
+import CallDiagnosticsPanel from '../src/components/CallDiagnosticsPanel.vue'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles/agent-settings.css'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+import '../src/styles/refinements.css'
+import '../src/styles/agent-surface.css'
+import '../src/styles/ui-polish.css'
+import '../src/styles/calm.css'
+createApp({setup(){const open=ref(false);return()=>h('main',{class:'settings-page',style:'max-width:760px;padding:24px;margin:auto;height:auto'},[
+ h('details',{open:open.value,onToggle:e=>open.value=e.currentTarget.open},[
+  h('summary','通话延迟诊断'),open.value?h(CallDiagnosticsPanel):null
+ ])
+])}}).mount('#app')
+</script></body></html>

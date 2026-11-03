@@ -192,6 +192,10 @@ class PetEventHub:
             self._clients.discard(websocket)
             self._client_info.pop(websocket, None)
             self._last_disconnected_at = self._now()
+            disconnected = not self._clients
+        if disconnected:
+            from . import screen_observation_service
+            screen_observation_service.screen_renderer_disconnected()
 
     async def send(self, websocket: WebSocket, event_type: str, payload: dict[str, Any]) -> bool:
         try:
@@ -334,6 +338,9 @@ class PetEventHub:
                     from . import call_session_service
 
                     call_session_service.manager.record_voice_ended(response_id, payload)
+                    screen_observation_service.screen_speech_finished(
+                        response_id, completed=str(payload.get("reason") or "") == "finished",
+                    )
                     companion_service.set_pet_activity(
                         "idle",
                         source="electron_live2d",
@@ -412,6 +419,10 @@ class PetEventHub:
                         continue
                     source = str(grouped[0]["source"] or "")
                     response_id = request_id or f"message-{int(grouped[-1]['id'])}"
+                    if source == "desktop_pet_call":
+                        from .call_speech_stream import announced
+                        if announced(response_id):
+                            continue
                     priority = speech_priority(source)
                     emotion = str(
                         grouped[0]["emotion"]
@@ -479,6 +490,10 @@ class PetEventHub:
 
 
 hub = PetEventHub()
+
+
+def should_speak(source: str, config: dict[str, Any]) -> bool:
+    return PetEventHub._should_speak(source, config)
 
 
 def has_clients() -> bool:

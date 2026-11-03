@@ -20,7 +20,7 @@ onBeforeUnmount(dispose)
       <article v-for="item in capabilities" :key="item.id">
         <div class="check-title"><strong>{{ item.label }}</strong><span :class="item.status">{{ states[item.status] || '未知状态' }}</span></div>
         <p>{{ item.description }}</p>
-        <small>{{ levels[item.level] || levels.unverified }}<template v-if="item.duration_ms != null"> · {{ (item.duration_ms / 1000).toFixed(1) }} 秒</template></small>
+        <small>{{ levels[item.level] || levels.unverified }}<template v-if="item.duration_ms != null">，{{ (item.duration_ms / 1000).toFixed(1) }} 秒</template></small>
         <small v-if="item.checked_at">检查于 {{ new Date(item.checked_at).toLocaleString() }}</small>
         <p v-if="item.message" role="status">{{ item.message }}</p>
         <small v-if="item.human_check_required">{{ item.id === 'qq' ? '消息实际送达需另行测试。' : '麦克风、听感和连续交互仍需真人确认。' }}</small>
@@ -43,16 +43,16 @@ onBeforeUnmount(dispose)
 <style scoped>
 .capability-checks { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
 .checks-heading, .check-title, .check-actions { display: flex; gap: 10px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
-h3 { margin: 0; font-size: calc(15px * var(--fs, 1)); }
-p { font-size: calc(12px * var(--fs, 1)); line-height: 1.65; margin: 8px 0; }
-small { display: block; font-size: calc(12px * var(--fs, 1)); line-height: 1.7; opacity: .8; }
+h3 { margin: 0; font-size: var(--text-base); }
+p { font-size: var(--text-xs); line-height: 1.65; margin: 8px 0; }
+small { display: block; font-size: var(--text-xs); line-height: 1.7; opacity: .8; }
 .checks-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; margin-top: 12px; }
 article { padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; min-width: 0; overflow-wrap: anywhere; }
-.check-title { font-size: calc(12px * var(--fs, 1)); }
-.check-title span { font-size: calc(12px * var(--fs, 1)); }
+.check-title { font-size: var(--text-xs); }
+.check-title span { font-size: var(--text-xs); }
 .passed { color: var(--success); } .failed, .checks-error { color: var(--danger); } .stale, .interrupted { color: var(--warning); }
 .check-actions { justify-content: flex-start; margin-top: 10px; }
-button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: inherit; font: inherit; font-size: calc(12px * var(--fs, 1)); cursor: pointer; }
+button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: inherit; font: inherit; font-size: var(--text-xs); cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .check-confirm { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 5px; }

@@ -8,8 +8,9 @@ import {
   discoverOnboardingModels,
   testOnboardingModel,
 } from '../services/onboardingApi.js'
-import { canContinueOnboardingStep } from '../onboardingGates.js'
+import { canContinueOnboardingStep, onboardingCompletion } from '../onboardingGates.js'
 import DependencyCenter from './DependencyCenter.vue'
+import DeviceCheckPanel from './DeviceCheckPanel.vue'
 import AppSelect from './AppSelect.vue'
 
 const props = defineProps({
@@ -18,10 +19,12 @@ const props = defineProps({
   environmentBusy: { type: Boolean, default: false },
   busy: { type: Boolean, default: false },
   error: { type: String, default: '' },
+  review: { type: Boolean, default: false },
 })
-const emit = defineEmits(['complete', 'refresh-environment'])
+const emit = defineEmits(['complete', 'refresh-environment', 'close'])
 
 const step = ref(0)
+const tutorialSkipped = ref(false)
 const form = reactive({
   assistant_name: 'Mio',
   user_address: '你',
@@ -53,7 +56,9 @@ const steps = [
   { title: '欢迎使用 Mio', subtitle: '先确认数据保存位置和云端边界', icon: Sparkles },
   { title: '彼此怎么称呼', subtitle: '这些名字以后都可以在设置中修改', icon: Bot },
   { title: '模型服务', subtitle: '对话需要至少一个可用的模型供应商', icon: Database },
+  { title: '选择声音与功能', subtitle: '只安装你需要的功能，也可以稍后到设置里安装', icon: Sparkles },
   { title: '敏感能力', subtitle: '新安装默认关闭，由你逐项决定', icon: ShieldCheck },
+  { title: '试试声音设备', subtitle: '可选：确认麦克风和扬声器能正常工作', icon: Cpu },
   { title: '准备完成', subtitle: '设置会保存在本机数据目录', icon: Check },
 ]
 
@@ -90,8 +95,8 @@ function handleDependencyNavigate(target) {
     step.value = 3
     return
   }
-  // 向导里没有语音配置步骤；进入应用后到设置里配置
-  providerError.value = '云端语音稍后配置：完成向导后，到「设置 > 桌宠 > 语音」选择云端语音并填写 API Key。'
+  // 模型功能可先安装，具体音色与设备设置在进入应用后继续。
+  providerError.value = '完成向导后，到「设置 > 桌宠 > 语音」选择声音、导入训练音色并试听。'
   step.value = 4
 }
 
@@ -102,7 +107,19 @@ function environmentStatusIcon(status) {
 function next() {
   if (!canContinue.value || props.busy) return
   if (step.value < steps.length - 1) step.value += 1
-  else emit('complete', { ...form })
+  else finish()
+}
+
+function skipStep() {
+  if (props.busy || step.value >= steps.length - 1) return
+  tutorialSkipped.value = true
+  step.value += 1
+}
+
+function finish(skipped = tutorialSkipped.value) {
+  if (props.busy) return
+  if (props.review) emit('close')
+  else emit('complete', onboardingCompletion(form, skipped))
 }
 
 function selectProviderPreset(presetId) {
@@ -245,6 +262,7 @@ async function saveAndTestProvider() {
         <div class="onboarding-mark"><component :is="current.icon" :size="24" /></div>
         <div><h1>{{ current.title }}</h1><p>{{ current.subtitle }}</p></div>
         <span>{{ step + 1 }} / {{ steps.length }}</span>
+        <p v-if="review" class="onboarding-review-note">正在回看教程：返回应用不会应用这里的称呼或敏感能力选项。安装、设备保存与模型配置等明确操作仍会生效。</p>
       </header>
 
       <div class="onboarding-progress"><i v-for="(_, index) in steps" :key="index" :class="{ active: index <= step }" /></div>
@@ -268,7 +286,6 @@ async function saveAndTestProvider() {
               <b>{{ environmentStatusLabel(item.status) }}</b>
             </article>
           </div>
-          <DependencyCenter @refresh-environment="emit('refresh-environment')" @navigate="handleDependencyNavigate" />
         </template>
         <div v-else class="environment-loading failed"><AlertCircle :size="22" /><span>环境检查暂时不可用，请重新检查</span><button type="button" @click="emit('refresh-environment')">重新检查</button></div>
       </section>
@@ -302,7 +319,7 @@ async function saveAndTestProvider() {
           </div>
           <div class="onboarding-provider-actions"><button type="button" :disabled="Boolean(providerBusy) || (provider.provider_kind !== 'local' && !provider.api_key.trim())" @click="discoverModels"><RefreshCw :class="{ spin: providerBusy === 'discover' }" :size="14" />{{ providerBusy === 'discover' ? '正在读取' : '读取模型' }}</button></div>
           <div v-if="discoveredModels.length" class="onboarding-model-list">
-            <label v-for="item in discoveredModels" :key="item.model"><input v-model="item.selected" type="checkbox" :disabled="item.api_supported === false" /><span><strong>{{ item.display_name || item.model }}</strong><small>{{ item.model }}{{ item.api_supported === false ? ' · /messages 暂不支持' : '' }}</small></span></label>
+            <label v-for="item in discoveredModels" :key="item.model"><input v-model="item.selected" type="checkbox" :disabled="item.api_supported === false" /><span><strong>{{ item.display_name || item.model }}</strong><small>{{ item.model }}{{ item.api_supported === false ? '，/messages 暂不支持' : '' }}</small></span></label>
           </div>
           <label class="onboarding-manual-model"><span>没有模型列表时手动填写模型 ID</span><input v-model.trim="provider.manual_model" placeholder="例如：gpt-5-mini" /></label>
           <button class="onboarding-provider-save" type="button" :disabled="Boolean(providerBusy)" @click="saveAndTestProvider"><Check :size="14" />{{ providerBusy === 'save' ? '正在保存并测试' : '保存并测试' }}</button>
@@ -312,7 +329,13 @@ async function saveAndTestProvider() {
         <p class="onboarding-note">配置并测试模型后即可开始对话；也可以先跳过，之后到「模型与 API」设置里随时配置。API Key 使用 Windows DPAPI 加密保存，不会回显，不进入备份、日志或 Git</p>
       </section>
 
-      <section v-else-if="step === 4" class="onboarding-content capability-list">
+      <section v-else-if="step === 4" class="onboarding-content">
+        <p class="onboarding-note">可选功能不影响进入应用。不确定时先跳过，之后在设置中随时安装、切换或卸载。</p>
+        <DependencyCenter @refresh-environment="emit('refresh-environment')" @navigate="handleDependencyNavigate" />
+        <p v-if="providerError" class="onboarding-note">{{ providerError }}</p>
+      </section>
+
+      <section v-else-if="step === 5" class="onboarding-content capability-list">
         <label><span><strong>联网搜索</strong><small>不知道或信息可能过期时查询网络</small></span><input v-model="form.web_search_enabled" type="checkbox" /></label>
         <label><span><strong>主动联系</strong><small>应用开着且长时间没有对话时主动发消息</small></span><input v-model="form.proactive_enabled" type="checkbox" /></label>
         <label><span><strong>自动日记</strong><small>当天未手动生成时按设定时间自动整理</small></span><input v-model="form.daily_diary_auto_enabled" type="checkbox" /></label>
@@ -320,20 +343,56 @@ async function saveAndTestProvider() {
         <p>屏幕观察、系统声音与 QQ 图片上传保持关闭，需要时再到设置中单独开启</p>
       </section>
 
+      <section v-else-if="step === 6" class="onboarding-content">
+        <DeviceCheckPanel />
+        <p class="onboarding-note">暂时不用语音可以直接继续。不会自动录音或启动模型。</p>
+      </section>
+
       <section v-else class="onboarding-content finish-summary">
         <Check :size="30" />
-        <h2>{{ form.assistant_name }}已经准备好了</h2>
+        <h2>{{ review ? '教程回看完成' : `${form.assistant_name.trim() || 'Mio'}的初始设置已准备好` }}</h2>
+        <p v-if="!review">{{ hasVerifiedModel ? '聊天模型已通过测试，可以开始对话。' : '你跳过了聊天模型测试；进入后请先到「模型与 API」完成配置。' }}语音与视觉需在安装后单独实测。</p>
+        <p v-else>点击“返回应用”即可结束回看；这里填写的称呼和敏感能力选项不会应用到当前设置。</p>
         <p>数据目录会自动建立完整备份。以后更换电脑或重装应用，可以从“设置 > 数据与隐私”恢复</p>
       </section>
 
       <p v-if="error" class="onboarding-error">{{ error }}</p>
       <footer>
-        <button type="button" :disabled="step === 0 || busy" @click="step -= 1"><ArrowLeft :size="16" />上一步</button>
-        <button class="primary" type="button" :disabled="!canContinue || busy" @click="next">
-          {{ step === steps.length - 1 ? (busy ? '正在保存' : '进入应用') : '继续' }}
-          <ArrowRight v-if="step < steps.length - 1" :size="16" /><Check v-else :size="16" />
-        </button>
+        <div class="onboarding-navigation"><button type="button" :disabled="step === 0 || busy" @click="step -= 1"><ArrowLeft :size="16" />上一步</button>
+          <button v-if="step < steps.length - 1" type="button" :disabled="busy" @click="skipStep">跳过这步</button>
+          <button class="primary" type="button" :disabled="!canContinue || busy" @click="next">
+            {{ step === steps.length - 1 ? (review ? '返回应用' : busy ? '正在保存' : '进入应用') : '继续' }}
+            <ArrowRight v-if="step < steps.length - 1" :size="16" /><Check v-else :size="16" />
+          </button>
+        </div>
+        <div class="onboarding-skip"><button type="button" :disabled="busy" @click="finish(true)">{{ review ? '返回应用' : '跳过教程，先进入' }}</button><small>已启动的下载会在后台继续；跳过不会自动下载模型或申请录音。</small></div>
       </footer>
     </section>
   </main>
 </template>
+
+<style scoped>
+.onboarding-shell { background:var(--bg); }
+.onboarding-card { background:var(--panel); box-shadow:none; font-size: var(--text-base); }
+.onboarding-card > header { grid-template-columns:30px minmax(0,1fr) auto; gap:12px; }
+.onboarding-mark { width:30px; height:30px; background:transparent; border-radius:0; }
+.onboarding-card h1,.onboarding-card h2 { font-size: var(--text-lg); }
+.onboarding-card h3 { font-size: var(--text-lg); }
+.onboarding-card :is(p,label,button,input,strong,b) { font-size: var(--text-base); }
+.onboarding-card small { font-size: var(--text-xs); }
+.onboarding-card :deep(.app-select > svg) { display:none; }
+.onboarding-card :deep(.spin) { animation:none; }
+.privacy-intro article,.onboarding-status,.onboarding-provider-form { background:transparent; border:0; border-radius:0; padding:12px 0; }
+.privacy-intro article { border-bottom:1px solid var(--line); }
+.onboarding-provider-form { gap:14px; }
+.onboarding-card .environment-summary { background:transparent; border:0; border-radius:0; gap:12px; }
+.onboarding-card .environment-summary span { background:transparent; padding:0; }
+.onboarding-card .environment-list article { border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; padding:12px 0; }
+.onboarding-card > .onboarding-content { min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: contain; }
+.onboarding-card > footer { position: relative; background: var(--panel); }
+.onboarding-card > footer { display: grid; gap: 10px; }
+.onboarding-navigation { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.onboarding-skip { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.onboarding-skip small { color:var(--muted); font-size: var(--text-xs); line-height:1.5; flex:1 1 160px; }
+.onboarding-review-note { grid-column:1 / -1; padding:8px 0; border-bottom:1px solid var(--line); line-height:1.6; }
+</style>

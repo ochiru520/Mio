@@ -2,13 +2,11 @@
 import { contextUsagePresentation } from '../contextUsageState.js'
 import {
   ArrowRight,
-  BookOpen,
   CalendarDays,
   CheckCircle2,
   Circle,
   Heart,
   MessageSquareText,
-  Sparkles,
   Wifi,
   WifiOff,
 } from '../icons/index.js'
@@ -17,13 +15,11 @@ export default {
   name: 'HomePage',
   components: {
     ArrowRight,
-    BookOpen,
     CalendarDays,
     CheckCircle2,
     Circle,
     Heart,
     MessageSquareText,
-    Sparkles,
     Wifi,
     WifiOff,
   },
@@ -52,7 +48,7 @@ export default {
       const [year, month, day] = this.logicalDate.split('-').map(Number)
       const weekday = new Intl.DateTimeFormat('zh-CN', { weekday: 'long' })
         .format(new Date(year, month - 1, day))
-      return `${month} 月 ${day} 日 · ${weekday}`
+      return `${month} 月 ${day} 日，${weekday}`
     },
     greeting() {
       const hour = new Date().getHours()
@@ -62,14 +58,6 @@ export default {
       if (hour < 18) return '下午好'
       if (hour < 23) return '晚上好'
       return '夜深了'
-    },
-    periodLabel() {
-      const hour = new Date().getHours()
-      if (hour < 4) return '深夜'
-      if (hour < 11) return '上午'
-      if (hour < 14) return '中午'
-      if (hour < 18) return '下午'
-      return '晚上'
     },
     moodScore() {
       return Math.max(0, Math.min(5, Number(this.todayState.mood_score || 0)))
@@ -217,27 +205,27 @@ export default {
 <template>
   <div class="home-page integrated-home">
     <header class="home-today-header">
-      <span>{{ readableDate }} · {{ periodLabel }}</span>
       <h1>{{ greeting }}，{{ userAddress }}</h1>
+      <time :datetime="logicalDate">{{ readableDate }}</time>
       <p>{{ todayState.key_events || '今天还没有形成清晰的主线，先从你正在做的事开始' }}</p>
     </header>
     <section class="home-focus-grid">
       <article class="home-focus-primary">
-        <span>继续上次的事情</span><h2>{{ ongoingItem.title }}</h2><p>{{ ongoingItem.content }}</p>
+        <h2>{{ ongoingItem.title }}</h2><p>{{ ongoingItem.content }}</p>
         <button type="button" @click="continueOngoingItem">继续 <ArrowRight :size="15" /></button>
       </article>
       <article class="home-attention-panel">
-        <span>今天需要留意</span>
+        <h2>今天需要留意</h2>
         <div v-for="item in attentionItems" :key="item.label"><strong>{{ item.label }}</strong><p>{{ item.value }}</p></div>
       </article>
     </section>
     <section class="home-activity-section">
-      <header><div><Sparkles :size="17" /><h2>今天的动态</h2></div><button type="button" @click="$emit('navigate', 'chat')">打开对话</button></header>
+      <header><h2>今天的动态</h2><button type="button" @click="$emit('navigate', 'chat')">打开对话</button></header>
       <div v-if="todayDynamics.length" class="home-activity-list"><article v-for="item in todayDynamics" :key="item.label"><span>{{ item.label }}</span><p>{{ item.value }}</p></article></div>
       <p v-else class="home-empty-line">今天的状态还在慢慢形成</p>
     </section>
     <section class="home-records-section">
-      <header><div><BookOpen :size="17" /><h2>最近记录</h2></div></header>
+      <header><h2>最近记录</h2></header>
       <div v-if="recentRecords.length" class="home-records-list">
         <button v-for="item in recentRecords" :key="item.id" type="button" @click="item.date ? $emit('open-diary', item.date) : $emit('navigate', item.target)"><span>{{ item.label }}</span><strong>{{ item.title }}</strong><ArrowRight :size="14" /></button>
       </div>

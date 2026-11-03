@@ -7,7 +7,7 @@ import os
 import re
 import subprocess
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -25,6 +25,76 @@ SOURCE_SNAPSHOT_EXCLUDES = {
     "release",
     "generated",
 }
+
+# This chain is shipped even when the optional GPU runtime is not installed.
+# Fixed names make a missing bootstrap/helper fail packaging instead of only
+# failing when somebody first tries to install Anif on another computer.
+ANIF_REQUIRED_ARTIFACTS = {
+    "anif_setup_worker": "aniflive_setup_worker.py",
+    "anif_setup_probe": "aniflive_setup_probe.py",
+    "anif_v2_converter": "aniflive_v2_convert.py",
+    "anif_v2_runtime": "aniflive_v2_runtime.py",
+    "anif_v2_server": "aniflive_v2_server.py",
+    "anif_shared_server": "aniflive_experimental_server.py",
+    "anif_native_v2_helper": "mio_v2_stream_server.py",
+    "anif_runtime_installer": "deps/install-aniflive-runtime.ps1",
+    "anif_installer_common": "deps/common.ps1",
+    "anif_source_lock": "deps/aniflive-sources.json",
+    "anif_runtime_requirements": "deps/aniflive-runtime-requirements.txt",
+    "anif_jieba_wheel": "deps/wheels/jieba_fast-0.53-cp310-cp310-win_amd64.whl",
+    "anif_jieba_provenance": "deps/wheels/jieba-fast-provenance.json",
+    "anif_jieba_license": "deps/wheels/jieba-fast-LICENSE.txt",
+}
+
+
+def _packaged_path(root: Path, relative: str) -> Path:
+    if not isinstance(relative, str) or not relative or "\\" in relative or ":" in relative:
+        raise RuntimeError("Anif 打包清单必须使用规范的相对文件路径。")
+    parsed = PurePosixPath(relative)
+    if parsed.is_absolute() or ".." in parsed.parts or relative != parsed.as_posix():
+        raise RuntimeError("Anif 打包清单包含越界或非规范文件路径。")
+    target = root / relative
+    if not target.resolve().is_relative_to(root.resolve()):
+        raise RuntimeError("Anif 打包文件链接超出程序目录。")
+    return target
+
+
+def _anif_artifacts(release_root: Path) -> list[tuple[str, Path]]:
+    root = _packaged_path(release_root, "_internal/agent_scripts")
+    artifacts = [(name, _packaged_path(root, relative))
+                 for name, relative in ANIF_REQUIRED_ARTIFACTS.items()]
+    for _, target in artifacts:
+        if not target.is_file():
+            raise RuntimeError(f"Anif 安装链文件缺失：{target}")
+    try:
+        lock = json.loads((root / ANIF_REQUIRED_ARTIFACTS["anif_source_lock"]).read_text("utf-8-sig"))
+        provenance = json.loads((root / ANIF_REQUIRED_ARTIFACTS["anif_jieba_provenance"]).read_text("utf-8-sig"))
+        records = lock.get("bundled_wheels")
+        if lock.get("schema") != 1 or not isinstance(records, list) or len(records) != 1:
+            raise ValueError("源锁缺少固定的本地 wheel 身份。")
+        record = records[0]
+        path = _packaged_path(root / "deps", record["path"])
+        expected = root / ANIF_REQUIRED_ARTIFACTS["anif_jieba_wheel"]
+        if path != expected:
+            raise ValueError("本地 wheel 路径不是本版本要求的文件。")
+        artifact = provenance["artifact"]
+        actual_sha = _sha256(path).lower()
+        if (not isinstance(record["sha256"], str) or not re.fullmatch(r"[0-9a-fA-F]{64}", record["sha256"])
+                or actual_sha != record["sha256"].lower()
+                or path.stat().st_size != record["bytes"]
+                or artifact["path"] != path.name
+                or actual_sha != artifact["sha256"].lower()
+                or artifact["bytes"] != record["bytes"]
+                or provenance.get("component") != "jieba-fast" or provenance.get("version") != "0.53"):
+            raise ValueError("本地 wheel 的来源、大小或 SHA256 不一致。")
+        notice = provenance["license_notice"]
+        license_path = _packaged_path(expected.parent, notice["path"])
+        if (license_path != root / ANIF_REQUIRED_ARTIFACTS["anif_jieba_license"]
+                or _sha256(license_path).lower() != notice["sha256"].lower()):
+            raise ValueError("本地 wheel 的许可文件 SHA256 不一致。")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        raise RuntimeError("Anif 安装链身份校验失败：" + str(error)) from error
+    return artifacts
 
 
 def _sha256(path: Path) -> str:
@@ -138,6 +208,7 @@ def _artifact_paths(release_root: Path) -> list[tuple[str, Path]]:
         ("mio_voice_installer", release_root / "_internal" / "agent_scripts" / "deps" / "install-gpt-sovits.ps1"),
         ("mio_voice_package_installer", release_root / "_internal" / "agent_scripts" / "deps" / "install-mio-voice-package.py"),
     ]
+    artifacts.extend(_anif_artifacts(release_root))
     updater = release_root / "_internal" / "MioUpdater.exe"
     update_config = release_root / "_internal" / "desktop" / "update_channel.json"
     if updater.is_file() or update_config.is_file():

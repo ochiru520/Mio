@@ -27,7 +27,8 @@ async function main() {
       if(!/^\/(api|diaries|reviews|weekly|stats|onebot)(\/|$)/.test(url.pathname)) return route.continue()
       requests.push({path:url.pathname,method:req.method()})
       let value={}
-      if (!['/api/capabilities','/api/onboarding/status','/api/agent/bootstrap','/api/companion/status','/api/agent/work','/api/agent/messages','/diaries','/reviews','/weekly','/api/creation/configuration'].includes(url.pathname) && !url.pathname.includes('startup-greeting') && !url.pathname.includes('/profile')) return route.continue()
+      if(/^\/api\/(diaries|reviews|weekly|monthly)$/.test(url.pathname)) return route.fulfill({json:[]})
+      if (!['/api/capabilities','/api/onboarding/status','/api/agent/bootstrap','/api/companion/status','/api/agent/work','/api/agent/messages','/diaries','/reviews','/weekly','/api/creation/configuration'].includes(url.pathname) && !url.pathname.includes('startup-greeting') && !url.pathname.includes('/profile')) return route.fulfill({json:{}})
       if(url.pathname==='/api/capabilities') {
         if(oldBackend)return route.fulfill({status:404,json:{detail:'Not Found'}})
         value={busy:false,capabilities:[{id:'comfyui',label:'ComfyUI',status:'unchecked',target:'settings-creation',description:'检查连接',level:'unverified'}]}
@@ -42,6 +43,7 @@ async function main() {
       await route.fulfill({json:value})
     })
     const page=await context.newPage()
+    page.setDefaultTimeout(10000)
     page.on('pageerror',e=>errors.push(e.message))
     for(const theme of THEME_OPTIONS) {
       await page.goto(`${base}/scripts/theme-components-preview.html?theme=${theme.id}`)
@@ -77,24 +79,26 @@ async function main() {
       await page.waitForFunction(id=>document.documentElement.dataset.theme===id,theme.id)
       assert.equal(await page.evaluate(()=>localStorage.getItem('mio_app_preferences')),null)
     }
-    await page.locator('.settings-savebar').getByRole('button',{name:'取消',exact:true}).click()
+    await page.locator('.settings-header-actions').getByRole('button',{name:'取消',exact:true}).click()
     await page.waitForFunction(()=>document.documentElement.dataset.theme==='xuan')
     await page.locator('.theme-picker-option').filter({hasText:'墨夜'}).click()
-    await page.locator('.settings-savebar').getByRole('button',{name:'保存',exact:true}).click()
+    await page.locator('.settings-header-actions').getByRole('button',{name:'保存',exact:true}).click()
     await page.reload();await page.locator('.theme-picker-option').first().waitFor()
     assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),'ink')
     const fonts=[]
     for(const [size,factor] of [['small',.92],['medium',1],['large',1.12]]) {
-      await page.getByLabel('字体大小').selectOption(size)
-      await page.locator('.settings-savebar').getByRole('button',{name:'保存',exact:true}).click()
+      await page.getByRole('combobox',{name:/^字体大小/}).click()
+      await page.getByRole('option',{name:({small:'较小',medium:'标准',large:'较大'})[size],exact:true}).click()
+      await page.locator('.settings-header-actions').getByRole('button',{name:'保存',exact:true}).click()
       await page.waitForFunction(size=>document.documentElement.dataset.fontSize===size,size)
       const title=await page.locator('.settings-page-title h1').evaluate(el=>parseFloat(getComputedStyle(el).fontSize))
-      assert.ok(Math.abs(title-23*factor)<.05,`${size}: settings title ${title}`)
+      assert.ok(Math.abs(title-22*factor)<.05,`${size}: settings title ${title}`)
       await page.evaluate(()=>localStorage.setItem('mio_agent_active_view','home'))
-      await page.goto(`${base}/?workspace=agent`);await page.locator('.agent-welcome h1').waitFor()
-      const agentTitle=await page.locator('.agent-welcome h1').evaluate(el=>parseFloat(getComputedStyle(el).fontSize))
-      assert.ok(Math.abs(agentTitle-24*factor)<.05,`${size}: Agent title ${agentTitle}`)
+      await page.goto(`${base}/?workspace=agent`);await page.locator('.agent-welcome h1, .agent-home-heading h1').first().waitFor()
+      const agentTitle=await page.locator('.agent-welcome h1, .agent-home-heading h1').first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))
+      assert.ok(Math.abs(agentTitle-22*factor)<.05,`${size}: Agent title ${agentTitle}`)
       fonts.push({size,title,agentTitle})
+      await page.screenshot({path:path.join(output,`agent-${size}.png`)})
       await page.goto(`${base}/?view=settings&settings-section=appearance`);await page.locator('.theme-picker-option').first().waitFor()
     }
     let layoutCases=0
@@ -121,9 +125,16 @@ async function main() {
     await page.getByRole('heading',{name:'创作环境',exact:true}).waitFor()
     assert.equal(new URL(page.url()).searchParams.get('workspace'),'agent')
     assert.deepEqual(errors,[])
-    const report={themes:results,fonts,layoutCases,oldBackendRecovery:true,themeSaveCancelReload:true,creationNavigation:true,errors}
+    const report={themes:results,fonts,layoutCases,oldBackendRecovery:true,themeSaveCancelReload:true,creationNavigation:true,errors,requests,scope:'All API paths intercepted with synthetic JSON; external origins aborted; no live backend'}
     await fs.writeFile(path.join(output,'theme-regression.json'),JSON.stringify(report,null,2))
     console.log(JSON.stringify({themeCount:results.length,fonts,layoutCases,errors}))
+  } catch(error) {
+    const failureStamp=new Date().toISOString().replace(/[:.]/g,'-')
+    const failure=JSON.stringify({message:error.message,errors,requests,results},null,2)
+    await fs.writeFile(path.join(output,'theme-regression-failure.json'),failure)
+    await fs.writeFile(path.join(output,`failure-${failureStamp}.json`),failure)
+    for(const context of browser.contexts())for(const [index,page] of context.pages().entries())await page.screenshot({path:path.join(output,`theme-failure-${index}.png`),fullPage:true}).catch(()=>{})
+    throw error
   } finally {await browser.close()}
 }
 main().catch(error=>{console.error(error);process.exitCode=1})

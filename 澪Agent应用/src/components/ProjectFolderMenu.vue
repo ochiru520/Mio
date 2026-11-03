@@ -21,7 +21,7 @@ onBeforeUnmount(() => { document.removeEventListener('pointerdown', outside); do
 </template>
 <style scoped>
 .project-folder-menu { position: fixed; z-index: 2000; width: 180px; max-width: calc(100vw - 16px); padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-lg); }
-button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px; border: 0; border-radius: 6px; background: transparent; color: var(--danger); font: inherit; font-size: calc(13px * var(--fs, 1)); cursor: pointer; }
+button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px; border: 0; border-radius: 6px; background: transparent; color: var(--danger); font: inherit; font-size: var(--text-base); cursor: pointer; }
 .danger { color: var(--danger); }
 button:hover { background: var(--danger-soft); }
 button:disabled { opacity: .5; }

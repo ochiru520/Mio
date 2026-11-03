@@ -90,7 +90,7 @@ onMounted(load)
       </figure>
       <div class="appearance-image-controls">
         <h3>{{ image.label }}</h3>
-        <p>{{ !ready ? '正在读取当前设置' : image.custom ? '正在使用自定义图片' : image.kind === 'personal' && context.userAvatarCustom ? '默认图片 · 跟随用户头像' : '默认图片 · 跟随 Mio 头像' }}</p>
+        <p>{{ !ready ? '正在读取当前设置' : image.custom ? '正在使用自定义图片' : image.kind === 'personal' && context.userAvatarCustom ? '默认图片，跟随用户头像' : '默认图片，跟随 Mio 头像' }}</p>
         <label class="appearance-upload-label">更换图片<input type="file" :aria-label="`更换${image.label}`" accept="image/png,image/jpeg,image/webp" :disabled="busy || !ready" @change="upload($event, image.kind)" /></label>
         <div class="appearance-image-actions">
           <button type="button" :disabled="busy || !ready || !image.custom" @click="reset(image.kind)">恢复默认</button>
@@ -111,17 +111,17 @@ onMounted(load)
 .appearance-preview-stage.hero img { max-width: min(100%, var(--agent-hero-max-width, 160px)); max-height: var(--agent-hero-max-height, 180px); }
 .appearance-preview-stage img.circle { width: 116px; height: 116px; border-radius: 50%; object-fit: cover; }
 .appearance-preview-stage.hero img.circle { width: var(--agent-hero-circle-size, 100px); height: var(--agent-hero-circle-size, 100px); }
-.appearance-preview figcaption { margin-top: 8px; text-align: center; font-size: calc(12px * var(--fs, 1)); color: var(--text-muted); }
-.appearance-preview-unavailable { color: var(--text-muted); text-align: center; font-size: calc(12px * var(--fs, 1)); }
+.appearance-preview figcaption { margin-top: 8px; text-align: center; font-size: var(--text-xs); color: var(--text-muted); }
+.appearance-preview-unavailable { color: var(--text-muted); text-align: center; font-size: var(--text-xs); }
 .appearance-image-controls { min-width: 0; }
-.appearance-image-controls h3 { margin: 0 0 6px; font-size: calc(15px * var(--fs, 1)); font-weight: 500; }
-.appearance-image-controls p { margin: 0 0 16px; color: var(--text-muted); font-size: calc(12px * var(--fs, 1)); }
-.appearance-upload-label, .appearance-shape { font-size: calc(12px * var(--fs, 1)); color: var(--text); }
+.appearance-image-controls h3 { margin: 0 0 6px; font-size: var(--text-base); font-weight: 500; }
+.appearance-image-controls p { margin: 0 0 16px; color: var(--text-muted); font-size: var(--text-xs); }
+.appearance-upload-label, .appearance-shape { font-size: var(--text-xs); color: var(--text); }
 .appearance-upload-label input { min-width: 0; }
 .appearance-image-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .appearance-shape { margin-top: 18px; max-width: 220px; }
 .appearance-shape select { min-width: 0; padding: 8px; color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-raised); font: inherit; }
-.appearance-notice { color: var(--text-muted); font-size: calc(12px * var(--fs, 1)); }
+.appearance-notice { color: var(--text-muted); font-size: var(--text-xs); }
 @media (max-width: 650px) {
   .mio-settings-content > .agent-appearance-settings { padding: 24px 12px; }
   .appearance-image-row { grid-template-columns: minmax(0, 1fr); gap: 16px; }

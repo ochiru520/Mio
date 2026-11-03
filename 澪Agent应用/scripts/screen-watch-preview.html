@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN" data-font-size="medium"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Mio 桌宠陪看隔离验收</title><style>html,body,#app{height:auto!important;overflow:visible!important}body{margin:0}main{padding:12px;max-width:1100px;margin:auto;box-sizing:border-box}*{box-sizing:border-box}</style></head><body><div id="app"></div><script type="module">
+import { createApp, h, provide, reactive, ref } from 'vue'
+import CompanionPage from '../src/components/CompanionPage.vue'
+import { useCompanion } from '../src/composables/useCompanion.js'
+import { createCompanionState } from '../src/state/companionState.js'
+import { apiRequest } from '../src/services/api.js'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+import '../src/styles/refinements.css'
+import '../src/styles/agent-settings.css'
+import '../src/styles/agent-surface.css'
+import '../src/styles/ui-polish.css'
+import '../src/styles/calm.css'
+import '../src/styles/design.css'
+const state = createCompanionState()
+state.companionStatus.value.pet.settings.screen_audio_enabled = false
+const keys = ['screen_watch_mode', 'screen_watch_pace', 'screen_audio_enabled', 'screen_vision_route']
+const deps = { ...state, request: apiRequest, companionSettingKeys: { observation: keys }, savedCompanionSettings: ref({}),
+ companionSettingsSnapshot: () => JSON.stringify(Object.fromEntries(keys.map(key => [key, state.companionStatus.value.pet.settings[key]]))),
+ errorMessage: ref(''), activeSettingsItem: ref({label:'屏幕观察'}), showSettingsFeedback() {},
+ observationMode: ref('screen'), selectedGameHwnd: ref(''), observationInterval: ref(1000), screenScope: ref('primary'),
+ companionStatusLoading: false, companionAvatarNonce: ref(0),
+}
+deps.companionStatusReady.value = true
+const context = reactive({ ...deps, ...useCompanion(deps), activeCompanionSection: 'screen-panel', mioDisplayName: 'Mio', gameWindows: [], gameWindowsLoading: false })
+window.screenWatchFixture = { context, deps }
+createApp({ setup(){ provide('mio-companion-page',context); return () => h('main',[h(CompanionPage),h('p',{role:'alert'},context.errorMessage)]) } }).mount('#app')
+</script></body></html>

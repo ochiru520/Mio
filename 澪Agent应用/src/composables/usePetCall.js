@@ -8,9 +8,61 @@ import { bargeInThreshold } from '../petCallAudio.js'
 import { bytesToBase64 } from '../petCallAudio.js'
 import { encodePcmWav } from '../petCallAudio.js'
 import { acquireAudioOwner, releaseAudioOwner } from '../audioCoordinator.js'
+import { microphoneConstraints, microphoneError } from '../audioDevicePreferences.js'
 
 export function usePetCall(deps) {
   let callGeneration = 0
+  let turnGeneration = 0
+  let turnController = null
+  let pendingTurnId = 0
+  let activeTurnId = 0
+  let interruptBarrier = null
+  let removeDeviceListener = null
+  const endedResponses = new Set()
+  function rememberEndedResponse(responseId) {
+    if (!responseId) return
+    endedResponses.add(responseId)
+    if (endedResponses.size > 80) endedResponses.delete(endedResponses.values().next().value)
+  }
+  function interruptPetCallTurn() {
+    const callSessionId = deps.petCallSessionId
+    const responseId = deps.petCallResponseId
+    const interruptedTurnId = activeTurnId
+    const generation = ++turnGeneration
+    rememberEndedResponse(responseId)
+    turnController?.abort('user_started_speaking')
+    turnController = null
+    pendingTurnId = 0
+    activeTurnId = 0
+    deps.petCallTurnPending = false
+    deps.petCallResponseId = ''
+    deps.petCallAwaitingVoiceSince = 0
+    deps.petCallState.value = 'listening'
+    const barrier = companionApi.submitCallInterrupt({ call_session_id: callSessionId, response_id: responseId, ...(interruptedTurnId ? { turn_id: interruptedTurnId } : {}) }, {}, deps.request)
+      .then(async result => {
+        if (!deps.petCallActive.value || deps.petCallSessionId !== callSessionId || generation !== turnGeneration) return
+        // An interrupted POST may not have returned its allocated turn number.
+        if (Number.isInteger(result?.next_turn_id) && result.next_turn_id > 0) {
+          deps.petCallNextTurnId = result.next_turn_id
+          return
+        }
+        const status = await companionApi.loadCallStatus({}, deps.request)
+        if (deps.petCallActive.value && deps.petCallSessionId === callSessionId && generation === turnGeneration && status.call_session_id === callSessionId) {
+          deps.petCallNextTurnId = Number(status.next_turn_id || deps.petCallNextTurnId)
+        }
+      })
+      .catch(error => {
+        if (deps.petCallActive.value && deps.petCallSessionId === callSessionId && generation === turnGeneration) {
+          deps.petCallError.value = `打断确认失败：${error.message}`
+          deps.petCallState.value = 'error'
+          throw error
+        }
+      })
+      .finally(() => { if (interruptBarrier === barrier) interruptBarrier = null })
+    interruptBarrier = barrier
+    // The audio callback cannot await; submitPetCallTurn also awaits this barrier.
+    void barrier.catch(() => {})
+  }
   function handlePetChatKeydown(event) {
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -45,6 +97,19 @@ export function usePetCall(deps) {
   async function submitPetCallTurn() {
     if (!deps.petCallFrames.length || deps.petCallTurnPending || !deps.petCallAudioContext || !deps.petCallSessionId) return
     const callSessionId = deps.petCallSessionId
+    const waitingGeneration = turnGeneration
+    if (interruptBarrier) {
+      deps.petCallTurnPending = true
+      try { await interruptBarrier } catch (_) {
+        if (waitingGeneration === turnGeneration && deps.petCallSessionId === callSessionId) {
+          deps.petCallTurnPending = false
+          deps.petCallState.value = 'error'
+        }
+        return
+      }
+      if (!deps.petCallActive.value || deps.petCallSessionId !== callSessionId || waitingGeneration !== turnGeneration || !deps.petCallAudioContext) return
+    }
+    const generation = ++turnGeneration
     const turnId = deps.petCallNextTurnId
     const frameCount = deps.petCallFrames.reduce((total, frame) => total + frame.length, 0)
     const samples = new Float32Array(frameCount)
@@ -55,35 +120,49 @@ export function usePetCall(deps) {
     }
     resetPetCallCapture()
     deps.petCallTurnPending = true
+    deps.petCallResponseId = ''
+    deps.petCallAwaitingVoiceSince = 0
     deps.petCallState.value = 'thinking'
+    const controller = new AbortController()
+    turnController = controller
+    pendingTurnId = turnId
+    activeTurnId = turnId
     try {
       const result = await companionApi.submitCallTurn({
           wav_base64: bytesToBase64(encodePcmWav(samples, deps.petCallAudioContext.sampleRate)),
           language: deps.petCallSettings.value.pet_call_input_language || 'zh',
           call_session_id: callSessionId,
           turn_id: turnId,
-        }, {}, deps.request)
-      if (!deps.petCallActive.value || deps.petCallSessionId !== callSessionId) return
+        }, { signal: controller.signal }, deps.request)
+      if (!deps.petCallActive.value || deps.petCallSessionId !== callSessionId || generation !== turnGeneration) return
       deps.petCallNextTurnId = Math.max(deps.petCallNextTurnId, Number(result.turn_id || turnId) + 1)
       if (result.heard) {
-        deps.petCallResponseId = String(result.response_id || '')
-        deps.petCallAwaitingVoiceSince = performance.now()
-        deps.petCallState.value = 'waiting_voice'
+        const responseId = String(result.response_id || '')
+        if (endedResponses.has(responseId)) return
+        deps.petCallResponseId = responseId
+        if (deps.petCallState.value !== 'speaking') {
+          deps.petCallAwaitingVoiceSince ||= performance.now()
+          deps.petCallState.value = 'waiting_voice'
+        }
       } else {
         deps.petCallResponseId = ''
         deps.petCallAwaitingVoiceSince = 0
         deps.petCallState.value = 'listening'
       }
     } catch (error) {
-      if (!deps.petCallActive.value || deps.petCallSessionId !== callSessionId) return
+      if (!deps.petCallActive.value || deps.petCallSessionId !== callSessionId || generation !== turnGeneration) return
       deps.petCallError.value = error.message
       deps.petCallState.value = 'error'
     } finally {
-      if (deps.petCallSessionId === callSessionId) deps.petCallTurnPending = false
+      if (deps.petCallSessionId === callSessionId && generation === turnGeneration) {
+        deps.petCallTurnPending = false
+        pendingTurnId = 0
+        if (turnController === controller) turnController = null
+      }
     }
   }
   function processPetCallAudio(event) {
-    if (!deps.petCallActive.value) return
+    if (!deps.petCallActive.value || deps.petCallState.value === 'error') return
     const frame = new Float32Array(event.inputBuffer.getChannelData(0))
     let energy = 0
     for (const sample of frame) energy += sample * sample
@@ -96,13 +175,13 @@ export function usePetCall(deps) {
     const maxPreRollFrames = Math.max(2, Math.ceil(240 / frameMs))
 
     if (!deps.petCallSpeechStartedAt) {
-      if (['thinking', 'waiting_voice', 'connecting'].includes(deps.petCallState.value)) {
+      if (deps.petCallState.value === 'connecting') {
         deps.petCallPreRoll = []
         deps.petCallSpeechCandidateStartedAt = 0
         deps.petCallBargeInStartedAt = 0
         return
       }
-      if (deps.petCallState.value === 'speaking') {
+      if (['speaking', 'thinking', 'waiting_voice'].includes(deps.petCallState.value)) {
         if (!bargeInVoiced) {
           deps.petCallPreRoll = []
           deps.petCallBargeInStartedAt = 0
@@ -128,10 +207,9 @@ export function usePetCall(deps) {
       deps.petCallLastVoiceAt = now
       deps.petCallFrames = [...deps.petCallPreRoll]
       deps.petCallPreRoll = []
-      if (deps.petCallState.value === 'speaking' && !deps.petCallInterruptSent) {
+      if (['speaking', 'thinking', 'waiting_voice'].includes(deps.petCallState.value) && !deps.petCallInterruptSent) {
         deps.petCallInterruptSent = true
-        void companionApi.submitCallInterrupt({ call_session_id: deps.petCallSessionId, response_id: deps.petCallResponseId }, {}, deps.request).catch(() => {})
-        deps.petCallState.value = 'listening'
+        interruptPetCallTurn()
       }
     }
     deps.petCallFrames.push(frame)
@@ -147,6 +225,9 @@ export function usePetCall(deps) {
   async function startPetCall() {
     if (deps.petCallActive.value || deps.petCallState.value === 'connecting') return
     const generation = ++callGeneration
+    ++turnGeneration
+    activeTurnId = 0
+    endedResponses.clear()
     let startingStream = null
     let startingContext = null
     let startingSessionId = ''
@@ -169,13 +250,7 @@ export function usePetCall(deps) {
       if (!deps.petCallSessionId) throw new Error('电话服务没有返回会话 ID')
       deps.petCallSettings.value = { ...deps.petCallSettings.value, ...(result.settings || {}) }
       startingStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: { ideal: 16000 },
-        },
+        audio: microphoneConstraints(),
       })
       if (generation !== callGeneration) { await releaseStaleStartup(); return }
       startingContext = new AudioContext({ latencyHint: 'interactive' })
@@ -191,6 +266,21 @@ export function usePetCall(deps) {
       deps.petCallSource.connect(deps.petCallProcessor)
       deps.petCallProcessor.connect(deps.petCallAudioContext.destination)
       const microphoneTrack = deps.petCallStream.getAudioTracks()[0]
+      const deviceEnded = () => {
+        if (generation !== callGeneration) return
+        deps.petCallError.value = '麦克风已断开，请连接设备并重新开始通话。'
+        deps.petCallState.value = 'error'
+        void stopPetCall({ preserveError: true })
+      }
+      if (microphoneTrack) microphoneTrack.onended = deviceEnded
+      const preferencesChanged = () => {
+        if (generation !== callGeneration) return
+        deps.petCallError.value = '设备设置已更改，请重新开始通话以使用新设备。'
+        deps.petCallState.value = 'error'
+        void stopPetCall({ preserveError: true })
+      }
+      window.addEventListener?.('mio-audio-devices-changed', preferencesChanged)
+      removeDeviceListener = () => window.removeEventListener?.('mio-audio-devices-changed', preferencesChanged)
       const microphoneSettings = microphoneTrack?.getSettings?.() || {}
       void companionApi.submitCallDevice({
           call_session_id: deps.petCallSessionId,
@@ -207,19 +297,28 @@ export function usePetCall(deps) {
       deps.petCallState.value = 'listening'
       deps.petCallMonitorTimer = window.setInterval(async () => {
         if (!deps.petCallActive.value || !deps.petCallSessionId) return
+        const monitoredTurnGeneration = turnGeneration
         try {
           const status = await companionApi.loadCallStatus({}, deps.request)
-          if (String(status.call_session_id || '') !== deps.petCallSessionId) return
+          if (generation !== callGeneration || monitoredTurnGeneration !== turnGeneration || String(status.call_session_id || '') !== deps.petCallSessionId) return
           if (!status.active) {
             await stopPetCall({ notifyServer: false, preserveError: true })
             return
           }
           const startedId = String(status.voice_started?.response_id || '')
           const endedId = String(status.voice_ended?.response_id || '')
+          if (deps.petCallSpeechStartedAt || interruptBarrier) return
+          // Streaming audio can start and finish before the turn POST returns.
+          const currentResponseId = String(status.current_response_id || '')
+          if (pendingTurnId && Number(status.current_turn_id) === pendingTurnId && currentResponseId && !endedResponses.has(currentResponseId)) {
+            deps.petCallResponseId = currentResponseId
+            deps.petCallNextTurnId = Math.max(deps.petCallNextTurnId, Number(status.next_turn_id || 1))
+          }
           if (deps.petCallResponseId && startedId === deps.petCallResponseId && endedId !== deps.petCallResponseId) {
             deps.petCallState.value = 'speaking'
             deps.petCallAwaitingVoiceSince = 0
           } else if (deps.petCallResponseId && endedId === deps.petCallResponseId) {
+            rememberEndedResponse(endedId)
             if (String(status.voice_ended?.reason || '') === 'error') {
               deps.petCallError.value = 'Mio 的声音播放失败'
               deps.petCallState.value = 'error'
@@ -243,13 +342,19 @@ export function usePetCall(deps) {
       // Startup resources are local until resume succeeds; stop owns them on failure.
       if (!deps.petCallStream) deps.petCallStream = startingStream
       if (!deps.petCallAudioContext) deps.petCallAudioContext = startingContext
-      deps.petCallError.value = error.message
+      deps.petCallError.value = microphoneError(error)
       deps.petCallState.value = 'error'
       await stopPetCall({ notifyServer: true, preserveError: true })
     }
   }
   async function stopPetCall({ notifyServer = true, preserveError = false } = {}) {
     ++callGeneration
+    ++turnGeneration
+    turnController?.abort('call_ended')
+    turnController = null
+    pendingTurnId = 0
+    activeTurnId = 0
+    interruptBarrier = null
     const wasActive = deps.petCallActive.value || deps.petCallState.value === 'connecting'
     const callSessionId = deps.petCallSessionId
     const responseId = deps.petCallResponseId
@@ -257,6 +362,8 @@ export function usePetCall(deps) {
     deps.petCallSessionId = ''
     deps.petCallResponseId = ''
     deps.petCallAwaitingVoiceSince = 0
+    removeDeviceListener?.()
+    removeDeviceListener = null
     resetPetCallCapture()
     if (deps.petCallMonitorTimer) window.clearInterval(deps.petCallMonitorTimer)
     deps.petCallMonitorTimer = null
@@ -267,7 +374,7 @@ export function usePetCall(deps) {
     if (deps.petCallSource) {
       try { deps.petCallSource.disconnect() } catch (_) {}
     }
-    for (const track of deps.petCallStream?.getTracks?.() || []) track.stop()
+    for (const track of deps.petCallStream?.getTracks?.() || []) { track.onended = null; track.stop() }
     const stoppedContext = deps.petCallAudioContext
     deps.petCallProcessor = null
     deps.petCallSource = null

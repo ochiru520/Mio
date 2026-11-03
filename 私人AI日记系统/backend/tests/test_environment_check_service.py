@@ -334,25 +334,25 @@ class OllamaModelDetectionTests(unittest.TestCase):
     def test_manifest_requires_every_referenced_blob_with_exact_size(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             models = Path(temporary)
-            manifest = models / "manifests" / "registry.ollama.ai" / "library" / "qwen2.5vl" / "3b"
+            manifest = models / "manifests" / "registry.ollama.ai" / "library" / "qwen3.5" / "2b"
             manifest.parent.mkdir(parents=True)
             manifest.write_text(
                 json.dumps(
                     {
-                        "config": {"digest": "sha256:config", "size": 3},
-                        "layers": [{"digest": "sha256:model", "size": 5}],
+                        "config": {"digest": "sha256:" + "a" * 64, "size": 3},
+                        "layers": [{"digest": "sha256:" + "b" * 64, "size": 5}],
                     }
                 ),
                 encoding="utf-8",
             )
             blobs = models / "blobs"
             blobs.mkdir()
-            (blobs / "sha256-config").write_bytes(b"abc")
+            (blobs / ("sha256-" + "a" * 64)).write_bytes(b"abc")
 
             self.assertFalse(environment_check_service._ollama_manifest_complete(manifest, models))
-            (blobs / "sha256-model").write_bytes(b"12345")
+            (blobs / ("sha256-" + "b" * 64)).write_bytes(b"12345")
             self.assertTrue(environment_check_service._ollama_manifest_complete(manifest, models))
-            (blobs / "sha256-model").write_bytes(b"shorter")
+            (blobs / ("sha256-" + "b" * 64)).write_bytes(b"shorter")
             self.assertFalse(environment_check_service._ollama_manifest_complete(manifest, models))
 
 

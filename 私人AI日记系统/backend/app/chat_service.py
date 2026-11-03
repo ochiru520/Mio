@@ -55,6 +55,7 @@ from .llm import (
     ModelRequestError,
     ProviderCostReference,
     call_chat_completion_result,
+    call_chat_completion_stream_result,
     model_supports_vision,
     require_configured,
     resolve_model_id,
@@ -62,6 +63,7 @@ from .llm import (
 from .model_registry import get_model_profile, normalize_model_reasoning
 from .tool_registry import tool_registry
 from .model_latency_service import record_latency
+from .reply_text_stream import PublicReplyStream, ReplyDeltaCallback
 from .prompts import build_group_system_prompt, build_system_prompt
 from .web_search_service import (
     WebLookup,
@@ -875,9 +877,28 @@ async def _complete_chat_reply(
     request_id: str = "",
     agent_execution=None,
     tools: list[dict[str, object]] | None = None,
+    on_reply_delta: ReplyDeltaCallback | None = None,
 ) -> tuple[CompletionResult, str]:
+    delivered = False
+
+    async def publish(piece, cumulative):
+        nonlocal delivered
+        delivered = True
+        result = on_reply_delta(piece, cumulative)
+        if hasattr(result, '__await__'):
+            await result
+
     async def invoke(messages, **kwargs):
         if agent_execution is None:
+            if on_reply_delta is not None and not tools and get_model_profile(model_id).api_mode != 'messages':
+                public = PublicReplyStream(publish, clean=clean_chat_reply, is_placeholder=_is_placeholder_only_reply)
+                result = await call_chat_completion_stream_result(messages, on_delta=public.delta, **kwargs)
+                public_content, leaked = _strip_unlabeled_reasoning(result.content)
+                if (not leaked or public_content != result.content) and not _is_placeholder_only_reply(result.content):
+                    await public.finish()
+                    if result.content.strip() and not public.emitted:
+                        raise ModelRequestError('模型没有返回可公开播报的正文。', profile=get_model_profile(model_id), request_id=request_id)
+                return result
             return await call_chat_completion_result(messages, **kwargs)
         from .agent_loop_service import final_model_call
         return await final_model_call(agent_execution, call_chat_completion_result, messages, **kwargs)
@@ -894,6 +915,8 @@ async def _complete_chat_reply(
     if reasoning_leaked and user_facing_content != completion.content:
         completion = replace(completion, content=user_facing_content)
     elif reasoning_leaked:
+        if delivered:
+            raise ModelRequestError('模型在播报后返回了内部草稿，已停止本轮语音。', profile=get_model_profile(model_id), request_id=request_id)
         retry_messages = [
             *messages,
             {
@@ -929,6 +952,8 @@ async def _complete_chat_reply(
         return completion, reasoning_level
 
     retry_reasoning = "low" if reasoning_level == "off" else reasoning_level
+    if delivered:
+        raise ModelRequestError('模型已开始播报，不能重新生成占位回复。', profile=get_model_profile(model_id), request_id=request_id)
     retry_messages = [
         *messages,
         {"role": "assistant", "content": completion.content},
@@ -969,7 +994,18 @@ async def _complete_chat_reply_with_single_fallback(
     request_id: str = "",
     agent_execution=None,
     tools: list[dict[str, object]] | None = None,
+    on_reply_delta: ReplyDeltaCallback | None = None,
 ) -> tuple[CompletionResult, str, str]:
+    delivered = False
+
+    async def publish(piece, cumulative):
+        nonlocal delivered
+        delivered = True
+        result = on_reply_delta(piece, cumulative)
+        if hasattr(result, '__await__'):
+            await result
+
+    stream_kwargs = {'on_reply_delta': publish} if on_reply_delta is not None else {}
     try:
         completion, effective_reasoning = await _complete_chat_reply(
             messages,
@@ -980,9 +1016,12 @@ async def _complete_chat_reply_with_single_fallback(
             request_id=request_id,
             agent_execution=agent_execution,
             tools=tools,
+            **stream_kwargs,
         )
         return completion, effective_reasoning, ""
     except (ModelRequestError, LLMConfigError, TimeoutError):
+        if delivered:
+            raise
         clean_fallback = str(fallback_model_id or "").strip()
         if not clean_fallback or clean_fallback == model_id:
             raise
@@ -1012,6 +1051,7 @@ async def _complete_chat_reply_with_single_fallback(
             request_id=f"{request_id}:fallback"[:80],
                 agent_execution=agent_execution,
                 tools=tools,
+                **stream_kwargs,
         )
         return completion, effective_reasoning, model_id
 
@@ -1145,6 +1185,7 @@ async def chat_with_ai(
     handoff_enabled: bool = False,
     task_origin: dict | None = None,
     replay_message_id: int = 0,
+    on_reply_delta: ReplyDeltaCallback | None = None,
 ) -> ChatResult:
     return await chat_run_coordinator.submit(
         conversation_id,
@@ -1171,6 +1212,7 @@ async def chat_with_ai(
             handoff_enabled=handoff_enabled,
             task_origin=task_origin,
             replay_message_id=replay_message_id,
+            on_reply_delta=on_reply_delta,
         ),
         capture_seconds=(
             settings.chat_follow_up_capture_seconds if capture_follow_ups else 0.0
@@ -1204,6 +1246,7 @@ async def _chat_with_ai_serialized(
     handoff_enabled: bool = False,
     task_origin: dict | None = None,
     replay_message_id: int = 0,
+    on_reply_delta: ReplyDeltaCallback | None = None,
 ) -> ChatResult:
     async with _conversation_lock(conversation_id):
         return await _chat_with_ai_unlocked(
@@ -1228,6 +1271,7 @@ async def _chat_with_ai_serialized(
             handoff_enabled=handoff_enabled,
             task_origin=task_origin,
             replay_message_id=replay_message_id,
+            on_reply_delta=on_reply_delta,
         )
 
 
@@ -1254,6 +1298,7 @@ async def _chat_with_ai_unlocked(
     handoff_enabled: bool = False,
     task_origin: dict | None = None,
     replay_message_id: int = 0,
+    on_reply_delta: ReplyDeltaCallback | None = None,
 ) -> ChatResult:
     from . import mobile_task_service as mobile
     if task_origin is not None and (not mobile.valid_origin(task_origin) or source != mobile.channel(task_origin) or conversation_id != mobile.conversation_id(task_origin)):
@@ -1570,6 +1615,7 @@ async def _chat_with_ai_unlocked(
             request_id=request_id,
             agent_execution=agent_execution,
             tools=final_tools,
+            **({'on_reply_delta': on_reply_delta} if on_reply_delta is not None else {}),
         )
         if history_source and not source_is_current(history_source):
             raise ValueError('会话历史已变化，已丢弃旧历史生成的回复。')

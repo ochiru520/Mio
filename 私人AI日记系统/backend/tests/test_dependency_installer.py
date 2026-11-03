@@ -188,6 +188,14 @@ class DependencyInstallLaunchTests(unittest.TestCase):
                     stream.close()
 
     def setUp(self) -> None:
+        # Launch receipts outlive the in-memory map. Give each test its own
+        # directory so a mocked live PID cannot block the next installation.
+        self.launch_runtime = tempfile.TemporaryDirectory(prefix="mio-deps-launch-")
+        self.addCleanup(self.launch_runtime.cleanup)
+        previous_data_dir = settings.data_dir
+        object.__setattr__(settings, "data_dir", Path(self.launch_runtime.name))
+        self.addCleanup(object.__setattr__, settings, "data_dir", previous_data_dir)
+        (settings.data_dir / "dependency-install").mkdir(parents=True)
         # Launch tests inspect the initial status. A mocked Popen.wait() returns
         # immediately, so a real watcher would race the assertions and write
         # into the next test's state. Watcher behavior is tested separately.

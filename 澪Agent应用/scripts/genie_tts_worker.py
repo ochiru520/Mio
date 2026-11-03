@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections import OrderedDict
 import contextlib
 import hashlib
@@ -14,8 +15,8 @@ import wave
 import re
 
 
-def _emit(payload: dict[str, object]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), flush=True)
+def _emit(payload: dict[str, object], *, output=None) -> None:
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), file=output, flush=True)
 
 
 def _require_file(value: object, label: str) -> Path:
@@ -101,6 +102,38 @@ async def _collect_pcm(genie_tts, character: str, text: str) -> tuple[bytes, flo
     return b"".join(chunks), first_chunk_ms
 
 
+async def _stream_pcm(genie_tts, character: str, text: str, emit) -> dict[str, object]:
+    """Publish generated sentence PCM immediately, without collecting a WAV.
+
+    Genie 2.x completes a sentence before its callback; this bridge does not
+    claim acoustic token streaming within that sentence.
+    """
+    started = time.perf_counter()
+    first_chunk_ms: float | None = None
+    frames = 0
+    emit({"ok": True, "event": "start", "sample_rate": 32000, "channels": 1, "sample_width": 2})
+    async for chunk in genie_tts.tts_async(character, text, play=False, split_sentence=True):
+        if not chunk:
+            continue
+        pcm = bytes(chunk)
+        if len(pcm) % 2:
+            raise OSError("Genie 没有生成有效的 16-bit PCM 音频。")
+        if first_chunk_ms is None:
+            first_chunk_ms = (time.perf_counter() - started) * 1000
+        # Bound each NDJSON record so the transport can apply backpressure and
+        # playback can consume short pieces even when Genie emits a large block.
+        for offset in range(0, len(pcm), 16384):
+            piece = pcm[offset:offset + 16384]
+            emit({"ok": True, "event": "audio", "pcm_base64": base64.b64encode(piece).decode("ascii")})
+            frames += len(piece) // 2
+    if frames <= 0:
+        raise OSError("Genie 没有生成可播放的 PCM 音频。")
+    return {"ok": True, "event": "done", "sample_rate": 32000, "channels": 1, "sample_width": 2,
+            "frames": frames, "duration_seconds": round(frames / 32000, 3),
+            "first_audio_ms": round(first_chunk_ms, 1) if first_chunk_ms is not None else None,
+            "total_ms": round((time.perf_counter() - started) * 1000, 1)}
+
+
 def _write_wav(path: Path, pcm: bytes) -> tuple[int, float]:
     if not pcm or len(pcm) % 2:
         raise OSError("Genie 没有生成有效的 16-bit PCM 音频。")
@@ -137,17 +170,22 @@ def main() -> int:
         return 1
 
     loaded_characters: OrderedDict[str, str] = OrderedDict()
+    protocol_output = sys.stdout
     for raw_line in sys.stdin:
+        request_id = ""
+        def respond(payload):
+            _emit({**payload, "request_id": request_id}, output=protocol_output)
         try:
             request = json.loads(raw_line)
+            request_id = str(request.get("request_id") or "")
             action = str(request.get("action") or "")
             if action == "shutdown":
                 with contextlib.suppress(Exception):
                     genie_tts.stop()
-                _emit({"ok": True})
+                respond({"ok": True})
                 return 0
             if action == "probe":
-                _emit({
+                respond({
                     "ok": True,
                     "runtime": "genie",
                     "sample_rate": 32000,
@@ -155,7 +193,7 @@ def main() -> int:
                     "genie_data": str(genie_data),
                 })
                 continue
-            if action != "synthesize":
+            if action not in {"synthesize", "stream"}:
                 raise ValueError("未知的 Genie Worker 操作。")
 
             model_dir = _require_dir(request.get("model_dir"), "Genie ONNX 音色目录")
@@ -213,12 +251,17 @@ def main() -> int:
                 prompt_language,
                 fallback_texts[prompt_language],
             )
+            if action == "stream":
+                with contextlib.redirect_stdout(sys.stderr):
+                    final = asyncio.run(_stream_pcm(genie_tts, character, text, respond))
+                respond(final)
+                continue
             with contextlib.redirect_stdout(sys.stderr):
                 started = time.perf_counter()
                 pcm, first_chunk_ms = asyncio.run(_collect_pcm(genie_tts, character, text))
             output = Path(str(request.get("output_path") or "")).expanduser().resolve()
             frames, duration = _write_wav(output, pcm)
-            _emit({
+            respond({
                 "ok": True,
                 "output_path": str(output),
                 "sample_rate": 32000,
@@ -231,7 +274,7 @@ def main() -> int:
             })
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
-            _emit({"ok": False, "error": str(exc)[:1200]})
+            respond({"ok": False, "error": str(exc)[:1200]})
     return 0
 
 

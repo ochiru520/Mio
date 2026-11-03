@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="xuan" data-font-size="medium">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mio 下拉控件隔离验收</title>
+<style>html,body,#app{min-height:100%;height:auto;overflow:visible}body{margin:0}.select-audit{width:min(620px,calc(100% - 40px));margin:24px auto;padding-bottom:100px}.select-audit>h1{font-size:20px}.select-audit label{display:grid;gap:8px;margin-bottom:20px}.select-audit label>span{font-size:13px}.select-audit .clip{overflow:hidden;height:90px;padding:12px;border:1px solid var(--line);border-radius:14px}.select-audit .narrow{width:140px}.select-audit .bottom{position:fixed;bottom:10px;left:20px;width:min(280px,calc(100% - 40px))}</style>
+<body><div id="app"></div><script type="module">
+import {createApp,h,reactive} from 'vue'
+import SelectField from '../src/components/SelectField.vue'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+import '../src/styles/agent-settings.css'
+import '../src/styles/agent-surface.css'
+import '../src/styles/ui-polish.css'
+import '../src/styles/calm.css'
+const state=reactive({value:'normal',number:2,required:'',changes:[]})
+const opts=()=>[h('option',{value:'placeholder',disabled:true},'默认模式（占位不可用）'),h('option',{value:'normal'},'默认模式'),h('option',{value:'disabled',disabled:true},'不可用模式'),h('option',{value:'long'},'这是用于检验窄屏截断和弹层换行的较长选项名称'),h('option',{value:'last'},'最后一个可用模式')]
+const select=(label,extra={})=>h(SelectField,{'aria-label':label,modelValue:state.value,'onUpdate:modelValue':v=>{state.value=v;state.changes.push(v)},...extra},opts)
+window.selectControlFixture={state,setTheme:v=>document.documentElement.dataset.theme=v,setFontSize:v=>document.documentElement.dataset.fontSize=v}
+createApp({render:()=>h('main',{class:'select-audit mio-settings-content'},[
+ h('h1','下拉控件'),
+ h('label',[h('span','朗读模式'),select('朗读模式')]),
+ h('label',{class:'narrow'},[h('span','窄栏选项'),select('窄栏选项')]),
+ h('label',[h('span','原生兼容选择'),h('select',{'aria-label':'原生兼容选择'},[h('option','默认模式'),h('option','另一种模式')])]),
+ h('label',[h('span','禁用控件'),select('禁用控件',{disabled:true})]),
+ h('label',[h('span','全部不可用'),h(SelectField,{'aria-label':'全部不可用',modelValue:'x'},()=>[h('option',{value:'x',disabled:true},'当前没有可用模型')])]),
+ h('label',[h('span','数字分组选项'),h(SelectField,{'aria-label':'数字分组选项',modelValue:state.number,modelModifiers:{number:true},'onUpdate:modelValue':v=>state.number=v},()=>[h('option',{value:1},'一'),h('optgroup',{label:'分组'},[h('option',{value:2},'二'),h('option',{value:3,disabled:true},'三')]),h('optgroup',{label:'禁用分组',disabled:true},[h('option',{value:4},'四')])])]),
+ h('form',{onSubmit:e=>{e.preventDefault();window.formSubmitted=true}},[h('label',[h('span','必填选项'),h(SelectField,{'aria-label':'必填选项',required:true,modelValue:state.required,'onUpdate:modelValue':v=>state.required=v},()=>[h('option',{value:''},'请选择'),h('option',{value:'ok'},'有效选项')])]),h('button',{type:'submit'},'提交合成表单')]),
+ h('section',{class:'clip'},[h('label',[h('span','容器内下拉'),select('容器内下拉')])]),
+ h('div',{class:'bottom'},[select('底部下拉')]),
+])}).mount('#app')
+</script></body></html>

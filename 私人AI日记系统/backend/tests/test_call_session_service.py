@@ -62,6 +62,42 @@ class CallSessionManagerTests(unittest.TestCase):
         self.assertEqual(manager.echo_reference(turn), "这段声音正在播放")
 
 
+class CallTimingTests(unittest.TestCase):
+    def test_measured_timings_merge_and_public_snapshot_is_independent(self):
+        manager = CallSessionManager()
+        session = manager.start()
+        turn = manager.begin_turn(session["call_session_id"], 1)
+        self.assertTrue(manager.record_timings(turn, {"asr_ms": 123.456, "reply": "private", "model_ms": float("nan"), "server_total_ms": -3, "model_first_token_ms": True}))
+        self.assertEqual(manager.status()["timings"], {"asr_ms": 123.5})
+        self.assertTrue(manager.record_timings(turn, {"model_ms": 100, "model_first_token_ms": 0}))
+        public = manager.status()
+        public["timings"]["asr_ms"] = -1
+        self.assertEqual(manager.status()["timings"], {"asr_ms": 123.5, "model_ms": 100.0, "model_first_token_ms": 0.0})
+
+    def test_new_turn_clears_timings_and_old_turn_cannot_overwrite(self):
+        manager = CallSessionManager()
+        session = manager.start()
+        first = manager.begin_turn(session["call_session_id"], 1)
+        manager.record_timings(first, {"asr_ms": 100})
+        second = manager.begin_turn(session["call_session_id"], 2)
+        self.assertEqual(manager.status()["timings"], {})
+        self.assertFalse(manager.record_timings(first, {"asr_ms": 999}))
+        self.assertTrue(manager.record_timings(second, {"asr_ms": 200}))
+        self.assertEqual(manager.status()["timings"], {"asr_ms": 200.0})
+
+    def test_interrupt_stop_and_new_session_reject_late_timing_updates(self):
+        for action in ("interrupt", "stop", "start"):
+            with self.subTest(action=action):
+                manager = CallSessionManager()
+                session = manager.start()
+                turn = manager.begin_turn(session["call_session_id"], 1)
+                if action == "interrupt": manager.interrupt(session["call_session_id"], turn.response_id)
+                elif action == "stop": manager.stop(session["call_session_id"])
+                else: manager.start()
+                self.assertFalse(manager.record_timings(turn, {"asr_ms": 999}))
+                self.assertEqual(manager.status()["timings"], {})
+
+
 class CallAsrSelectionTests(unittest.TestCase):
     def test_auto_engine_resolves_to_local_whisper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

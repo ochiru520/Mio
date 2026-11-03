@@ -1,0 +1,3 @@
+# Cryptographic provenance checks require these exact upstream bytes on Windows.
+澪Agent应用/scripts/deps/wheels/jieba-fast-LICENSE.txt -text
+澪Agent应用/scripts/deps/wheels/*.whl -text

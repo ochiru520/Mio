@@ -1,4 +1,4 @@
-﻿# 一键安装：本地视觉（Ollama + Qwen2.5-VL 3B）
+﻿# 一键安装：本地视觉（Ollama + Qwen3.5-2B）
 # 由后端后台调用，进度写入 MIO_STATUS_FILE，控制台输出保存到安装日志。
 param()
 
@@ -13,26 +13,56 @@ $ollamaDir = Join-Path $visionDir "Ollama"
 $modelsDir = Join-Path $visionDir "models"
 $ollamaExe = Join-Path $ollamaDir "ollama.exe"
 $zipPath = Join-Path $visionDir "ollama-windows-amd64.zip"
-$manifest = Join-Path $modelsDir "manifests\registry.ollama.ai\library\qwen2.5vl\3b"
+$modelName = "qwen3.5:2b"
+$selectionPath = Join-Path $visionDir "model-selection.json"
+
+function Test-OllamaRuntime {
+    try {
+        return (Test-Path -LiteralPath $ollamaExe -PathType Leaf) -and (Get-Item -LiteralPath $ollamaExe).Length -gt 0
+    } catch {
+        return $false
+    }
+}
 
 function Test-OllamaModel {
+    param([string]$Model = $script:modelName)
+    $parts = $Model.Split(":")
+    if ($Model -notin @("qwen3.5:2b", "qwen2.5vl:3b")) { return $false }
+    $manifest = Join-Path $modelsDir ("manifests\registry.ollama.ai\library\" + $parts[0] + "\" + $parts[1])
     if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { return $false }
     try {
         $payload = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifest | ConvertFrom-Json
         $assets = @($payload.config) + @($payload.layers)
-        if ($assets.Count -eq 0) { return $false }
+        if (-not $payload.layers -or $assets.Count -lt 2) { return $false }
         foreach ($asset in $assets) {
             $digest = [string]$asset.digest
-            if (-not $digest.StartsWith("sha256:")) { return $false }
+            if ($digest -notmatch '^sha256:[a-fA-F0-9]{64}$') { return $false }
             $blob = Join-Path (Join-Path $modelsDir "blobs") $digest.Replace(":", "-")
             if (-not (Test-Path -LiteralPath $blob -PathType Leaf)) { return $false }
             $expectedSize = [int64]$asset.size
-            if ($expectedSize -gt 0 -and (Get-Item -LiteralPath $blob).Length -ne $expectedSize) { return $false }
+            if ($expectedSize -le 0 -or (Get-Item -LiteralPath $blob).Length -ne $expectedSize) { return $false }
         }
         return $true
     } catch {
         return $false
     }
+}
+
+function Resolve-ModelSelection {
+    if (Test-Path -LiteralPath $selectionPath) {
+        try {
+            $selection = Get-Content -LiteralPath $selectionPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($selection -isnot [PSCustomObject]) { throw "选择记录格式异常" }
+            if ($null -ne $selection.selected_model) {
+                if ($selection.selected_model -notin @("qwen3.5:2b", "qwen2.5vl:3b")) { throw "不支持的模型" }
+                return [string]$selection.selected_model
+            }
+        } catch {
+            throw "本地视觉模型选择记录无效，已保留原文件；不会自动切换模型。"
+        }
+    }
+    if (Test-OllamaModel -Model "qwen2.5vl:3b") { return "qwen2.5vl:3b" }
+    return "qwen3.5:2b"
 }
 
 function Get-FreeTcpPort {
@@ -125,7 +155,7 @@ function Invoke-OllamaPull {
             } else {
                 "正在下载视觉模型：" + $status
             }
-            Write-DepsStatus -Stage "pull" -Percent $overallPercent -Message $message -FileName "qwen2.5vl-3b" -DownloadedBytes $knownDone -TotalBytes $knownTotal -DownloadPercent $highestPercent -TargetPath $modelsDir -SpeedMbS $speed
+            Write-DepsStatus -Stage "pull" -Percent $overallPercent -Message $message -FileName $Model -DownloadedBytes $knownDone -TotalBytes $knownTotal -DownloadPercent $highestPercent -TargetPath $modelsDir -SpeedMbS $speed
         }
         if (-not (Test-OllamaModel)) { throw "下载流结束但模型文件不完整，可重试续传。" }
         return
@@ -147,10 +177,30 @@ try {
     Write-DepsStatus -Stage "prepare" -Percent 2 -Message "正在准备安装目录"
 
     New-Item -ItemType Directory -Force -Path $visionDir | Out-Null
+    $modelName = Resolve-ModelSelection
+    # Keep the upgrade choice before installing anything; a later new model never changes it.
+    if (-not (Test-Path -LiteralPath $selectionPath)) {
+        $initial = @{ schema_version = 1; selected_model = $modelName; selection_origin = "installer_preserved" }
+        $temporarySelection = Join-Path $visionDir (".model-selection-" + [Guid]::NewGuid().ToString("N") + ".tmp")
+        try {
+            [IO.File]::WriteAllText($temporarySelection, ($initial | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            Move-Item -LiteralPath $temporarySelection -Destination $selectionPath
+        } finally {
+            if (Test-Path -LiteralPath $temporarySelection) { Remove-Item -LiteralPath $temporarySelection -Force }
+        }
+    }
     Get-ChildItem Env:OLLAMA_* | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
     $env:OLLAMA_MODELS = $modelsDir
+    $isolatedProfile = Join-Path $visionDir "home"
+    New-Item -ItemType Directory -Force -Path $isolatedProfile | Out-Null
+    # The temporary installer server must use the same private profile as Mio's
+    # normal server, including its keys and settings, rather than system Ollama.
+    $env:HOME = $isolatedProfile
+    $env:USERPROFILE = $isolatedProfile
+    $env:OLLAMA_NUM_PARALLEL = "1"
+    $env:OLLAMA_MAX_LOADED_MODELS = "1"
 
-    if (-not (Test-Path -LiteralPath $ollamaExe)) {
+    if (-not (Test-OllamaRuntime)) {
         Write-DepsStatus -Stage "download" -Percent 8 -Message "正在下载 Ollama 0.32.14 运行器（约 1.36 GiB，支持断点续传）"
         $urls = @(
             "https://gh-proxy.com/https://github.com/ollama/ollama/releases/download/v0.32.14/ollama-windows-amd64.zip",
@@ -169,10 +219,10 @@ try {
         $env:OLLAMA_HOST = "127.0.0.1:" + $port
         $serverProcess = Start-Process -FilePath $ollamaExe -ArgumentList @("serve") -WorkingDirectory $ollamaDir -WindowStyle Hidden -PassThru
         Wait-OllamaReady -Process $serverProcess -HostAddress $env:OLLAMA_HOST
-        Write-DepsStatus -Stage "pull" -Percent 34 -Message "正在下载视觉模型 Qwen2.5-VL 3B（约 3 GB，视网速需要几分钟）"
+        Write-DepsStatus -Stage "pull" -Percent 34 -Message ("正在下载所选视觉模型 " + $modelName + "（视网速需要几分钟）")
         for ($attempt = 1; $attempt -le 3; $attempt++) {
             try {
-                Invoke-OllamaPull -HostAddress $env:OLLAMA_HOST -Model "qwen2.5vl:3b"
+                Invoke-OllamaPull -HostAddress $env:OLLAMA_HOST -Model $modelName
                 break
             } catch {
                 if ($attempt -eq 3) { throw ("视觉模型下载失败（运行器已安装）：" + $_.Exception.Message) }

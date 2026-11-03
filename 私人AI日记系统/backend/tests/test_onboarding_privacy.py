@@ -80,6 +80,16 @@ class OnboardingPrivacyTests(unittest.TestCase):
         self.assertIn("小澪", settings.mio_profile_path.read_text(encoding="utf-8"))
         self.assertIn("小落", settings.mio_profile_path.read_text(encoding="utf-8"))
 
+    def test_skip_tutorial_finishes_without_model_or_optional_downloads(self) -> None:
+        with patch.object(onboarding_service, '_require_verified_model', side_effect=ValueError('未配置模型')):
+            state = onboarding_service.complete_onboarding({'tutorial_skipped': True})
+        self.assertTrue(state['completed'])
+        self.assertEqual(state['mode'], 'new_user_skipped')
+        self.assertTrue(state['tutorial_skipped'])
+        self.assertFalse(state['model_verification']['verified'])
+        self.assertTrue(all(value is False for value in state['choices'].values()))
+        self.assertTrue(onboarding_service.onboarding_status()['completed'])
+
     def test_first_launch_disables_screen_and_audio_without_overwriting_existing_config(self) -> None:
         onboarding_service.prepare_first_launch_defaults()
         first_launch = companion_service.load_config()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import math
 import threading
 import time
 from typing import Any, Callable, TypeVar
@@ -51,6 +52,7 @@ class CallSessionManager:
             "error": "",
             "device": {},
             "asr": {},
+            "timings": {},
             "voice_started": {},
             "voice_ended": {},
             "last_interrupted_response_id": "",
@@ -148,6 +150,7 @@ class CallSessionManager:
                     "reply": "",
                     "error": "",
                     "asr": {},
+                    "timings": {},
                     "voice_started": {},
                     "voice_ended": {},
                     "updated_at": self._now_iso(),
@@ -184,15 +187,37 @@ class CallSessionManager:
                 raise CallSessionConflict("电话会话已结束或轮次已被替换。")
             allowed = {"transcript", "reply", "error", "asr"}
             self._state.update({key: value for key, value in fields.items() if key in allowed})
-            self._state["stage"] = str(stage or self._state["stage"])[:50]
+            if not (stage == "committing" and self._state["voice_started"]):
+                self._state["stage"] = str(stage or self._state["stage"])[:50]
             self._state["updated_at"] = self._now_iso()
+
+    def record_timings(self, token: CallTurnToken, timings: dict[str, Any]) -> bool:
+        """Record only measured durations from the current turn; never accept stale replies."""
+        with self._lock:
+            if not self._is_current_unlocked(token):
+                return False
+            allowed = {"asr_ms", "model_ms", "model_first_token_ms", "server_total_ms"}
+            measured = {
+                key: round(float(value), 1)
+                for key, value in timings.items()
+                if key in allowed and isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and value >= 0
+            }
+            self._state["timings"].update(measured)
+            self._state["updated_at"] = self._now_iso()
+            return True
 
     def commit_if_current(self, token: CallTurnToken, callback: Callable[[], T]) -> T:
         with self._lock:
             if not self._is_current_unlocked(token):
                 raise CallSessionConflict("电话会话已结束，迟到回复不会写入历史。")
             result = callback()
-            self._state["stage"] = "awaiting_voice"
+            if self._state["voice_ended"]:
+                self._state["stage"] = "error" if self._state["voice_ended"].get("reason") == "error" else "listening"
+            elif self._state["voice_started"]:
+                self._state["stage"] = "speaking"
+            else:
+                self._state["stage"] = "awaiting_voice"
             self._state["updated_at"] = self._now_iso()
             return result
 
@@ -204,11 +229,20 @@ class CallSessionManager:
             self._state["updated_at"] = self._now_iso()
             return True
 
-    def interrupt(self, call_session_id: str = "", response_id: str = "") -> str:
+    def interrupt(self, call_session_id: str = "", response_id: str = "", *, turn_id: int = 0) -> str:
         with self._lock:
             if not self._state["active"]:
                 return ""
             if call_session_id and call_session_id != self._state["call_session_id"]:
+                return ""
+            if turn_id and turn_id == self._state["next_turn_id"]:
+                # The browser can cancel while its POST is still in transit.
+                # Reserve/skip that turn so a late recording cannot become current.
+                self._state["next_turn_id"] += 1
+                self._state["stage"] = "listening"
+                self._state["updated_at"] = self._now_iso()
+                return f"call-{self._state['call_session_id']}-{turn_id}-cancelled"
+            if turn_id and turn_id != self._state["current_turn_id"]:
                 return ""
             active_response_id = str(self._state["current_response_id"] or "")
             if response_id and response_id != active_response_id:
@@ -218,13 +252,15 @@ class CallSessionManager:
             self._state["last_interrupted_response_id"] = active_response_id
             self._state["last_interrupted_text"] = str(self._state["reply"] or "")
             self._state["last_interrupted_monotonic"] = time.monotonic()
+            self._generation += 1
+            self._state["generation"] = self._generation
             self._state["stage"] = "listening"
             self._state["updated_at"] = self._now_iso()
             return active_response_id
 
     def echo_reference(self, token: CallTurnToken, max_age_seconds: float = 8.0) -> str:
         with self._lock:
-            if not self._is_current_unlocked(token):
+            if not (self._state["active"] and token.call_session_id == self._state["call_session_id"]):
                 return ""
             age = time.monotonic() - float(self._state["last_interrupted_monotonic"] or 0)
             if age < 0 or age > max(0.1, float(max_age_seconds)):
@@ -233,7 +269,9 @@ class CallSessionManager:
 
     def record_voice_started(self, response_id: str, payload: dict[str, Any]) -> bool:
         with self._lock:
-            if not self._state["active"] or response_id != self._state["current_response_id"]:
+            if (not self._state["active"] or response_id != self._state["current_response_id"]
+                    or response_id == self._state["last_interrupted_response_id"]
+                    or self._state["voice_ended"]):
                 return False
             self._state["voice_started"] = {
                 "received_at": self._now_iso(),
@@ -247,7 +285,8 @@ class CallSessionManager:
 
     def record_voice_ended(self, response_id: str, payload: dict[str, Any]) -> bool:
         with self._lock:
-            if not self._state["active"] or response_id != self._state["current_response_id"]:
+            if (not self._state["active"] or response_id != self._state["current_response_id"]
+                    or response_id == self._state["last_interrupted_response_id"]):
                 return False
             reason = str(payload.get("reason") or "finished")[:80]
             self._state["voice_ended"] = {
@@ -266,6 +305,7 @@ class CallSessionManager:
         state.pop("last_interrupted_monotonic", None)
         state["device"] = dict(self._state.get("device") or {})
         state["asr"] = dict(self._state.get("asr") or {})
+        state["timings"] = dict(self._state.get("timings") or {})
         state["voice_started"] = dict(self._state.get("voice_started") or {})
         state["voice_ended"] = dict(self._state.get("voice_ended") or {})
         state["has_recent_echo_reference"] = bool(

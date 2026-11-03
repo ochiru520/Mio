@@ -48,6 +48,10 @@ class ConfigurationService:
 
     def _migrate_config(self, data: dict[str, Any]) -> dict[str, Any]:
         migrated = dict(data)
+        # Before version selection existed, Mio's Index adapter loaded infer_v2.
+        # Preserve that choice for existing users rather than requesting new weights.
+        if migrated.get("voice_engine") == "indextts2" and "indextts2_version" not in migrated:
+            migrated["indextts2_version"] = "2"
         try:
             schema_version = int(migrated.get("config_schema_version") or 1)
         except (TypeError, ValueError):
@@ -252,11 +256,12 @@ class ConfigurationService:
             min(1800, int(data.get("voice_idle_timeout_seconds", 180))),
         )
         voice_engine = str(data.get("voice_engine") or self._dep_MIO_VOICE_ENGINE()).strip().lower()
-        data["voice_engine"] = voice_engine if voice_engine in {"gpt_sovits", "cloud", "indextts2"} else self._dep_MIO_VOICE_ENGINE()
+        data["voice_engine"] = voice_engine if voice_engine in {"gpt_sovits", "cloud", "indextts2", "aniflive", "gpt_sovits_v5"} else self._dep_MIO_VOICE_ENGINE()
         local_runtime = str(data.get("local_voice_runtime") or self._dep_GENIE_VOICE_RUNTIME()).strip().lower()
-        data["local_voice_runtime"] = local_runtime if local_runtime in {self._dep_GENIE_VOICE_RUNTIME(), self._dep_LEGACY_GPT_SOVITS_RUNTIME()} else self._dep_GENIE_VOICE_RUNTIME()
+        data["local_voice_runtime"] = local_runtime if local_runtime in {self._dep_GENIE_VOICE_RUNTIME(), self._dep_LEGACY_GPT_SOVITS_RUNTIME(), "mio_v2"} else self._dep_GENIE_VOICE_RUNTIME()
         data["indextts2_url"] = str(data.get("indextts2_url") or "http://127.0.0.1:11996").strip().rstrip("/")[:2000]
         data["indextts2_ref_audio"] = str(data.get("indextts2_ref_audio") or "").strip()[:4000]
+        self._normalize_external_voice(data)
         data["cloud_tts_api_key"] = str(data.get("cloud_tts_api_key") or "").strip()
         data["cloud_tts_app_id"] = str(data.get("cloud_tts_app_id") or "").strip()[:200]
         cloud_speaker = str(data.get("cloud_tts_speaker") or self._dep_DEFAULT_CONFIG()["cloud_tts_speaker"]).strip()
@@ -420,11 +425,12 @@ class ConfigurationService:
             min(1800, int(normalized.get("voice_idle_timeout_seconds", 180))),
         )
         voice_engine = str(normalized.get("voice_engine") or self._dep_MIO_VOICE_ENGINE()).strip().lower()
-        normalized["voice_engine"] = voice_engine if voice_engine in {"gpt_sovits", "cloud", "indextts2"} else self._dep_MIO_VOICE_ENGINE()
+        normalized["voice_engine"] = voice_engine if voice_engine in {"gpt_sovits", "cloud", "indextts2", "aniflive", "gpt_sovits_v5"} else self._dep_MIO_VOICE_ENGINE()
         local_runtime = str(normalized.get("local_voice_runtime") or self._dep_GENIE_VOICE_RUNTIME()).strip().lower()
-        normalized["local_voice_runtime"] = local_runtime if local_runtime in {self._dep_GENIE_VOICE_RUNTIME(), self._dep_LEGACY_GPT_SOVITS_RUNTIME()} else self._dep_GENIE_VOICE_RUNTIME()
+        normalized["local_voice_runtime"] = local_runtime if local_runtime in {self._dep_GENIE_VOICE_RUNTIME(), self._dep_LEGACY_GPT_SOVITS_RUNTIME(), "mio_v2"} else self._dep_GENIE_VOICE_RUNTIME()
         normalized["indextts2_url"] = str(normalized.get("indextts2_url") or "http://127.0.0.1:11996").strip().rstrip("/")[:2000]
         normalized["indextts2_ref_audio"] = str(normalized.get("indextts2_ref_audio") or "").strip()[:4000]
+        self._normalize_external_voice(normalized)
         normalized["cloud_tts_api_key"] = str(normalized.get("cloud_tts_api_key") or "").strip()
         normalized["cloud_tts_app_id"] = str(normalized.get("cloud_tts_app_id") or "").strip()[:200]
         cloud_speaker = str(normalized.get("cloud_tts_speaker") or self._dep_DEFAULT_CONFIG()["cloud_tts_speaker"]).strip()
@@ -465,6 +471,10 @@ class ConfigurationService:
         normalized["speak_screen_observations"] = bool(normalized.get("speak_screen_observations", True))
         normalized["speak_game_observations"] = bool(normalized.get("speak_game_observations", True))
         normalized["screen_ai_enabled"] = bool(normalized.get("screen_ai_enabled", True))
+        watch_mode = str(normalized.get("screen_watch_mode") or "single").strip().lower()
+        normalized["screen_watch_mode"] = watch_mode if watch_mode in {"single", "adaptive"} else "single"
+        watch_pace = str(normalized.get("screen_watch_pace") or "normal").strip().lower()
+        normalized["screen_watch_pace"] = watch_pace if watch_pace in {"calm", "normal", "dense"} else "normal"
         normalized["screen_audio_enabled"] = bool(normalized.get("screen_audio_enabled", True))
         screen_audio_model = str(normalized.get("screen_audio_model") or "base").strip().lower()
         normalized["screen_audio_model"] = screen_audio_model if screen_audio_model in {"tiny", "base", "small"} else "base"
@@ -567,6 +577,18 @@ class ConfigurationService:
         normalized["position_x"] = max(-10000, min(10000, int(normalized.get("position_x", 80))))
         normalized["position_y"] = max(-10000, min(10000, int(normalized.get("position_y", 420))))
         return normalized
+
+
+    def _normalize_external_voice(self, data: dict[str, Any]) -> None:
+        version = str(data.get("indextts2_version") or "2.5").strip()
+        data["indextts2_version"] = version if version in {"2", "2.5"} else "2.5"
+        language = str(data.get("indextts2_language") or "zh").strip().lower()
+        data["indextts2_language"] = language if language in {"zh", "en", "ja", "es", "ar"} else "zh"
+        for key, default in (("aniflive_url", "http://127.0.0.1:9882"),
+                             ("gpt_sovits_v5_url", "http://127.0.0.1:9885")):
+            data[key] = str(data.get(key) or default).strip().rstrip("/")[:2000]
+        data["aniflive_model"] = str(data.get("aniflive_model") or "").strip()[:160]
+        data["aniflive_voice_profile"] = str(data.get("aniflive_voice_profile") or "default").strip()[:160]
 
 
     def save_pet_position(self, x: int, y: int) -> dict[str, Any]:

@@ -39,6 +39,7 @@
   const activityIndicator = document.getElementById('activity-indicator')
   const speechBubbleButton = contextMenu.querySelector('[data-action="speech-bubble"]')
   const speechLanguageButton = contextMenu.querySelector('[data-action="speech-language"]')
+  const screenWatchButton = contextMenu.querySelector('[data-action="screen-watch"]')
   const speechBubble = document.getElementById('speech-bubble')
   const speechBubbleText = document.getElementById('speech-bubble-text')
   const modelSelect = document.getElementById('model-select')
@@ -53,6 +54,11 @@
   let desktopState = { bounds: { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight } }
   let desktopSelectedModelId = ''
   let settings = {}
+  let observationState = { running: false, mode: 'screen', screen_scope: 'primary' }
+  let observationBusy = false
+  let observationStarting = false
+  let observationStopping = false
+  let observationOperation = 0
   let latestMessageId = null
   let lastStatusSuccess = Date.now()
   let activityRevision = -1
@@ -115,7 +121,9 @@
   let lastForegroundTitle = ''
   let activeResponseId = ''
   let activeSpeechPriority = -1
+  let activeSpeechSource = ''
   let speechQueue = []
+  const retiredSpeechResponses = new Set()
   let speechDrainTimer = null
   let activeSpeechText = ''
   let speechBubbleTimer = null
@@ -124,6 +132,7 @@
   let speechBubbleVisibleCount = 0
   let speechBubbleResponseId = ''
   let streamFirstAudioTimer = null
+  let streamAudibleStartTimer = null
   let lastMotionGroup = ''
   let lastMotionPlayedAt = 0
   let cursorFocusFrame = null
@@ -872,6 +881,7 @@
     try {
       const status = await request('/api/companion/status')
       const pet = status.pet || {}
+      observationState = status.screen || status.window || observationState
       await applySettings(pet.settings || {})
       applyActivity(pet.activity || {})
       lastStatusSuccess = Date.now()
@@ -913,6 +923,33 @@
       || message?.request_id
       || (message?.message_id ? `message-${message.message_id}` : ''),
     )
+  }
+
+  function retireSpeechResponse(responseId) {
+    if (!responseId) return
+    retiredSpeechResponses.add(responseId)
+    if (retiredSpeechResponses.size > 160) retiredSpeechResponses.delete(retiredSpeechResponses.values().next().value)
+  }
+
+  function interruptSpeechResponse(responseId, reason, sources) {
+    const target = String(responseId || '')
+    const sourceFilter = sources === undefined ? null : new Set(
+      Array.isArray(sources) ? sources.filter(source => typeof source === 'string' && source.trim()).map(source => source.trim()) : [],
+    )
+    const matches = (id, source) => (!target || id === target) && (!sourceFilter || sourceFilter.has(String(source || '')))
+    // A source-scoped stop must never retire an unrelated call/chat response.
+    if (target && !sourceFilter) retireSpeechResponse(target)
+    const dropped = speechQueue.filter(item => matches(messageResponseId(item), item.source))
+    speechQueue = speechQueue.filter(item => !matches(messageResponseId(item), item.source))
+    speechDroppedCount += dropped.length
+    for (const item of dropped) {
+      retireSpeechResponse(messageResponseId(item))
+      recordSpeechLifecycle(messageResponseId(item), 'dropped', { error: reason })
+    }
+    if (matches(activeResponseId, activeSpeechSource)) {
+      retireSpeechResponse(activeResponseId)
+      stopSpeech(['user_started_speaking', 'call_ended'].includes(reason) ? 'interrupted' : reason)
+    }
   }
 
   function recordSpeechLifecycle(responseId, event, details = {}) {
@@ -1015,6 +1052,7 @@
   async function dispatchSpeech(message) {
     const text = String(message?.text || message?.content || '').trim()
     if (!text || !shouldSpeak(message || {})) return false
+    if (retiredSpeechResponses.has(messageResponseId(message))) return false
     message = trackSpeechRequest(message)
     const priority = messagePriority(message)
     const responseId = messageResponseId(message)
@@ -1028,12 +1066,15 @@
     showSpeechBubble(text, 0, responseId)
     activeResponseId = responseId
     activeSpeechPriority = priority
+    activeSpeechSource = String(message.source || '')
     recordSpeechLifecycle(responseId, 'preparing', { priority })
     await playSpeech({ ...message, text, priority, response_id: responseId })
     return true
   }
 
   function clearStreamingAudio() {
+    window.clearTimeout(streamAudibleStartTimer)
+    streamAudibleStartTimer = null
     for (const source of streamSources) {
       source.onended = null
       try { source.stop() } catch (_) {}
@@ -1054,11 +1095,14 @@
   function stopSpeech(reason = 'interrupted') {
     const hadSpeech = voiceLifecycleActive
     const endedResponseId = activeResponseId
+    if (endedResponseId.startsWith('call-')) retireSpeechResponse(endedResponseId)
     const endedPriority = activeSpeechPriority
     const playbackMetrics = hadSpeech ? finalizePlaybackPerformance() : null
     streamSpeechToken += 1
     window.clearTimeout(streamFirstAudioTimer)
     streamFirstAudioTimer = null
+    window.clearTimeout(streamAudibleStartTimer)
+    streamAudibleStartTimer = null
     if (currentSpeechAbort) currentSpeechAbort.abort()
     currentSpeechAbort = null
     if (currentAudio) {
@@ -1080,6 +1124,7 @@
     currentAudioUrl = ''
     activeResponseId = ''
     activeSpeechPriority = -1
+    activeSpeechSource = ''
     activeSpeechText = ''
     if (['finished', 'error'].includes(reason) && !speechBubble.hidden) {
       window.clearTimeout(speechBubbleHideTimer)
@@ -1111,6 +1156,12 @@
     } else if (reason === 'error' && endedResponseId) {
       speechFailureCount += 1
       lastSpeechEndedAt = new Date().toISOString()
+      lastVoiceEventSent = sendSocket('voice_ended', {
+        reason: 'error',
+        request_id: endedResponseId,
+        response_id: endedResponseId,
+        priority: endedPriority,
+      })
       recordSpeechLifecycle(endedResponseId, 'failed', { error: lastSpeechError })
     }
     if (reason === 'manual') {
@@ -1238,11 +1289,17 @@
     source.onended = () => streamSources.delete(source)
     source.start(startsAt)
     if (!streamPlaybackActive) {
-      window.clearTimeout(streamFirstAudioTimer)
-      streamFirstAudioTimer = null
       streamPlaybackActive = true
-      streamFirstAudioLatencyMs = Math.round(performance.now() - requestStartedAt)
-      beginVoiceLifecycle(message, text, 'stream')
+      // Report the scheduled PCM playback start, never a WAV header or merely
+      // receiving an HTTP response. Hardware output latency remains separate.
+      streamAudibleStartTimer = window.setTimeout(() => {
+        streamAudibleStartTimer = null
+        if (token !== streamSpeechToken || !streamPlaybackActive) return
+        window.clearTimeout(streamFirstAudioTimer)
+        streamFirstAudioTimer = null
+        streamFirstAudioLatencyMs = Math.round(performance.now() - requestStartedAt)
+        beginVoiceLifecycle(message, text, 'stream')
+      }, Math.max(0, (startsAt - audioContext.currentTime) * 1000))
     }
     return true
   }
@@ -1264,7 +1321,8 @@
     if (!streamHasStarted) {
       streamPendingBuffers.push(buffer)
       streamPendingDuration += buffer.duration
-      if (forceStart || streamPendingDuration >= 0.28) startPendingPcm(message, text, token, requestStartedAt)
+      const initialBufferSeconds = message.speech_stream ? 0.08 : 0.28
+      if (forceStart || streamPendingDuration >= initialBufferSeconds) startPendingPcm(message, text, token, requestStartedAt)
       return true
     }
     return scheduleAudioBuffer(buffer, message, text, token, requestStartedAt)
@@ -1303,7 +1361,8 @@
         }
         if (format) {
           const aligned = pending.length - (pending.length % format.blockAlign)
-          const minimum = done ? format.blockAlign : Math.max(format.blockAlign, Math.floor(format.sampleRate * 0.16) * format.blockAlign)
+          const chunkSeconds = message.speech_stream ? 0.04 : 0.16
+          const minimum = done ? format.blockAlign : Math.max(format.blockAlign, Math.floor(format.sampleRate * chunkSeconds) * format.blockAlign)
           if (aligned >= minimum) {
             schedulePcm(pending.slice(0, aligned), format, message, text, token, requestStartedAt)
             pending = pending.slice(aligned)
@@ -1322,6 +1381,9 @@
       }
       return !controller.signal.aborted && token === streamSpeechToken
     } finally {
+      if (controller.signal.aborted || token !== streamSpeechToken) {
+        try { await reader.cancel() } catch (_) {}
+      }
       try { reader.releaseLock() } catch (_) {}
     }
   }
@@ -1371,6 +1433,11 @@
         context: text,
         emotion: message.emotion || '',
         model_id: message.model_id || '',
+        ...(message.speech_stream ? {
+          speech_stream: true,
+          response_id: messageResponseId(message),
+          call_session_id: message.call_session_id || '',
+        } : {}),
         language: speechLanguage || message.speech_language || (settings.pet_speech_language === 'ja' ? 'ja' : 'zh'),
       }),
       signal: controller.signal,
@@ -1403,7 +1470,7 @@
       if (token === streamSpeechToken && !voiceLifecycleActive) controller.abort('first-audio-timeout')
     }, 12000)
     try {
-      if (settings.voice_streaming_enabled !== false) {
+      if (message.speech_stream || settings.voice_streaming_enabled !== false) {
         try {
           const streamResponse = await requestSpeechAudio('/api/companion/voice/stream', text, message, controller)
           const completed = await playStreamingResponse(streamResponse, controller, message, text, token, requestStartedAt)
@@ -1418,6 +1485,9 @@
             if (controller.signal.reason === 'first-audio-timeout') throw streamError
             return
           }
+          // A live call stream owns all subsequent sentences. Replaying only its
+          // first text as a complete WAV would duplicate speech and lose the tail.
+          if (message.speech_stream) throw streamError
           if (voiceLifecycleActive) throw streamError
           clearStreamingAudio()
           if (analyser) {
@@ -1451,8 +1521,10 @@
       sendSocket('renderer_error', { message: lastSpeechError })
       stopSpeech('error')
     } finally {
-      window.clearTimeout(streamFirstAudioTimer)
-      streamFirstAudioTimer = null
+      if (token === streamSpeechToken) {
+        window.clearTimeout(streamFirstAudioTimer)
+        streamFirstAudioTimer = null
+      }
       if (currentSpeechAbort === controller) currentSpeechAbort = null
     }
   }
@@ -1535,6 +1607,7 @@
       } else if (message.type === 'activity') {
         applyActivity(payload)
       } else if (message.type === 'speak') {
+        if (retiredSpeechResponses.has(messageResponseId(payload))) return
         const text = String(payload.text || payload.content || '').trim()
         applyEmotion(payload.emotion || 'neutral', Math.max(6000, text.length * 180))
         showSpeechBubble(text, 0, messageResponseId(payload))
@@ -1547,9 +1620,7 @@
       } else if (message.type === 'speech_interrupt') {
         const reason = String(payload.reason || 'interrupted')
         const targetResponseId = String(payload.response_id || '')
-        if (!targetResponseId || !activeResponseId || targetResponseId === activeResponseId) {
-          stopSpeech(['user_started_speaking', 'call_ended'].includes(reason) ? 'interrupted' : reason)
-        }
+        interruptSpeechResponse(targetResponseId, reason, payload.sources)
       } else if (message.type === 'visual_event') {
         handleVisualEvent(payload)
       } else if (message.type === 'foreground_changed') {
@@ -1620,6 +1691,14 @@
       speechLanguageButton.textContent = settings.pet_speech_language === 'ja'
         ? '语音语言：日语'
         : '语音语言：中文'
+    }
+    if (screenWatchButton) {
+      const target = observationState.mode === 'window' && observationState.hwnd
+        ? '所选窗口' : observationState.screen_scope === 'all' ? '全部屏幕' : '主屏幕'
+      screenWatchButton.textContent = observationStarting
+        ? (observationBusy ? '停止准备陪看' : '已停止，等待准备结束')
+        : observationState.running ? '停止屏幕陪看' : `陪我看${target}（试用）`
+      screenWatchButton.disabled = observationStopping || (observationStarting && !observationBusy)
     }
   }
 
@@ -1707,15 +1786,62 @@
     })
   }
 
+  async function toggleObservation() {
+    if (observationStopping || (observationStarting && !observationBusy)) return
+    const stopping = observationStarting || observationState.running
+    const operation = ++observationOperation
+    if (stopping) observationStopping = true
+    else observationStarting = true
+    observationBusy = true
+    updateContextMenuLabels()
+    try {
+      if (stopping) {
+        const stopped = await request('/api/companion/screen/stop', { method: 'POST', body: '{}' })
+        if (operation !== observationOperation) return { ok: false, superseded: true }
+        observationState = stopped
+        showSpeechBubble('屏幕陪看已停止。', 5000)
+      } else {
+        const status = await request('/api/companion/status')
+        if (operation !== observationOperation) return { ok: false, superseded: true }
+        observationState = status.screen || status.window || {}
+        if (observationState.running) {
+          const stopped = await request('/api/companion/screen/stop', { method: 'POST', body: '{}' })
+          if (operation !== observationOperation) return { ok: false, superseded: true }
+          observationState = stopped
+          showSpeechBubble('屏幕陪看已停止。', 5000)
+          return { ok: true, running: false }
+        }
+        const config = status.pet?.settings || {}
+        if (config.screen_ai_enabled === false) throw new Error('请先在 Mio 的屏幕观察设置中开启“由 Mio 判断是否回应”。')
+        await request('/api/companion/settings', { method: 'PATCH', body: JSON.stringify({ screen_watch_mode: 'adaptive' }) })
+        if (operation !== observationOperation) return { ok: false, superseded: true }
+        const isWindow = observationState.mode === 'window' && observationState.hwnd
+        const payload = isWindow ? { interval_ms: 1000 } : { scope: observationState.screen_scope === 'all' ? 'all' : 'primary', interval_ms: 1000 }
+        const started = await request(isWindow ? '/api/companion/game/start' : '/api/companion/screen/start', { method: 'POST', body: JSON.stringify(payload) })
+        if (operation !== observationOperation) return { ok: false, superseded: true }
+        observationState = started
+        const target = isWindow ? '所选窗口' : payload.scope === 'all' ? '全部屏幕' : '主屏幕'
+        showSpeechBubble(`开始陪你看${target}。我会留意画面变化，有需要时再回应；右键可停止。`, 9000)
+      }
+      return { ok: true, running: Boolean(observationState.running) }
+    } catch (error) {
+      if (operation === observationOperation) showSpeechBubble(`屏幕陪看未完成：${error.message}`, 10000)
+      return { ok: false, error: error.message }
+    } finally {
+      if (stopping) observationStopping = false
+      else observationStarting = false
+      if (operation === observationOperation) observationBusy = false
+      updateContextMenuLabels()
+    }
+  }
+
   async function setClickThroughLocked(enabled, persist = true) {
     const locked = Boolean(enabled)
     settings.live2d_click_through_locked = locked
     root.classList.toggle('click-through-locked', locked)
     contextMenu.hidden = true
     sizePanel.hidden = true
-    pointerDown = null
-    dragged = false
-    root.classList.remove('dragging')
+    void finishPointerInteraction(null, true)
     updateContextMenuLabels()
     if (electronRuntime) window.mioDesktop.setClickThroughLocked(locked)
     if (persist) {
@@ -1739,10 +1865,9 @@
       setInteractive(false)
       return
     }
-    if (!electronRuntime || !settings.live2d_smart_passthrough) {
-      if (electronRuntime) setInteractive(true)
-      return
-    }
+    // This window covers the entire desktop. Its empty area must always pass
+    // clicks through, even when an older saved setting disables smart mode.
+    if (!electronRuntime) return
     if (passThroughFrame && !force) return
     passThroughFrame = window.requestAnimationFrame(() => {
       passThroughFrame = null
@@ -1788,8 +1913,16 @@
 
   canvas.addEventListener('pointermove', async (event) => {
     if (!pointerDown) return
+    if (event.pointerId !== pointerDown.pointerId) return
+    // Recover if mouseup was lost during a focus change or interrupted input.
+    if ((event.buttons & 1) === 0) {
+      await finishPointerInteraction(event, true)
+      return
+    }
     const dx = event.clientX - pointerDown.x
     const dy = event.clientY - pointerDown.y
+    pointerDown.lastX = event.clientX
+    pointerDown.lastY = event.clientY
     const distance = Math.hypot(dx, dy)
     if (distance > 6) dragged = true
     if (electronRuntime && model) {
@@ -1803,17 +1936,26 @@
     }
   })
 
-  async function finishPointerInteraction(event) {
+  async function finishPointerInteraction(event, cancelled = false) {
     if (!pointerDown) return
+    if (event?.pointerId != null && event.pointerId !== pointerDown.pointerId) return
     const interaction = pointerDown
     const wasDragged = dragged
-    const dx = Number(event?.clientX ?? interaction.x) - interaction.x
-    const dy = Number(event?.clientY ?? interaction.y) - interaction.y
+    const dx = Number(event?.clientX ?? interaction.lastX ?? interaction.x) - interaction.x
+    const dy = Number(event?.clientY ?? interaction.lastY ?? interaction.y) - interaction.y
     pointerDown = null
     dragged = false
     root.classList.remove('dragging')
-    const bridge = await waitForBridge()
-    await bridge.end_drag()
+    if (canvas.hasPointerCapture(interaction.pointerId)) {
+      try { canvas.releasePointerCapture(interaction.pointerId) } catch (_) {}
+    }
+    // Release native input before waiting on any asynchronous desktop bridge.
+    setInteractive(false)
+    updateMousePassThrough(true, event)
+    try {
+      const bridge = await waitForBridge()
+      await bridge.end_drag()
+    } catch (_) {}
     if (electronRuntime && wasDragged) {
       const virtual = desktopState.bounds || { x: 0, y: 0 }
       const vw = Number(virtual.width) || window.innerWidth
@@ -1829,15 +1971,24 @@
         body: JSON.stringify({ x: nextX, y: nextY }),
       }).catch(() => {})
       sendSocket('dragged', { distance: Math.round(Math.hypot(dx, dy)), x: nextX, y: nextY })
-    } else if (!wasDragged) {
+    } else if (!wasDragged && !cancelled) {
       if (settings.live2d_click_motion) playMotion(semanticMotion('touch'), undefined, { force: true })
       sendSocket('clicked', { x: event?.screenX || 0, y: event?.screenY || 0, emotion: 'gentle' })
     }
-    updateMousePassThrough(true, event)
   }
 
   canvas.addEventListener('pointerup', finishPointerInteraction)
-  canvas.addEventListener('pointercancel', finishPointerInteraction)
+  canvas.addEventListener('pointercancel', (event) => finishPointerInteraction(event, true))
+  canvas.addEventListener('lostpointercapture', (event) => finishPointerInteraction(event, true))
+  window.addEventListener('pointerup', (event) => finishPointerInteraction(event))
+  window.addEventListener('blur', () => finishPointerInteraction(null, true))
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return
+    contextMenu.hidden = true
+    sizePanel.hidden = true
+    void finishPointerInteraction(null, true)
+    setInteractive(false)
+  })
 
   canvas.addEventListener('dblclick', async (event) => {
     if (clickThroughLocked() || !pointHitsModel(event.clientX, event.clientY)) return
@@ -1888,6 +2039,7 @@
       else if (!enabled) hideSpeechBubble()
     }
     if (action === 'agent') await bridge.open_agent()
+    if (action === 'screen-watch') await toggleObservation()
     if (action === 'close') await bridge.close_pet()
     updateMousePassThrough(true, event)
   })
@@ -2063,6 +2215,7 @@
         rendererFps: Number(rendererMeasuredFps.toFixed(1)),
         activeResponseId,
         activeSpeechPriority,
+        activeSpeechSource,
         speechQueueLength: speechQueue.length,
         clickThroughLocked: clickThroughLocked(),
         speechBubbleEnabled: settings.live2d_speech_bubble_enabled !== false,

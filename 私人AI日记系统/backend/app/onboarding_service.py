@@ -194,7 +194,8 @@ def complete_onboarding(payload: dict[str, Any]) -> dict[str, Any]:
     state = {
         "version": ONBOARDING_VERSION,
         "completed": True,
-        "mode": "new_user_completed",
+        "mode": "new_user_skipped" if payload.get("tutorial_skipped") is True else "new_user_completed",
+        "tutorial_skipped": payload.get("tutorial_skipped") is True,
         "completed_at": db.now_iso(),
         "existing_data": [],
         "model_verification": model_verification,

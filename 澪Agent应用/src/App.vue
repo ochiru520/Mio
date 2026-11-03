@@ -315,7 +315,7 @@ const { applyQqStatus, qqStartupMessage, waitForQqStartup, controlQq, setupQqCha
 })
 
 import { useCompanion } from './composables/useCompanion.js'
-const { loadCompanionStatus, openScreenPreviewWindow, saveCompanionSize, controlCompanion, previewLive2DMotion, previewLive2DExpression, saveCompanionSettings, testCompanionVoice, testCompanionVoiceProfile, uploadVoiceReference, exportVoicePackage, importVoicePackage, controlVoiceRuntime, controlLocalVision, pullLocalVisionModel, controlVoiceTraining, importLive2DModel, deleteLive2DModel, replaceLive2DPreview, uploadCompanionSpriteSheet, loadGameWindows, controlObservation, letMioSeeObservation } = useCompanion({
+const { loadCompanionStatus, openScreenPreviewWindow, saveCompanionSize, controlCompanion, previewLive2DMotion, previewLive2DExpression, saveCompanionSettings, testCompanionVoice, testCompanionVoiceProfile, uploadVoiceReference, uploadVoiceWeight, exportVoicePackage, importVoicePackage, controlVoiceRuntime, controlLocalVision, pullLocalVisionModel, controlVoiceTraining, importLive2DModel, deleteLive2DModel, replaceLive2DPreview, uploadCompanionSpriteSheet, loadGameWindows, controlObservation, letMioSeeObservation, observationStarting } = useCompanion({
   get activeSettingsItem() { return activeSettingsItem },
   get companionAvatarNonce() { return companionAvatarNonce },
   get companionBusy() { return companionBusy },
@@ -567,26 +567,25 @@ import {
 } from './services/dataPrivacyApi.js'
 import {
   Activity,
-  Archive,
   ArrowLeft,
   BookOpen,
   Bot,
-  CalendarDays,
+  Database,
   Check,
   ChartNoAxesCombined,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleDollarSign,
   Clock3,
   Copy,
   Download,
-  Feather,
   FileText,
   FilePenLine,
   Film,
   FolderOpen,
-  Gamepad2,
+  Cat,
+  Home,
+  Layers,
   Heart,
   History,
   LogIn,
@@ -612,7 +611,9 @@ import {
   Search,
   Send,
   Settings,
+  Settings2,
   Sparkles,
+  Sun,
   Square,
   SquarePen,
   Target,
@@ -953,6 +954,16 @@ const {
   dataPrivacyLoading,
   dataPrivacyBusy,
 } = createPrivacyState()
+const onboardingTutorialOpen = ref(false)
+function openOnboardingTutorial() {
+  onboardingTutorialOpen.value = true
+  void refreshOnboardingEnvironment()
+}
+function closeOnboardingTutorial() {
+  onboardingTutorialOpen.value = false
+  void loadCompanionStatus({ quiet: true })
+  void loadRuntimeSettings({ quiet: true })
+}
 const providerPresets = computed(() => bootstrap.value?.provider_presets || [])
 
 const selectedConversationId = ref(workspaceSearchParams.get('conversation_id') || localStorage.getItem(conversationStorageKey) || '')
@@ -1139,18 +1150,18 @@ function onProviderDialogKeydown(event) {
 }
 
 const mainNavItems = [
-  { id: 'home', label: '首页', icon: Sparkles },
+  { id: 'home', label: '首页', icon: Home },
   { id: 'chat', label: '对话', icon: MessageSquareText },
   { id: 'diaries', label: '日记', icon: BookOpen },
-  { id: 'memory', label: '记忆', icon: Archive },
+  { id: 'memory', label: '记忆', icon: Layers },
   { id: 'tasks', label: '任务', icon: ListChecks },
-  { id: 'companion', label: '桌宠', icon: Gamepad2 },
+  { id: 'companion', label: '桌宠', icon: Cat },
   { id: 'settings', label: '设置', icon: Settings },
 ]
 const agentNavItems = [
-  { id: 'home', label: '首页', icon: Sparkles },
+  { id: 'home', label: '首页', icon: Home },
   { id: 'chat', label: '对话', icon: MessageSquareText },
-  { id: 'projects', label: '项目', icon: Archive },
+  { id: 'projects', label: '项目', icon: FolderOpen },
   { id: 'tasks', label: '任务', icon: ListChecks },
   { id: 'settings', label: '设置', icon: Settings },
 ]
@@ -1166,19 +1177,31 @@ function isPrimaryNavActive(itemId) {
   return activeView.value === itemId
 }
 const settingsNavigation = [{
-  label: '设置',
+  label: '通用',
   items: [
-    { id: 'general', label: '基础与启动', description: '启动、后台与主动消息', icon: Settings, keywords: '启动 后台 问候 主动 通知 默认页面 更新' },
-    { id: 'appearance', label: '外观与界面', description: '主题、字体、侧栏与消息信息', icon: Feather, keywords: '主题 字体 侧栏 动画 专注 时间 模型 Token 费用' },
+    { id: 'general', label: '启动与通知', description: '启动、后台与主动消息', icon: Power, keywords: '基础 启动 后台 问候 主动 通知 默认页面 更新' },
+    { id: 'appearance', label: '外观', description: '主题、字体、侧栏与消息信息', icon: Sun, keywords: '外观 界面 主题 字体 侧栏 动画 专注 时间 模型 Token 费用' },
+  ],
+}, {
+  label: 'Mio',
+  items: [
     { id: 'profile', label: '人格与关系', description: '身份、关系、表达与行为边界', icon: Heart, keywords: '人格 身份 称呼 亲密 性格 语气 情绪 行为 属性 角色卡 思考 分析 进度 自定义' },
     { id: 'conversation', label: '对话与记忆', description: '上下文、联网、附件与长期记忆', icon: MessageSquareText, keywords: '对话 记忆 上下文 压缩 联网 附件 图片 PDF Word OCR' },
-    { id: 'diary', label: '日记与成长', description: '自动日记、周记与成长判断', icon: CalendarDays, keywords: '日记 周记 月记 成长 每日三十 确认 备份' },
+    { id: 'diary', label: '日记与成长', description: '自动日记、周记与成长判断', icon: BookOpen, keywords: '日记 周记 月记 成长 每日三十 确认 备份' },
+    { id: 'pet', label: '桌宠', description: '形象、语音、观察与行为', icon: Cat, keywords: '桌宠 Live2D 语音 屏幕 观察 置顶 穿透 气泡 音色' },
+  ],
+}, {
+  label: '连接',
+  items: [
     { id: 'models', label: '模型与 API', description: '模型、供应商与自动选择', icon: Bot, keywords: '模型 API 供应商 密钥 价格 思考 自动选择' },
-    { id: 'dependencies', label: '环境与模型', description: '检查本机依赖并一键安装', icon: Wrench, keywords: '环境 依赖 模型 安装 下载 GPT-SoVITS NapCat Ollama 视觉 whisper 语音 检查' },
-    { id: 'qq', label: '微信与QQ', description: '手机聊天、后台任务与成果回传', icon: Wifi, keywords: '微信 WeChat iLink QQ NapCat OneBot 登录 二维码 私聊 群聊 语音 手机 任务' },
-    { id: 'pet', label: '桌宠', description: '形象、语音、观察与行为', icon: Gamepad2, keywords: '桌宠 Live2D 语音 屏幕 观察 置顶 穿透 气泡 音色' },
-    { id: 'data', label: '数据与隐私', description: '本地数据、导出与隐私边界', icon: Archive, keywords: '数据 隐私 导出 清理 数据库 日记 记忆' },
-    { id: 'advanced', label: '高级设置', description: '服务、路径、日志与诊断', icon: Activity, keywords: '高级 服务 端口 日志 路径 诊断 恢复默认' },
+    { id: 'qq', label: '微信与 QQ', description: '手机聊天、后台任务与成果回传', icon: Wifi, keywords: '微信 WeChat iLink QQ NapCat OneBot 登录 二维码 私聊 群聊 语音 手机 任务' },
+    { id: 'dependencies', label: '本机环境', description: '检查本机依赖并一键安装', icon: Wrench, keywords: '环境 依赖 模型 安装 下载 GPT-SoVITS NapCat Ollama 视觉 whisper 语音 检查' },
+  ],
+}, {
+  label: '系统',
+  items: [
+    { id: 'data', label: '数据与隐私', description: '本地数据、导出与隐私边界', icon: Database, keywords: '数据 隐私 导出 清理 数据库 日记 记忆 备份' },
+    { id: 'advanced', label: '高级', description: '服务、路径、日志与诊断', icon: Settings2, keywords: '高级 服务 端口 日志 路径 诊断 恢复默认' },
   ],
 }]
 const recordViews = ['diaries', 'stats', 'memory']
@@ -1342,12 +1365,13 @@ const companionSettingKeys = {
     'pet_call_min_speech_ms', 'pet_call_max_turn_seconds',
     'voice_enabled', 'voice_startup_enabled', 'voice_idle_timeout_seconds', 'voice_engine', 'local_voice_runtime', 'voice_volume', 'voice_streaming_enabled', 'speak_proactive',
     'default_voice_profile_id', 'voice_profiles',
-    'indextts2_url', 'indextts2_ref_audio',
+    'indextts2_url', 'indextts2_ref_audio', 'indextts2_version', 'indextts2_language',
+    'aniflive_url', 'aniflive_model', 'aniflive_voice_profile', 'gpt_sovits_v5_url',
     'cloud_tts_api_key', 'cloud_tts_app_id', 'cloud_tts_speaker', 'cloud_tts_speech_rate',
     'pet_speech_language', 'qq_voice_mode', 'gpt_sovits_url', 'gpt_sovits_text_language',
     'gpt_sovits_translate_to_japanese', 'screen_ai_enabled', 'screen_audio_enabled',
     'screen_audio_model', 'screen_audio_language', 'screen_audio_chunk_seconds', 'screen_vision_route',
-    'screen_vision_model_id', 'screen_direct_voice_enabled', 'screen_change_threshold',
+    'screen_vision_model_id', 'screen_watch_mode', 'screen_watch_pace', 'screen_direct_voice_enabled', 'screen_change_threshold',
     'screen_analysis_interval_seconds', 'screen_request_timeout_seconds', 'screen_voice_cooldown_seconds',
     'screen_minimum_importance', 'screen_daily_cost_limit_yuan', 'speak_screen_observations',
     'speak_game_observations',
@@ -1355,14 +1379,15 @@ const companionSettingKeys = {
   voice: [
     'voice_enabled', 'voice_startup_enabled', 'voice_idle_timeout_seconds', 'voice_engine', 'local_voice_runtime', 'voice_volume', 'voice_streaming_enabled', 'speak_proactive',
     'default_voice_profile_id', 'voice_profiles',
-    'indextts2_url', 'indextts2_ref_audio',
+    'indextts2_url', 'indextts2_ref_audio', 'indextts2_version', 'indextts2_language',
+    'aniflive_url', 'aniflive_model', 'aniflive_voice_profile', 'gpt_sovits_v5_url',
     'pet_speech_language', 'speech_translation_model_id',
     'qq_voice_mode', 'gpt_sovits_url', 'gpt_sovits_text_language', 'gpt_sovits_translate_to_japanese',
     'cloud_tts_api_key', 'cloud_tts_app_id', 'cloud_tts_speaker', 'cloud_tts_speech_rate',
   ],
   observation: [
     'screen_ai_enabled', 'screen_audio_enabled', 'screen_audio_model', 'screen_audio_language',
-    'screen_audio_chunk_seconds', 'screen_vision_route', 'screen_vision_model_id', 'screen_direct_voice_enabled',
+    'screen_audio_chunk_seconds', 'screen_vision_route', 'screen_vision_model_id', 'screen_watch_mode', 'screen_watch_pace', 'screen_direct_voice_enabled',
     'screen_change_threshold', 'screen_analysis_interval_seconds', 'screen_request_timeout_seconds',
     'screen_voice_cooldown_seconds',
     'screen_minimum_importance', 'screen_daily_cost_limit_yuan', 'speak_screen_observations',
@@ -1491,11 +1516,11 @@ const contextRingStyle = computed(() => ({ '--context-percent': `${contextPercen
 const contextUsageLabel = computed(() => contextUsagePresentation(contextUsage.value).label)
 const selectedConversation = computed(() => conversations.value.find((item) => item.id === selectedConversationId.value) || null)
 const chatSubtitle = computed(() => {
-  if (isAgentWorkspace) return '独立 Agent 工作对话 · 模型负责规划，运行层负责验证'
-  if (selectedConversation.value?.kind === 'qq') return `${logicalDate.value} · 与QQ共享上下文`
-  if (selectedConversation.value?.kind === 'wechat') return `${logicalDate.value} · 与微信共享聊天记录`
-  if (selectedConversation.value?.kind === 'pet') return `${logicalDate.value} · 桌宠独立上下文 · 自动语音回复`
-  return `${logicalDate.value} · 独立桌面对话`
+  if (isAgentWorkspace) return '独立 Agent 工作对话，模型负责规划，运行层负责验证'
+  if (selectedConversation.value?.kind === 'qq') return `${logicalDate.value}，与QQ共享上下文`
+  if (selectedConversation.value?.kind === 'wechat') return `${logicalDate.value}，与微信共享聊天记录`
+  if (selectedConversation.value?.kind === 'pet') return `${logicalDate.value}，桌宠独立上下文，自动语音回复`
+  return `${logicalDate.value}，独立桌面对话`
 })
 const qqStatus = computed(() => bootstrap.value?.qq || {})
 const qqConnected = computed(() => Boolean(bootstrap.value?.qq?.connected))
@@ -1557,7 +1582,7 @@ const relationshipDistanceLabel = computed(() => {
   const source = String(memoryData.value?.profile?.preferences?.relationship_distance || '').trim()
   const knownRelations = ['青梅竹马', '小女友', '女朋友', '恋人', '搭档', '朋友', '家人']
   const matched = knownRelations.filter((label) => source.includes(label))
-  return [...new Set(matched)].slice(0, 2).join(' · ') || compactProfileText(source, '自然亲近', 12)
+  return [...new Set(matched)].slice(0, 2).join('，') || compactProfileText(source, '自然亲近', 12)
 })
 const activeViewSubtitle = computed(() => ({
   home: '回到我们今天的生活',
@@ -1848,6 +1873,8 @@ provide('mio-settings-page', reactive({
   runtimeSettingsDraft,
   runtimeSettingsReady,
   reloadRuntimeSettings,
+  loadRuntimeSettings,
+  openOnboardingTutorial,
   webSearchTestBusy,
   webSearchTestQuery,
   webSearchTestResult,
@@ -1882,6 +1909,7 @@ provide('mio-settings-page', reactive({
   togglePrivacyPause,
   uploadCompanionSpriteSheet,
   uploadVoiceReference,
+  uploadVoiceWeight,
   uploadProfileAvatar,
   uploadAppearanceImage,
   userAvatarCustom,
@@ -1897,6 +1925,7 @@ provide('mio-companion-page', reactive({
   controlCompanion,
   controlLocalVision,
   controlObservation,
+  observationStarting,
   controlVoiceRuntime,
   controlVoiceTraining,
   formatRealTime,
@@ -2406,13 +2435,15 @@ async function setPetChatWindowState(open) {
   </main>
 
   <OnboardingPage
-    v-else-if="bootstrap && bootstrap.onboarding?.completed === false"
-    :onboarding="bootstrap.onboarding"
+    v-else-if="onboardingTutorialOpen || (bootstrap && bootstrap.onboarding?.completed === false)"
+    :onboarding="bootstrap?.onboarding"
+    :review="onboardingTutorialOpen"
     :environment="onboardingEnvironment"
     :environment-busy="onboardingEnvironmentBusy"
     :busy="onboardingBusy"
     :error="onboardingError"
     @complete="completeOnboarding"
+    @close="closeOnboardingTutorial"
     @refresh-environment="refreshOnboardingEnvironment"
   />
 
@@ -2425,7 +2456,7 @@ async function setPetChatWindowState(open) {
         <component :is="leftSidebarVisible ? PanelLeftClose : PanelLeftOpen" :size="17" />
       </button>
       <div class="window-drag-zone pywebview-drag-region" @pointerdown.left="beginDesktopWindowDrag" @mousedown.left="blockStandardWindowDrag" @dblclick="controlDesktopWindow('maximize')">
-        <strong>{{ isAgentWorkspace ? `Mio Agent · ${agentNavItems.find((item) => item.id === activeView)?.label || '工作台'}` : activeView === 'settings' ? '设置' : navItems.find((item) => item.id === activeView)?.label }}</strong>
+        <strong>{{ isAgentWorkspace ? `Mio Agent，${agentNavItems.find((item) => item.id === activeView)?.label || '工作台'}` : activeView === 'settings' ? '设置' : navItems.find((item) => item.id === activeView)?.label }}</strong>
       </div>
       <button v-if="activeView !== 'settings'" class="workspace-title-switch" type="button" :title="isAgentWorkspace ? '返回 Mio 主窗口' : '打开 Mio Agent'" @click="switchDesktopWorkspace(isAgentWorkspace ? 'main' : 'agent')">
         <ArrowLeft v-if="isAgentWorkspace" :size="15" /><Bot v-else :size="15" />
@@ -2524,11 +2555,11 @@ async function setPetChatWindowState(open) {
       <section class="rail-services">
         <button type="button" title="QQ通道" @click="openSettingsSection('qq')"><component :is="qqConnected ? Wifi : WifiOff" :size="17" /><span><strong>QQ</strong><small>{{ qqConnected ? '在线' : '离线' }}</small></span><i :class="{ online: qqConnected }" /></button>
         <button type="button" title="语音服务" @click="openSettingsSection('pet')"><Volume2 :size="17" /><span><strong>语音</strong><small>{{ companionStatus.voice_runtime?.service_running ? '在线' : '未启动' }}</small></span><i :class="{ online: companionStatus.voice_runtime?.service_running }" /></button>
-        <button type="button" title="桌宠状态" @click="activeView = 'companion'"><Gamepad2 :size="17" /><span><strong>桌宠</strong><small>{{ petStartupPresentation(companionStatus.pet, companionBusy).label }}</small></span><i :class="{ online: petStartupPresentation(companionStatus.pet, companionBusy).ready }" /></button>
+        <button type="button" title="桌宠状态" @click="activeView = 'companion'"><Cat :size="17" /><span><strong>桌宠</strong><small>{{ petStartupPresentation(companionStatus.pet, companionBusy).label }}</small></span><i :class="{ online: petStartupPresentation(companionStatus.pet, companionBusy).ready }" /></button>
         <button type="button" title="屏幕观察" @click="openCompanionSection('screen-panel')"><Monitor :size="17" /><span><strong>观察</strong><small>{{ companionStatus.screen?.running ? (companionStatus.screen.title || '进行中') : '未启动' }}</small></span><i :class="{ online: companionStatus.screen?.running }" /></button>
       </section>
       <button class="rail-token" type="button" title="查看 Token 统计" @click="openTokenUsagePanel"><Activity :size="17" /><span><small>今日 Token</small><strong>{{ todayTokenUsage.toLocaleString('zh-CN') }}</strong></span></button>
-      <section v-if="latestAssistantNotice" class="rail-notice"><MessageSquareText :size="17" /><span><small>最近消息 · {{ formatShortTime(latestAssistantNotice.created_at) }}</small><p>{{ latestAssistantNotice.content }}</p></span></section>
+      <section v-if="latestAssistantNotice" class="rail-notice"><MessageSquareText :size="17" /><span><small>最近消息，{{ formatShortTime(latestAssistantNotice.created_at) }}</small><p>{{ latestAssistantNotice.content }}</p></span></section>
       </template>
     </aside>
 
@@ -2554,14 +2585,14 @@ async function setPetChatWindowState(open) {
         <div v-else-if="tokenUsageError" class="token-usage-error"><p role="alert">使用记录读取失败：{{ tokenUsageError }}</p><button type="button" @click="openTokenUsagePanel">重新读取</button></div>
         <template v-else>
           <div class="token-summary-grid">
-            <article><span>今日合计</span><strong>{{ formatTokenCount(tokenUsageData.today?.total_tokens) }}</strong><small>对话 {{ formatTokenCount(tokenUsageData.today?.chat_tokens) }} · 观察 {{ formatTokenCount(tokenUsageData.today?.screen_tokens) }}</small></article>
-            <article><span>累计合计</span><strong>{{ formatTokenCount(tokenUsageData.total?.total_tokens ?? totalTokenUsage) }}</strong><small>对话 {{ formatTokenCount(tokenUsageData.total?.chat_tokens) }} · 观察 {{ formatTokenCount(tokenUsageData.total?.screen_tokens) }}</small></article>
+            <article><span>今日合计</span><strong>{{ formatTokenCount(tokenUsageData.today?.total_tokens) }}</strong><small>对话 {{ formatTokenCount(tokenUsageData.today?.chat_tokens) }}，观察 {{ formatTokenCount(tokenUsageData.today?.screen_tokens) }}</small></article>
+            <article><span>累计合计</span><strong>{{ formatTokenCount(tokenUsageData.total?.total_tokens ?? totalTokenUsage) }}</strong><small>对话 {{ formatTokenCount(tokenUsageData.total?.chat_tokens) }}，观察 {{ formatTokenCount(tokenUsageData.total?.screen_tokens) }}</small></article>
           </div>
           <div class="token-breakdown">
             <span><small>今日输入</small><b>{{ formatTokenCount(tokenUsageData.today?.prompt_tokens) }}</b></span>
             <span><small>今日输出</small><b>{{ formatTokenCount(tokenUsageData.today?.completion_tokens) }}</b></span>
             <span><small>今日推理</small><b>{{ formatTokenCount(tokenUsageData.today?.reasoning_tokens) }}</b></span>
-            <span :title="messageTokenUsageTitle(tokenUsageData.today)"><small>缓存输入 · {{ messageCacheRateLabel(tokenUsageData.today) }}</small><b>{{ formatTokenCount(tokenUsageData.today?.cached_prompt_tokens) }}</b></span>
+            <span :title="messageTokenUsageTitle(tokenUsageData.today)"><small>缓存输入，{{ messageCacheRateLabel(tokenUsageData.today) }}</small><b>{{ formatTokenCount(tokenUsageData.today?.cached_prompt_tokens) }}</b></span>
           </div>
           <div class="token-day-list" role="region" aria-label="每日 Token 用量" tabindex="0">
             <header><span>日期</span><span>对话</span><span>观察</span><span>合计</span></header>
@@ -2608,7 +2639,7 @@ async function setPetChatWindowState(open) {
         <div v-if="discoveredModels.length" class="discovered-model-list">
           <div v-for="model in discoveredModels" :key="model.model" class="discovered-model">
             <input v-model="model.selected" type="checkbox" :disabled="model.api_supported === false" />
-            <span><strong>{{ model.display_name }}</strong><small>{{ model.model }}{{ model.api_supported === false ? ' · /messages 暂不支持' : '' }}</small></span>
+            <span><strong>{{ model.display_name }}</strong><small>{{ model.model }}{{ model.api_supported === false ? '，/messages 暂不支持' : '' }}</small></span>
             <em>{{ pricingSourceLabel(model.pricing_source) }}</em>
             <div v-if="model.selected" class="discovered-pricing">
               <label>缓存<input v-model.number="model.cached_input_price_cny_per_million" type="number" min="0" step="0.001" /></label>

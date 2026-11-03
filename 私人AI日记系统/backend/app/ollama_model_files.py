@@ -14,7 +14,7 @@ def manifest_complete(manifest: Path, models_root: Path) -> bool:
             if not isinstance(item, dict):
                 return False
             digest = str(item.get("digest") or "")
-            if not re.fullmatch(r"sha256:[a-zA-Z0-9]+", digest):
+            if not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest):
                 return False
             expected_size = int(item.get("size") or 0)
             blob = models_root / "blobs" / digest.replace(":", "-")

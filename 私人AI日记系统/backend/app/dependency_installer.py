@@ -84,13 +84,13 @@ _DEPENDENCY_DEFS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "ollama_vision",
-        "label": "本地视觉（Ollama + Qwen2.5-VL）",
+        "label": "本地视觉运行环境与模型",
         "kind": "script",
         "script": "install-ollama-vision.ps1",
         "size_label": "运行器约 1.36 GiB，视觉模型约 3 GB",
         "what": "让 Mio 在你自己电脑上看懂屏幕画面，不占云端额度。",
         "missing_effect": "本地视觉不可用时不会自动把整屏画面转发云端；聊天不受影响。",
-        "how": "缺少文件时安装；文件完整后启动并验证。使用 Mio 独立服务和模型目录。",
+        "how": "缺少文件时安装；文件完整后启动并验证。模型中心可分别下载、切换和删除视觉模型，升级保留原选择。使用 Mio 独立服务和模型目录。",
         "manual_url": "https://ollama.com/download/windows",
         "manual_label": "手动安装：Ollama 官网",
     },
@@ -204,6 +204,9 @@ def _progress_payload(progress: dict[str, Any], *, installing: bool) -> dict[str
         "download_percent": int(progress.get("download_percent") or 0),
         "target_path": str(progress.get("target_path") or ""),
         "speed_mb_s": float(progress.get("speed_mb_s") or 0),
+        "can_pause": bool(installing and progress.get("can_pause")),
+        "can_resume": bool((installing and progress.get("can_resume")) or (not installing and progress.get("stage") in {"paused", "cancelled", "error"})),
+        "can_cancel": bool(installing and progress.get("can_cancel")),
     }
 
 
@@ -367,14 +370,14 @@ def list_dependencies() -> list[dict[str, Any]]:
         entry.update(availability(str(dep['id'])))
         if dep['id'] == 'whisper' and not entry['can_uninstall'] and not entry.get('uninstall_blocker') and entry['status'] in {'ready', 'unverified', 'degraded'}:
             entry['uninstall_blocker'] = '当前复用外部语音识别环境；Mio 没有可卸载的专用模型缓存。请到原安装位置管理，避免影响其他程序。'
-        detected_ready = entry["status"] in {"ready", "configured"} or (
-            dep["id"] == "ollama_vision" and entry["status"] in {"installed", "unverified", "degraded"}
-        )
-        entry["installing"] = False if detected_ready else _install_running(dep["id"])
         progress = _read_status(dep["id"])
-        if entry["installing"]:
-            entry["progress"] = _progress_payload(progress, installing=True)
-        elif progress.get("done") and progress.get("error") and entry["status"] != "ready":
+        detected_ready = entry["status"] in {"ready", "configured", "installed"}
+        # Repair downloads remain controllable; completed/legacy receipts cannot revive them.
+        entry["installing"] = bool(_install_running(dep["id"]) and not progress.get("done")
+                                   and (not detected_ready or progress.get("install_id")))
+        if entry["installing"] or progress.get("stage") in {"paused", "cancelled", "error"}:
+            entry["progress"] = _progress_payload(progress, installing=entry["installing"])
+        if progress.get("done") and progress.get("error") and entry["status"] != "ready":
             entry["last_error"] = str(progress.get("error") or "")
         if (_status_dir() / f"{dep['id']}-install.log").is_file():
             entry["log_path"] = str(_status_dir() / f"{dep['id']}-install.log")
@@ -533,7 +536,7 @@ def _ensure_install_finalized(dep_id: str) -> dict[str, Any]:
 
 def _finalize_install_locked(dep_id: str) -> dict[str, Any]:
     status = _read_status(dep_id)
-    if dep_id != "gpt_sovits" or not status.get("done") or status.get("error"):
+    if dep_id != "gpt_sovits" or not status.get("done") or status.get("error") or status.get("stage") == "cancelled":
         return status
     if status.get("finalized"):
         return status
@@ -580,6 +583,9 @@ def _finalize_install_locked(dep_id: str) -> dict[str, Any]:
 def _watch_install(dep_id: str, process: subprocess.Popen[Any]) -> None:
     try:
         exit_code = process.wait()
+        progress = _read_status(dep_id)
+        if progress.get("stage") == "cancelled":
+            return
         if dep_id == "ollama_vision" and isinstance(exit_code, int):
             _finalize_vision_download(exit_code)
         progress = _read_status(dep_id)
@@ -601,7 +607,7 @@ def _finalize_vision_download(exit_code: int | None = None) -> dict[str, Any]:
     from . import local_vision_service
 
     progress = _read_status("ollama_vision")
-    if not progress or (progress.get("done") and progress.get("error")):
+    if not progress or progress.get("stage") == "cancelled" or (progress.get("done") and progress.get("error")):
         return progress
     installed = all(local_vision_service.installation_status().values())
     if installed and exit_code in {None, 0}:
@@ -684,6 +690,7 @@ def _install_dependency(dep_id: str, package_path: str = "") -> dict[str, Any]:
     env["MIO_LOCAL_VISION_DIR"] = str(settings.local_vision_dir.resolve())
     env["MIO_NAPCAT_DIR"] = str(settings.napcat_dir.resolve())
     env["MIO_STATUS_FILE"] = str(status_path.resolve())
+    env["MIO_DOWNLOAD_CONTROL_FILE"] = str(status_path.with_suffix(".control.json").resolve())
     env["MIO_INSTALL_ID"] = initial_status["install_id"]
     env["MIO_INSTALL_STARTED_AT"] = initial_status["started_at"]
     if dep_id in {"genie_runtime", "gpt_sovits"}:

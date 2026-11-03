@@ -14,6 +14,8 @@ from PIL import Image, ImageGrab
 from .config import settings
 from .screen_capture import create_compatible_capture, create_native_capture, create_obs_capture
 from .screen_frame_processor import calculate_change_metrics
+from .screen_watch_pipeline import AdaptiveScreenWatch
+from .window_capture import WindowCapture
 
 
 class WindowObserver:
@@ -21,6 +23,9 @@ class WindowObserver:
 
     def __init__(self, *, prefer_native: bool = True) -> None:
         self._lock = threading.Lock()
+        self._capture_epoch = 0
+        self._watch_mode = "single"
+        self._watch = AdaptiveScreenWatch()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._desired_running = False
@@ -49,6 +54,8 @@ class WindowObserver:
         self._capture_backend_error = ""
         self._prefer_native = prefer_native
         self._native_capture = None
+        self._window_capture = None
+        self._window_capture_lock = threading.Lock()
         self._native_capture_failed = False
         self._native_capture_retry_at = 0.0
         self._obs_capture = None
@@ -113,6 +120,8 @@ class WindowObserver:
         if match is None:
             raise ValueError("没有找到这个窗口，请刷新窗口列表后重试。")
         with self._lock:
+            self._capture_epoch += 1
+            self._watch.reset()
             self._hwnd = int(hwnd)
             self._title = str(match["title"])
             self._mode = "window"
@@ -135,6 +144,8 @@ class WindowObserver:
     def select_screen(self, scope: str = "primary") -> dict[str, Any]:
         normalized_scope = "all" if scope == "all" else "primary"
         with self._lock:
+            self._capture_epoch += 1
+            self._watch.reset()
             self._hwnd = 0
             self._mode = "screen"
             self._screen_scope = normalized_scope
@@ -164,6 +175,17 @@ class WindowObserver:
         if width < 2 or height < 2:
             raise RuntimeError("所选窗口当前没有可截图的画面。")
         return origin.x, origin.y, origin.x + width, origin.y + height
+
+    @staticmethod
+    def _window_title(hwnd: int) -> str:
+        if os.name != "nt":
+            return ""
+        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return ""
+        value = ctypes.create_unicode_buffer(length + 1)
+        ctypes.windll.user32.GetWindowTextW(hwnd, value, length + 1)
+        return value.value.strip()
 
     @staticmethod
     def _cursor_metadata(
@@ -205,20 +227,35 @@ class WindowObserver:
             hwnd = self._hwnd
             mode = self._mode
             screen_scope = self._screen_scope
+            capture_epoch = self._capture_epoch
         now = time.monotonic()
         if mode == "window" and self._native_capture_failed and now >= self._native_capture_retry_at:
             self._native_capture_failed = False
-        if mode == "window" and self._native_capture is None and self._prefer_native and not self._native_capture_failed:
+        isolated_window = mode == "window" and os.name == "nt" and self._prefer_native
+        if mode == "window" and not isolated_window and self._native_capture is None and self._prefer_native and not self._native_capture_failed:
             self._native_capture = create_native_capture()
         if mode == "window" and not hwnd:
             raise ValueError("请先选择一个窗口。")
         try:
             native_region = self._client_bbox(hwnd) if mode == "window" else None
+            current_title = self._window_title(hwnd) if mode == "window" else ""
             cursor = self._cursor_metadata(native_region)
             image: Image.Image | None = None
             backend = ""
             obs_error = ""
-            if self._capture_preference == "obs":
+            if isolated_window:
+                # A rectangle of the desktop also contains Mio and any covering
+                # apps. Never silently substitute it for the selected window.
+                with self._window_capture_lock:
+                    if self._window_capture is None or self._window_capture.hwnd != hwnd:
+                        if self._window_capture is not None:
+                            self._window_capture.release()
+                        self._window_capture = WindowCapture(hwnd)
+                    image = self._window_capture.capture()
+                backend = "wgc (独立窗口)"
+                with self._lock:
+                    self._capture_backend_error = ""
+            if image is None and self._capture_preference == "obs":
                 try:
                     image = self._capture_with_obs(
                         region=native_region,
@@ -309,6 +346,11 @@ class WindowObserver:
                                     f"ImageGrab：{imagegrab_exc}；"
                                     f"DXGI：{self._capture_backend_error or '不可用'}"
                                 )
+                            with self._lock:
+                                if capture_epoch == self._capture_epoch:
+                                    self._capture_valid = False
+                                    self._analysis_bytes = None
+                                    self._watch.reset()
                             return self.status()
             elif image is None:
                 image = ImageGrab.grab(bbox=native_region, all_screens=True).convert("RGB")
@@ -320,15 +362,19 @@ class WindowObserver:
             thumbnail = image.copy()
             thumbnail.thumbnail((192, 108))
             with self._lock:
+                if capture_epoch != self._capture_epoch:
+                    return {}
                 change = calculate_change_metrics(self._last_thumbnail, image)
                 self._last_thumbnail = thumbnail
                 self._change_percent = change.effective_percent
                 self._global_change_percent = change.global_percent
                 self._local_change_percent = change.local_percent
-                self._captured_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+                self._captured_at = image.info.get("mio_captured_at") or time.strftime("%Y-%m-%dT%H:%M:%S")
                 self._last_error = ""
                 self._capture_backend = backend
                 self._cursor = cursor
+                if current_title:
+                    self._title = current_title
             analysis_image = image.copy()
             analysis_image.thumbnail((1280, 720))
             analysis_buffer = BytesIO()
@@ -338,6 +384,8 @@ class WindowObserver:
             preview_buffer = BytesIO()
             preview_image.save(preview_buffer, format="JPEG", quality=68, optimize=True)
             with self._lock:
+                if capture_epoch != self._capture_epoch:
+                    return {}
                 self._preview_bytes = preview_buffer.getvalue()
                 self._analysis_bytes = analysis_buffer.getvalue()
                 self._analysis_change_percent = max(self._analysis_change_percent, self._change_percent)
@@ -350,11 +398,29 @@ class WindowObserver:
                     self._local_change_percent,
                 )
                 self._frame_id += 1
-                self._last_frame_monotonic = time.monotonic()
+                self._last_frame_monotonic = image.info.get("mio_capture_monotonic", time.monotonic())
                 self._capture_valid = True
+                if self._watch_mode == "adaptive":
+                    self._watch.push({
+                        "frame_id": self._frame_id,
+                        "content": self._analysis_bytes,
+                        "change_percent": self._analysis_change_percent,
+                        "global_change_percent": self._analysis_global_change_percent,
+                        "local_change_percent": self._analysis_local_change_percent,
+                        "captured_at": self._captured_at,
+                        "captured_monotonic": self._last_frame_monotonic,
+                        "title": self._title,
+                        "mode": self._mode,
+                        "hwnd": self._hwnd,
+                        "screen_scope": self._screen_scope,
+                        "cursor": dict(self._cursor),
+                    }, now=self._last_frame_monotonic)
             cleanup_legacy_preview()
         except Exception as exc:
             with self._lock:
+                if capture_epoch != self._capture_epoch:
+                    return {}
+                self._watch.reset()
                 # Invalidate any pending frame from before the failure.  Keep
                 # the last preview for diagnostics, but never expose it via
                 # claim_analysis_frame().
@@ -366,6 +432,17 @@ class WindowObserver:
                 self._last_error = str(exc)
             raise
         return self.status()
+
+    def configure_watch(self, mode: str = "single", pace: str = "normal") -> dict[str, Any]:
+        if mode not in {"single", "adaptive"} or pace not in {"calm", "normal", "dense"}:
+            raise ValueError("不支持的观察模式或节奏。")
+        with self._lock:
+            if mode != self._watch_mode:
+                self._capture_epoch += 1
+                self._watch.reset()
+                self._watch_mode = mode
+            self._watch.configure(pace)
+            return {**self._watch.status(), "mode": self._watch_mode}
 
     def start(self, interval_ms: int = 1000) -> dict[str, Any]:
         with self._lock:
@@ -388,12 +465,16 @@ class WindowObserver:
                 time.sleep(1)
 
     def stop(self) -> dict[str, Any]:
+        with self._lock:
+            self._capture_epoch += 1
+            self._desired_running = False
         self._stop.set()
         thread = self._thread
         if thread is not None:
             thread.join(timeout=2)
         with self._lock:
             self._desired_running = False
+            self._watch.reset()
             self._thread = None
             self._preview_bytes = None
             self._analysis_bytes = None
@@ -407,6 +488,10 @@ class WindowObserver:
             if capture is not None:
                 capture.release()
                 setattr(self, attr, None)
+        with self._window_capture_lock:
+            if self._window_capture is not None:
+                self._window_capture.release()
+                self._window_capture = None
         self._screen_capture_failed = False
         self._screen_capture_retry_at = 0.0
         self._native_capture_failed = False
@@ -418,7 +503,7 @@ class WindowObserver:
         with self._lock:
             return self._preview_bytes
 
-    def claim_analysis_frame(self, after_frame_id: int = 0) -> dict[str, Any] | None:
+    def claim_analysis_frame(self, after_frame_id: int = 0, *, force: bool = False) -> dict[str, Any] | None:
         with self._lock:
             if (
                 not self._capture_valid
@@ -426,6 +511,19 @@ class WindowObserver:
                 or self._frame_id <= int(after_frame_id)
             ):
                 return None
+            if self._watch_mode == "adaptive":
+                frame = self._watch.take(now=time.monotonic(), force=force)
+                if frame is None or int(frame.get("frame_id") or 0) <= int(after_frame_id):
+                    return None
+                captured = frame.pop("captured_monotonic", None)
+                frame["frame_age_seconds"] = (
+                    round(max(0.0, time.monotonic() - captured), 3)
+                    if captured is not None else None
+                )
+                self._analysis_change_percent = 0.0
+                self._analysis_global_change_percent = 0.0
+                self._analysis_local_change_percent = 0.0
+                return frame
             frame_age_seconds = (
                 round(max(0.0, time.monotonic() - self._last_frame_monotonic), 3)
                 if self._last_frame_monotonic is not None
@@ -459,6 +557,8 @@ class WindowObserver:
             )
             return {
                 "running": running,
+                "capture_epoch": self._capture_epoch,
+                "watch": {**self._watch.status(), "mode": self._watch_mode},
                 "desired_running": self._desired_running,
                 "mode": self._mode,
                 "screen_scope": self._screen_scope,

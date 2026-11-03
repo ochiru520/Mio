@@ -4,7 +4,9 @@ Importing the module does not start workers or inspect user data.
 """
 from __future__ import annotations
 import asyncio
-from . import call_session_service, companion_service, screen_observation_service, system_audio_service
+import threading
+from contextlib import contextmanager
+from . import call_session_service, companion_service, pet_event_service, screen_observation_service, system_audio_service
 
 
 _pet_call_started_observer = False
@@ -14,6 +16,36 @@ _pet_call_previous_audio_model = ""
 _pet_call_previous_audio_engine = ""
 
 _pet_call_resource_owner = ""
+
+_observation_start_lock = threading.RLock()
+_observation_start_generation = 0
+
+
+class ObservationStartCancelled(RuntimeError):
+    """An observation start was superseded or stopped while preparing resources."""
+
+
+def begin_observation_start() -> int:
+    """Reserve a start before awaiting model readiness, without starting capture."""
+    global _observation_start_generation
+    with _observation_start_lock:
+        _observation_start_generation += 1
+        return _observation_start_generation
+
+
+def observation_ticket() -> int:
+    """Read the current session without superseding a running or pending start."""
+    with _observation_start_lock:
+        return _observation_start_generation
+
+
+@contextmanager
+def observation_operation(ticket: int):
+    """Keep manual capture setup/cleanup atomic with observation stop."""
+    with _observation_start_lock:
+        if ticket != _observation_start_generation:
+            raise ObservationStartCancelled("本次陪看操作已取消，请重新操作。")
+        yield
 
 CALL_ASR_MODEL = "large-v3-turbo"
 
@@ -85,31 +117,42 @@ def start_observation_runtime(
     capture_only: bool,
     hwnd: int | None = None,
     screen_scope: str = "",
+    start_ticket: int | None = None,
 ) -> dict[str, object]:
-    screen_observation_service.set_capture_only(capture_only)
-    observer = companion_service.window_observer
-    if screen_scope:
-        observer.select_screen(screen_scope)
-    elif hwnd:
-        observer.select(hwnd)
-    result = observer.start(interval_ms)
-    if not capture_only:
-        companion_service.save_config({"screen_audio_enabled": True})
-        if not _pet_call_resource_owner:
-            system_audio_service.start(companion_service.load_config())
-        else:
-            ensure_call_asr_ready()
-    return result
+    with _observation_start_lock:
+        if start_ticket is not None and start_ticket != _observation_start_generation:
+            raise ObservationStartCancelled("本次陪看启动已取消，请重新点击开始。")
+        screen_observation_service.set_capture_only(capture_only)
+        observer = companion_service.window_observer
+        config = companion_service.load_config()
+        observer.configure_watch(str(config.get("screen_watch_mode") or "single"),
+                                 str(config.get("screen_watch_pace") or "normal"))
+        if screen_scope:
+            observer.select_screen(screen_scope)
+        elif hwnd:
+            observer.select(hwnd)
+        result = observer.start(interval_ms)
+        if not capture_only:
+            if _pet_call_resource_owner:
+                ensure_call_asr_ready()
+            elif config.get("screen_audio_enabled", True):
+                system_audio_service.start(config)
+        return result
 
 def stop_observation_runtime() -> dict[str, object]:
-    result = companion_service.window_observer.stop()
-    screen_observation_service.end_session()
-    companion_service.save_config({"screen_audio_enabled": False})
-    if not _pet_call_resource_owner:
-        system_audio_service.stop()
-    else:
-        ensure_call_asr_ready()
-    return result
+    global _observation_start_generation
+    with _observation_start_lock:
+        _observation_start_generation += 1
+        result = companion_service.window_observer.stop()
+        screen_observation_service.end_session()
+        sources = {"screen", "game", "desktop_pet_wake"}
+        companion_service.cancel_speech_playback(sources=sources)
+        pet_event_service.publish("speech_interrupt", {"sources": sorted(sources), "reason": "observation_stopped"})
+        if not _pet_call_resource_owner:
+            system_audio_service.stop()
+        else:
+            ensure_call_asr_ready()
+        return result
 
 def prepare_call_runtime(call_session_id: str) -> dict[str, object]:
     global _pet_call_started_observer, _pet_call_previous_audio_model
@@ -128,6 +171,9 @@ def prepare_call_runtime(call_session_id: str) -> dict[str, object]:
     observer_was_running = bool(companion_service.window_observer.status().get("running"))
     _pet_call_started_observer = not observer_was_running
     if _pet_call_started_observer:
+        config = companion_service.load_config()
+        companion_service.window_observer.configure_watch(str(config.get("screen_watch_mode") or "single"),
+                                                         str(config.get("screen_watch_pace") or "normal"))
         companion_service.window_observer.select_screen("primary")
         companion_service.window_observer.start(1000)
         screen_observation_service.set_capture_only(False)

@@ -7,7 +7,8 @@ const ref = value => ({ value })
 let now = 1000
 globalThis.performance = { now: () => now }
 let cleared = []
-globalThis.window = { setInterval: () => 71, clearInterval: id => cleared.push(id) }
+let monitor = null
+globalThis.window = { setInterval: callback => { monitor=callback; return 71 }, clearInterval: id => cleared.push(id) }
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve=yes; reject=no }); return {promise, resolve, reject} }
 function fixture(state='speaking') {
  const calls=[]
@@ -43,11 +44,126 @@ test('生产短强峰之后弱帧清空360ms候选，不能跨间隙累加打断
  frame(api,0.09,1000);frame(api,0.09,1200);frame(api,0.02,1240);frame(api,0.09,1400);frame(api,0.09,1720)
  assert.equal(calls.length,0);assert.equal(d.petCallBargeInStartedAt,1400)
 })
-test('生产thinking/waiting_voice/connecting强输入不自听、不提交',()=>{
+test('连接中不采集；thinking/waiting_voice弱回声不打断，强语音360ms可打断',async()=>{
  for(const state of ['thinking','waiting_voice','connecting']){
   const {api,d,calls}=fixture(state)
-  for(let t=1000;t<3000;t+=40)frame(api,0.2,t)
-  assert.equal(calls.length,0);assert.equal(d.petCallFrames.length,0);assert.equal(d.petCallPreRoll.length,0)
+  for(let t=1000;t<2000;t+=40)frame(api,0.025,t)
+  assert.equal(calls.length,0);assert.equal(d.petCallFrames.length,0)
+  for(let t=2100;t<=2500;t+=40)frame(api,0.2,t)
+  assert.equal(calls.filter(x=>x.url.endsWith('/interrupt')).length,state==='connecting'?0:1)
+  assert.equal(d.petCallState.value,state==='connecting'?'connecting':'listening')
+  await Promise.resolve();await Promise.resolve()
+  await api.stopPetCall({notifyServer:false})
+ }
+})
+
+test('同会话旧turn被插话后迟到成功不覆盖新录音或下一轮编号',async()=>{
+ const {api,d}=fixture('listening'), oldReply=deferred(), interrupt=deferred(), urls=[]
+ d.request=(url,opts)=>{
+  urls.push({url,opts})
+  if(url.endsWith('/turn'))return oldReply.promise
+  if(url.endsWith('/interrupt'))return interrupt.promise
+  return Promise.resolve({call_session_id:'session-a',next_turn_id:2})
+ }
+ d.petCallFrames=[new Float32Array(2048).fill(0.1)]
+ const old=api.submitPetCallTurn()
+ for(let t=2000;t<=2400;t+=40)frame(api,0.2,t)
+ assert.equal(urls[0].opts.signal.aborted,true)
+ assert.equal(d.petCallState.value,'listening')
+ const recorded=d.petCallFrames.length
+ oldReply.resolve({heard:true,response_id:'old-response',turn_id:1});await old
+ assert.equal(d.petCallState.value,'listening');assert.equal(d.petCallFrames.length,recorded)
+ assert.equal(d.petCallResponseId,'');assert.equal(d.petCallTurnPending,false)
+ interrupt.resolve({});await Promise.resolve();await Promise.resolve();await Promise.resolve()
+ await api.stopPetCall({notifyServer:false})
+})
+
+test('插话新录音等取消确认及轮次同步后提交，旧finally不清新pending',async()=>{
+ const {api,d}=fixture('listening'), oldReply=deferred(), interrupt=deferred(), nextReply=deferred(), turns=[]
+ d.request=(url,opts)=>{
+  if(url.endsWith('/turn')){turns.push(JSON.parse(opts.body));return turns.length===1?oldReply.promise:nextReply.promise}
+  if(url.endsWith('/interrupt'))return interrupt.promise
+  return Promise.resolve({call_session_id:'session-a',next_turn_id:2})
+ }
+ d.petCallFrames=[new Float32Array(2048).fill(0.1)];const old=api.submitPetCallTurn()
+ for(let t=2000;t<=2400;t+=40)frame(api,0.2,t)
+ const next=api.submitPetCallTurn();assert.equal(turns.length,1)
+ interrupt.resolve({});await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(turns.length,2);assert.equal(turns[1].turn_id,2)
+ oldReply.resolve({heard:true,response_id:'old-response',turn_id:1});await old
+ assert.equal(d.petCallTurnPending,true)
+ nextReply.resolve({heard:true,response_id:'new-response',turn_id:2});await next
+ assert.equal(d.petCallResponseId,'new-response');assert.equal(d.petCallState.value,'waiting_voice')
+ await api.stopPetCall({notifyServer:false})
+})
+
+test('interrupt先到服务端时携带当前提交turn_id，跳轮确认后旧POST迟到409不污染新轮',async()=>{
+ const {api,d}=fixture('listening'), delayedPost=deferred(), secondPost=deferred(), turns=[], interrupts=[]
+ d.request=(url,opts)=>{
+  if(url.endsWith('/turn')){turns.push(JSON.parse(opts.body));return turns.length===1?delayedPost.promise:secondPost.promise}
+  if(url.endsWith('/interrupt')){interrupts.push(JSON.parse(opts.body));return Promise.resolve({next_turn_id:2})}
+  throw new Error('新后端直接返回下一轮，无需额外status请求')
+ }
+ d.petCallFrames=[new Float32Array(2048).fill(0.1)];const old=api.submitPetCallTurn()
+ for(let t=2000;t<=2400;t+=40)frame(api,0.2,t)
+ assert.deepEqual(interrupts,[{call_session_id:'session-a',response_id:'',turn_id:1}])
+ const next=api.submitPetCallTurn();await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(turns[1].turn_id,2)
+ delayedPost.reject(new Error('HTTP409 旧轮次已跳过'));await old
+ assert.equal(d.petCallError.value,'');assert.equal(d.petCallTurnPending,true)
+ secondPost.resolve({heard:true,response_id:'call-new',turn_id:2});await next
+ assert.equal(d.petCallResponseId,'call-new');assert.equal(d.petCallState.value,'waiting_voice')
+ await api.stopPetCall({notifyServer:false})
+})
+
+async function startMonitoredFixture() {
+ const f=fixture('idle');f.d.petCallActive.value=false;f.d.petCallSessionId=''
+ Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaDevices:{getUserMedia:async()=>({getAudioTracks:()=>[],getTracks:()=>[]})}}})
+ globalThis.AudioContext=class {sampleRate=48000;destination={};resume=async()=>{};close=async()=>{};createMediaStreamSource(){return {connect(){},disconnect(){}}};createScriptProcessor(){return {connect(){},disconnect(){}}}}
+ f.d.request=async()=>({call_session_id:'session-a',next_turn_id:1})
+ await f.api.startPetCall()
+ return {...f,poll:monitor}
+}
+
+test('正式通话使用已选输入，麦克风断开清理并允许重新开始', async () => {
+ const f=fixture('idle');f.d.petCallActive.value=false;f.d.petCallSessionId=''
+ const oldStorage=Object.getOwnPropertyDescriptor(globalThis,'localStorage')
+ Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{getItem:key=>({'mio.audio.input':'physical-mic','mio.audio.mode':'speakers'})[key]}})
+ const listeners=new Map(), oldAdd=window.addEventListener, oldRemove=window.removeEventListener
+ window.addEventListener=(name,handler)=>listeners.set(name,handler)
+ window.removeEventListener=(name)=>listeners.delete(name)
+ let requested,stops=0
+ const track={stop:()=>stops++,getSettings:()=>({deviceId:'physical-mic'})}
+ Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaDevices:{getUserMedia:async constraints=>{requested=constraints;return {getAudioTracks:()=>[track],getTracks:()=>[track]}}}}})
+ globalThis.AudioContext=class {sampleRate=48000;destination={};resume=async()=>{};close=async()=>{};createMediaStreamSource(){return {connect(){},disconnect(){}}};createScriptProcessor(){return {connect(){},disconnect(){}}}}
+ f.d.request=async()=>({call_session_id:'session-device',next_turn_id:1})
+ try {
+  await f.api.startPetCall()
+  assert.deepEqual(requested.audio.deviceId,{exact:'physical-mic'});assert.equal(requested.audio.echoCancellation,true)
+  assert.equal(f.d.petCallActive.value,true)
+  const ended=track.onended;ended();await Promise.resolve();await Promise.resolve()
+  assert.equal(f.d.petCallActive.value,false);assert.match(f.d.petCallError.value,/已断开/)
+  assert.equal(stops,1);assert.equal(listeners.size,0);assert.equal(track.onended,null)
+  await f.api.startPetCall();assert.equal(f.d.petCallActive.value,true)
+  listeners.get('mio-audio-devices-changed')();await Promise.resolve();await Promise.resolve()
+  assert.equal(f.d.petCallActive.value,false);assert.match(f.d.petCallError.value,/重新开始通话/)
+ } finally {
+  await f.api.stopPetCall({notifyServer:false})
+  window.addEventListener=oldAdd;window.removeEventListener=oldRemove
+  if(oldStorage)Object.defineProperty(globalThis,'localStorage',oldStorage);else delete globalThis.localStorage
+ }
+})
+
+test('首音早于turn POST返回时不被覆盖为waiting_voice，已结束不复活',async()=>{
+ for(const ended of [false,true]){
+  const {api,d,poll}=await startMonitoredFixture(), reply=deferred()
+  d.request=url=>url.endsWith('/turn')?reply.promise:Promise.resolve({active:true,call_session_id:'session-a',current_turn_id:1,current_response_id:'call-stream-1',next_turn_id:2,voice_started:{response_id:'call-stream-1'},voice_ended:ended?{response_id:'call-stream-1',reason:'finished'}:{}})
+  d.petCallFrames=[new Float32Array(2048).fill(0.1)];const pending=api.submitPetCallTurn()
+  await poll();assert.equal(d.petCallState.value,ended?'listening':'speaking')
+  reply.resolve({heard:true,response_id:'call-stream-1',turn_id:1});await pending
+  assert.equal(d.petCallState.value,ended?'listening':'speaking')
+  assert.equal(d.petCallResponseId,ended?'':'call-stream-1')
+  await api.stopPetCall({notifyServer:false})
  }
 })
 test('生产turn迟到成功/失败不修改新会话状态或pending标记',async()=>{
@@ -58,7 +174,7 @@ test('生产turn迟到成功/失败不修改新会话状态或pending标记',asy
   d.petCallSessionId='session-new';d.petCallState.value='listening';d.petCallTurnPending=true;d.petCallNextTurnId=7
   if(failing)pending.reject(new Error('synthetic old failure'));else pending.resolve({heard:true,response_id:'old-response',turn_id:90})
   await old
-  assert.equal(d.petCallState.value,'listening');assert.equal(d.petCallResponseId,'response-a');assert.equal(d.petCallNextTurnId,7)
+  assert.equal(d.petCallState.value,'listening');assert.equal(d.petCallResponseId,'');assert.equal(d.petCallNextTurnId,7)
   assert.equal(d.petCallTurnPending,true);assert.equal(d.petCallError.value,'')
  }
 })

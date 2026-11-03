@@ -261,6 +261,61 @@ class PetEventServiceTests(unittest.TestCase):
         self.assertEqual(payload["timeline"][0]["offset_ms"], 0)
         self.assertGreater(payload["timeline"][1]["offset_ms"], 0)
 
+    def test_message_loop_skips_announced_call_and_continues_with_normal_reply(self) -> None:
+        from app import call_session_service, call_speech_stream
+
+        async def scenario() -> None:
+            manager = call_session_service.CallSessionManager()
+            session = manager.start()
+            token = manager.begin_turn(session["call_session_id"], 1)
+            # Use the actual announcement registry and real, isolated message DB.
+            # Only the external renderer and settings are replaced.
+            with (
+                patch.object(call_speech_stream, "manager", manager),
+                patch.dict(call_speech_stream._streams, {}, clear=True),
+                patch("app.companion_service.load_config", return_value={"voice_enabled": True}),
+                patch("app.pet_event_service.POLL_INTERVAL_SECONDS", 0.001),
+            ):
+                stream = call_speech_stream.create(token)
+                self.assertTrue(stream.append("先播第一句。"))
+                stream.finish()
+                hub = PetEventHub()
+                hub._clients.add(FakeWebSocket())
+                hub._cursor = db.get_latest_message_id(role="assistant", conversation_id="desktop_pet")
+                for text in ("先播第一句。", "随后第二句。"):
+                    db.save_message("assistant", text, source="desktop_pet_call",
+                                    conversation_id="desktop_pet", request_id=token.response_id)
+                call_cursor = db.get_latest_message_id(role="assistant", conversation_id="desktop_pet")
+                delivered: list[dict] = []
+
+                async def capture(event_type: str, payload: dict) -> None:
+                    if event_type == "speak":
+                        delivered.append(payload)
+
+                async def wait_cursor(expected: int) -> None:
+                    while hub._cursor != expected:
+                        await asyncio.sleep(0.001)
+
+                hub.broadcast = capture  # type: ignore[method-assign]
+                task = asyncio.create_task(hub.message_loop())
+                try:
+                    await asyncio.wait_for(wait_cursor(call_cursor), timeout=2)
+                    self.assertEqual(delivered, [], "提前播报过的整段持久结果不应再发 speak")
+                    db.save_message("assistant", "下一条普通回复。", source="desktop_pet",
+                                    conversation_id="desktop_pet", request_id="ordinary-after-call")
+                    normal_cursor = db.get_latest_message_id(role="assistant", conversation_id="desktop_pet")
+                    self.assertGreater(normal_cursor, call_cursor)
+                    await asyncio.wait_for(wait_cursor(normal_cursor), timeout=2)
+                    self.assertEqual([item["response_id"] for item in delivered], ["ordinary-after-call"])
+                    self.assertEqual(delivered[0]["text"], "下一条普通回复。")
+                    self.assertTrue(delivered[0]["should_speak"])
+                finally:
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+
+        asyncio.run(scenario())
+
     def test_speech_priorities_keep_direct_replies_above_background_events(self) -> None:
         from app.pet_event_service import speech_priority
 

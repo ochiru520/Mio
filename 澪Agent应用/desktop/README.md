@@ -40,7 +40,8 @@ API Key 不会打包进 EXE。启动器只会在本机读取现有 `.env` 或本
 ### 依赖与本地测试
 
 ```powershell
-python -m pip install -r .\desktopequirements-updater.txt
+python -m pip install -r .\desktop
+equirements-updater.txt
 python -m unittest discover -s desktop -p "test_*.py"
 npm test
 ```

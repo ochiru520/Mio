@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import { Check, ChevronDown } from '../icons/index.js'
+import { Check } from '../icons/index.js'
 
 defineOptions({ inheritAttrs: false })
 const props = defineProps({
@@ -17,10 +17,12 @@ const opened = ref(false)
 const active = ref(0)
 const position = ref({})
 const selected = computed(() => props.options.find(item => item.value === props.modelValue))
+const enabledIndices = computed(() => props.options.flatMap((item, index) => item.disabled ? [] : [index]))
+const unavailable = computed(() => props.disabled || !enabledIndices.value.length)
 let query = ''
 let lastKey = 0
 
-function close() { opened.value = false }
+function close() { opened.value = false; query = ''; lastKey = 0 }
 function reveal() {
   nextTick(() => {
     const list = menu.value, item = list?.children[active.value]
@@ -44,9 +46,10 @@ function place() {
   }
 }
 function open() {
-  if (props.disabled || !props.options.length) return
+  if (unavailable.value) return
   place()
-  active.value = Math.max(0, props.options.findIndex(item => item.value === props.modelValue))
+  const selectedIndex = props.options.findIndex(item => item.value === props.modelValue && !item.disabled)
+  active.value = selectedIndex >= 0 ? selectedIndex : enabledIndices.value[0]
   opened.value = true
   reveal()
 }
@@ -58,6 +61,7 @@ function choose(index) {
   trigger.value?.focus()
 }
 function keydown(event) {
+  if (unavailable.value) return
   if (event.key === 'Tab') { close(); return }
   if (event.key === 'Escape') { event.preventDefault(); close(); return }
   if (['Enter', ' '].includes(event.key)) {
@@ -68,17 +72,19 @@ function keydown(event) {
   }
   if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
     event.preventDefault()
-    if (!opened.value) { open(); return }
-    if (event.key === 'Home') active.value = 0
-    else if (event.key === 'End') active.value = props.options.length - 1
-    else active.value = (active.value + (event.key === 'ArrowDown' ? 1 : -1) + props.options.length) % props.options.length
+    const wasOpen = opened.value
+    if (!wasOpen) open()
+    const indices = enabledIndices.value
+    if (event.key === 'Home') active.value = indices[0]
+    else if (event.key === 'End') active.value = indices[indices.length - 1]
+    else if (wasOpen) active.value = indices[(indices.indexOf(active.value) + (event.key === 'ArrowDown' ? 1 : -1) + indices.length) % indices.length]
     reveal()
   } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
     event.preventDefault()
     if (!opened.value) open()
     query = Date.now() - lastKey > 700 ? event.key : query + event.key
     lastKey = Date.now()
-    const found = props.options.findIndex(item => item.label.toLocaleLowerCase().startsWith(query.toLocaleLowerCase()))
+    const found = props.options.findIndex(item => !item.disabled && item.label.toLocaleLowerCase().startsWith(query.toLocaleLowerCase()))
     if (found >= 0) { active.value = found; reveal() }
   }
 }
@@ -109,14 +115,14 @@ watch(() => [props.options, props.disabled], close)
   <button v-bind="$attrs" ref="trigger" class="app-select" type="button" role="combobox" aria-haspopup="listbox"
     :aria-label="label" :aria-expanded="opened" :aria-controls="`${id}-list`"
     :aria-activedescendant="opened ? `${id}-${active}` : undefined"
-    :disabled="disabled || !options.length" @click="opened ? close() : open()" @keydown="keydown" @blur="close">
-    <span>{{ selected?.label || '请选择' }}</span><ChevronDown :size="15" :class="{ opened }" />
+    :disabled="unavailable" @click="opened ? close() : open()" @keydown="keydown" @blur="close">
+    <span>{{ selected?.label || '请选择' }}</span>
   </button>
   <Teleport to="body">
     <ul v-if="opened" :id="`${id}-list`" ref="menu" class="app-select-menu" role="listbox" :aria-label="label" :style="position" @pointerdown.prevent>
       <li v-for="(option, index) in options" :id="`${id}-${index}`" :key="option.value" role="option"
         :aria-selected="option.value === modelValue" :aria-disabled="Boolean(option.disabled)" :class="{ highlighted: index === active, 'disabled-option': option.disabled }"
-        @pointermove="active = index" @click="choose(index)">
+        @pointermove="!option.disabled && (active = index)" @click="choose(index)">
         <span>{{ option.label }}</span><Check v-if="option.value === modelValue" :size="15" />
       </li>
     </ul>
@@ -124,14 +130,12 @@ watch(() => [props.options, props.disabled], close)
 </template>
 
 <style scoped>
-.app-select { display: flex; width: 100%; min-width: 0; min-height: 40px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-raised); color: var(--ink); font: inherit; font-size: calc(12px * var(--fs, 1)); text-align: left; cursor: pointer; }
+.app-select { display: flex; width: 100%; min-width: 0; min-height: 40px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm, 6px); background: var(--surface-raised); color: var(--ink); font: inherit; font-size: var(--text-base); text-align: left; cursor: pointer; }
 .app-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app-select svg { flex-shrink: 0; color: var(--muted); transition: transform .15s; }
-.app-select svg.opened { transform: rotate(180deg); }
 .app-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .app-select:disabled { opacity: .5; cursor: default; }
-.app-select-menu { position: fixed; z-index: 10000; margin: 0; padding: 5px; overflow: auto; list-style: none; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-raised); color: var(--ink); box-shadow: 0 12px 36px var(--shadow-strong); }
-.app-select-menu li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; padding: 8px 10px; border-radius: 7px; font-size: calc(12px * var(--fs, 1)); cursor: pointer; overflow-wrap: anywhere; }
+.app-select-menu { position: fixed; z-index: 10000; margin: 0; padding: 5px; overflow: auto; list-style: none; border: 1px solid var(--line); border-radius: var(--radius-md, 10px); background: var(--surface-raised); color: var(--ink); font-family: inherit; box-shadow: var(--shadow-md); }
+.app-select-menu li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; padding: 8px 10px; border-radius: max(0px, calc(var(--radius-md, 10px) - 5px)); font-size: var(--text-base); cursor: pointer; overflow-wrap: anywhere; }
 .app-select-menu li.highlighted { background: var(--accent-soft); }
 .app-select-menu li[aria-selected=true] { color: var(--accent-dark); font-weight: 650; }
 .app-select-menu svg { flex-shrink: 0; }

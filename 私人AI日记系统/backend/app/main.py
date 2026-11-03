@@ -42,6 +42,7 @@ from .documents import load_manuals
 from .local_security import LocalControlMiddleware, SecureAttachmentFiles
 from .routes import (
     agent,
+    audio_devices,
     autonomy,
     backup,
     chat,
@@ -52,6 +53,7 @@ from .routes import (
     diary,
     memory,
     monthly,
+    model_management,
     onboarding,
     onebot,
     privacy,
@@ -293,6 +295,8 @@ def create_app() -> FastAPI:
     app.include_router(companion.router)
     app.include_router(creation.router)
     app.include_router(dependencies.router)
+    app.include_router(model_management.router)
+    app.include_router(audio_devices.router)
     app.include_router(diary.router)
     app.include_router(day.router)
     app.include_router(memory.router)

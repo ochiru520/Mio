@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="sakura" data-font-size="medium">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mio 语音播放隔离验收</title></head>
+<body><div id="app"></div><script type="module">
+import { createApp, ref, h } from 'vue'
+import { useChatInteraction } from '/src/composables/useChatInteraction.js'
+import '/src/styles/tokens.css'
+createApp({
+  setup() {
+    const loading = ref(''), speaking = ref(''), error = ref('')
+    const voice = useChatInteraction({ turnId: turn => turn.id, cleanDisplayContent: text => text,
+      chatVoiceLanguage: ref('ja'), speakingPartId: speaking, voiceLoadingPartId: loading, errorMessage: error })
+    const first = { id: 'first', content: 'こんにちは。今日はあなたと一緒に、ゆっくりお話ししたいです。声が自然に聞こえるか、もう一度確かめてみましょう。' }
+    const second = { id: 'second', content: 'こんにちは、澪です。' }
+    return () => h('main', [
+      h('h1', 'Mio 消息语音'), h('p', '固定日语测试句；使用实际聊天播放逻辑。'),
+      h('button', { id: 'play', onClick: () => voice.playMessageVoice(first) }, '播放第一条'),
+      h('button', { id: 'next', onClick: () => voice.playMessageVoice(second) }, '播放第二条'),
+      h('button', { id: 'stop', onClick: voice.stopMessageVoice }, '停止'),
+      h('p', { id: 'loading' }, loading.value), h('p', { id: 'speaking' }, speaking.value),
+      h('p', { id: 'error' }, error.value),
+    ])
+  },
+}).mount('#app')
+</script><style>body{font:var(--text-base)/1.6 "Microsoft YaHei UI",sans-serif;background:var(--bg);color:var(--text);margin:36px}h1{font-size:var(--text-2xl)}button{font:inherit;padding:8px 14px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:inherit}main{max-width:760px}</style></body></html>

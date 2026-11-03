@@ -76,7 +76,7 @@ const executionGroups = computed(() => groupExecutionRecords(context.filteredAge
         </div>
         <div v-else class="task-list">
           <component v-for="group in executionGroups" :key="String(group.technical)" :is="group.technical ? 'details' : 'div'" :class="{ 'task-technical-records': group.technical }">
-          <summary v-if="group.technical">技术记录 · {{ group.items.length }} 次任务进度更新</summary>
+          <summary v-if="group.technical">技术记录，{{ group.items.length }} 次任务进度更新</summary>
           <article v-for="{ record: task, presentation } in group.items" :key="task.id" class="task-row">
             <div :class="['task-state-mark', `status-${task.status}`]">
               <RefreshCw v-if="['queued', 'running'].includes(task.status)" :class="{ spin: task.status === 'running' }" :size="16" />
@@ -146,7 +146,7 @@ const executionGroups = computed(() => groupExecutionRecords(context.filteredAge
             </div>
           </div>
           <footer>
-            <span><CircleDollarSign :size="13" />今日 {{ context.autonomyData.usage.behavior_count || 0 }} 次 · ¥{{ Number(context.autonomyData.usage.cost_yuan || 0).toFixed(4) }}</span>
+            <span><CircleDollarSign :size="13" />今日 {{ context.autonomyData.usage.behavior_count || 0 }} 次，¥{{ Number(context.autonomyData.usage.cost_yuan || 0).toFixed(4) }}</span>
             <button class="primary" type="button" :disabled="Boolean(context.autonomyBusy)" @click="context.saveAutonomyPolicy()"><Check :size="14" />保存权限</button>
           </footer>
         </section>
@@ -231,5 +231,5 @@ const executionGroups = computed(() => groupExecutionRecords(context.filteredAge
 </template>
 
 <style scoped>
-.task-record-details{margin-top:9px;font-size:12px;color:var(--muted)}.task-record-details summary,.task-technical-records>summary{cursor:pointer}.task-record-details dl{display:grid;grid-template-columns:70px minmax(0,1fr);gap:8px;margin:10px 0}.task-record-details dt{color:var(--muted)}.task-record-details dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}.task-technical-records>summary{padding:14px 18px;color:var(--muted);font-size:12px}.task-row-main>p.task-summary-error{color:var(--danger)}.task-row-main>p{overflow-wrap:anywhere}@media(max-width:600px){.task-row-main>header{align-items:flex-start;flex-direction:column;gap:7px}.task-row-main>header>div{flex-wrap:wrap}.task-record-details dl{grid-template-columns:60px minmax(0,1fr)}}
+.task-record-details{margin-top:9px;font-size: var(--text-xs);color:var(--muted)}.task-record-details summary,.task-technical-records>summary{cursor:pointer}.task-record-details dl{display:grid;grid-template-columns:70px minmax(0,1fr);gap:8px;margin:10px 0}.task-record-details dt{color:var(--muted)}.task-record-details dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}.task-technical-records>summary{padding:14px 18px;color:var(--muted);font-size: var(--text-xs)}.task-row-main>p.task-summary-error{color:var(--danger)}.task-row-main>p{overflow-wrap:anywhere}@media(max-width:600px){.task-row-main>header{align-items:flex-start;flex-direction:column;gap:7px}.task-row-main>header>div{flex-wrap:wrap}.task-record-details dl{grid-template-columns:60px minmax(0,1fr)}}
 </style>

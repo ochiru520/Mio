@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN" data-font-size="medium"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>设备选择框隔离验收</title><style>html,body,#app{width:auto!important;height:auto!important;overflow:visible!important}body{margin:0}.settings-window-shell{width:100%!important;display:block!important;height:auto!important;min-height:100vh;overflow:visible!important}.settings-page{display:block!important;height:auto!important;padding:24px!important;max-width:100%!important}.settings-content-section{height:auto!important;overflow:visible!important;padding:0!important}</style></head><body><div id="app"></div><script type="module">
+import { createApp, h } from 'vue'
+import DeviceCheckPanel from '../src/components/DeviceCheckPanel.vue'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+import '../src/styles/refinements.css'
+import '../src/styles/agent-settings.css'
+import '../src/styles/agent-surface.css'
+import '../src/styles/ui-polish.css'
+import '../src/styles/calm.css'
+import '../src/styles/design.css'
+const params = new URLSearchParams(location.search)
+document.documentElement.dataset.fontSize = params.get('font') || 'medium'
+document.documentElement.dataset.theme = params.get('theme') || 'sakura'
+document.documentElement.style.zoom = params.get('zoom') || '1'
+createApp({ render:() => h('div',{class:'settings-window-shell'},[h('main',{class:'settings-page'},[h('section',{class:'settings-content-section'},[h(DeviceCheckPanel)])])]) }).mount('#app')
+</script></body></html>

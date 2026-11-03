@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "component": "jieba-fast",
+  "version": "0.53",
+  "license": "MIT",
+  "source": {
+    "url": "https://files.pythonhosted.org/packages/87/6f/9c22f7b0ecc043f8e7d324e30767fdc9ce8d3cf5fd66e60823dd2b84432e/jieba_fast-0.53.tar.gz",
+    "sha256": "e92089d52faa91d51b6a7c1e6e4c4c85064a0e36f6a29257af2254b9e558ddd0",
+    "bytes": 7511421
+  },
+  "artifact": {
+    "path": "jieba_fast-0.53-cp310-cp310-win_amd64.whl",
+    "sha256": "7b559e0ac35a83956fa34b4fb42a81ba24eab7417cd432d0928c34526308ec12",
+    "bytes": 7630675,
+    "tag": "cp310-cp310-win_amd64"
+  },
+  "build": {
+    "command": "python -m pip wheel --no-deps --wheel-dir scripts/deps/wheels jieba-fast==0.53",
+    "python": "CPython 3.10 x64",
+    "platform": "Windows AMD64",
+    "source_modified": false,
+    "wheel_generator": "bdist_wheel (0.47.0)"
+  },
+  "distribution_status": "Locally built candidate wheel from the PyPI sdist; not an upstream-published binary and not yet uploaded.",
+  "reason": "PyPI version 0.53 has only a C-extension sdist; bundling this wheel avoids requiring a compiler on user machines.",
+  "license_notice": {
+    "path": "jieba-fast-LICENSE.txt",
+    "url": "https://github.com/deepcs233/jieba_fast/blob/master/LICENSE",
+    "git_blob_sha": "9d7e66b431461c785329a1b52199d4207daefacc",
+    "sha256": "18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37",
+    "note": "The PyPI sdist and generated wheel declare MIT but omit the notice; this exact notice is retrieved from the package-author repository."
+  },
+  "native_dependencies": [
+    "python310.dll",
+    "KERNEL32.dll",
+    "VCRUNTIME140.dll",
+    "api-ms-win-crt-stdio-l1-1-0.dll",
+    "api-ms-win-crt-string-l1-1-0.dll",
+    "api-ms-win-crt-heap-l1-1-0.dll",
+    "api-ms-win-crt-runtime-l1-1-0.dll",
+    "api-ms-win-crt-math-l1-1-0.dll"
+  ]
+}

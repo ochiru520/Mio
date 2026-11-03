@@ -22,6 +22,8 @@ Mio 使用或支持接入下列开源项目。感谢这些项目的作者与贡�
 | faster-whisper / CTranslate2 | 本地电话与系统声音转写 | [SYSTRAN/faster-whisper](https://github.com/SYSTRAN/faster-whisper) / [OpenNMT/CTranslate2](https://github.com/OpenNMT/CTranslate2)，遵循各自上游许可证 |
 | Genie-TTS | GPT-SoVITS 权重的本地 ONNX 推理适配 | [High-Logic/Genie-TTS](https://github.com/High-Logic/Genie-TTS)，引擎与模型分别遵循上游许可证 |
 | GPT-SoVITS | 可选角色音色与用户权重来源 | [RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，代码、模型和训练数据分别遵循上游及数据授权 |
+| AnifLive-TTS | 可选 V2 音色加速；安装时下载上游并为本机编译 | [Hiruynk/AnifLive-TTS](https://github.com/Hiruynk/AnifLive-TTS)，遵循固定版本上游许可与所用模型许可；不随安装包附带上游模型 |
+| jieba-fast 0.53 | Anif 可选环境的 Windows Python 3.10 分词 wheel | [deepcs233/jieba_fast](https://github.com/deepcs233/jieba_fast)，MIT；许可原文随 `scripts/deps/wheels/jieba-fast-LICENSE.txt` 分发 |
 | Ollama | 可选本地模型运行器 | [ollama/ollama](https://github.com/ollama/ollama)，MIT；具体模型另有各自许可证 |
 | NapCatQQ | 可选 QQ / OneBot 接入 | [NapNeko/NapCatQQ](https://github.com/NapNeko/NapCatQQ)，独立安装并遵循上游许可证与平台规则 |
 

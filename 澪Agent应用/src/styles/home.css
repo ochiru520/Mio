@@ -4,7 +4,7 @@
   min-height: 0;
   height: 100%;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  background: var(--bg);
 }
 
 .home-page.right-panel-hidden { grid-template-columns: minmax(0, 1fr); }
@@ -24,7 +24,7 @@
   overflow: hidden;
   background: var(--surface-sunken);
   border-radius: 8px;
-  box-shadow: 0 18px 45px var(--shadow-strong);
+  box-shadow: none;
 }
 
 .home-hero > img {
@@ -45,13 +45,13 @@
 
 .home-hero-copy > span {
   color: var(--text-muted);
-  font-size: calc(12px * var(--fs, 1));
+  font-size: var(--text-xs);
   font-weight: 650;
 }
 
 .home-hero-copy h2 {
   margin: 12px 0 10px;
-  font-size: calc(30px * var(--fs, 1));
+  font-size: var(--text-2xl);
   font-weight: 650;
   line-height: 1.2;
 }
@@ -60,7 +60,7 @@
   max-width: 360px;
   margin: 0;
   color: var(--text-muted);
-  font-size: calc(13px * var(--fs, 1));
+  font-size: var(--text-base);
   line-height: 1.75;
 }
 
@@ -77,7 +77,7 @@
   border-radius: 7px;
   box-shadow: 0 8px 22px var(--shadow-strong);
   cursor: pointer;
-  font-size: calc(12px * var(--fs, 1));
+  font-size: var(--text-xs);
 }
 
 .home-hero-copy button svg:last-child { margin-left: 4px; }
@@ -88,7 +88,7 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
   margin-top: 18px;
-  background: color-mix(in srgb, var(--surface-raised) 72%, transparent);
+  background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -110,11 +110,11 @@
 }
 
 .home-shortcuts button:last-child { border-right: 0; }
-.home-shortcuts button:hover { background: color-mix(in srgb, var(--bg) 76%, transparent); }
+.home-shortcuts button:hover { background: var(--bg); }
 .home-shortcuts svg { color: var(--accent); }
 .home-shortcuts span { display: grid; gap: 3px; min-width: 0; }
-.home-shortcuts strong { font-size: calc(12px * var(--fs, 1)); }
-.home-shortcuts small { overflow: hidden; color: var(--muted); font-size: calc(12px * var(--fs, 1)); text-overflow: ellipsis; white-space: nowrap; }
+.home-shortcuts strong { font-size: var(--text-xs); }
+.home-shortcuts small { overflow: hidden; color: var(--muted); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
 
 .home-recent-grid {
   display: grid;
@@ -127,8 +127,8 @@
 .home-recent-section > header { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 10px; border-bottom: 1px solid var(--line-strong); }
 .home-recent-section > header > div { display: flex; align-items: center; gap: 8px; }
 .home-recent-section > header svg { color: var(--accent); }
-.home-recent-section > header strong { font-size: calc(13px * var(--fs, 1)); }
-.home-recent-section > header button { color: var(--muted); background: transparent; border: 0; cursor: pointer; font-size: calc(12px * var(--fs, 1)); }
+.home-recent-section > header strong { font-size: var(--text-base); }
+.home-recent-section > header button { color: var(--muted); background: transparent; border: 0; cursor: pointer; font-size: var(--text-xs); }
 
 .home-recent-list > button {
   display: grid;
@@ -147,35 +147,34 @@
 }
 
 .home-recent-list > button:hover { color: var(--accent-dark); }
-.home-recent-list span { color: var(--accent-dark); font-size: calc(12px * var(--fs, 1)); }
-.home-recent-list strong { overflow: hidden; font-size: calc(12px * var(--fs, 1)); text-overflow: ellipsis; white-space: nowrap; }
-.home-recent-list small { color: var(--muted); font-size: calc(12px * var(--fs, 1)); }
+.home-recent-list span { color: var(--accent-dark); font-size: var(--text-xs); }
+.home-recent-list strong { overflow: hidden; font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.home-recent-list small { color: var(--muted); font-size: var(--text-xs); }
 
 .home-memory-list article { padding: 10px 2px; border-bottom: 1px solid var(--line); }
-.home-memory-list span { color: var(--accent-dark); font-size: calc(12px * var(--fs, 1)); font-weight: 650; }
-.home-memory-list p { display: -webkit-box; margin: 5px 0 0; overflow: hidden; color: var(--text-muted); font-size: calc(12px * var(--fs, 1)); line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.home-empty-line { margin: 0; padding: 24px 2px; color: var(--muted); font-size: calc(12px * var(--fs, 1)); }
+.home-memory-list span { color: var(--accent-dark); font-size: var(--text-xs); font-weight: 650; }
+.home-memory-list p { display: -webkit-box; margin: 5px 0 0; overflow: hidden; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.home-empty-line { margin: 0; padding: 24px 2px; color: var(--muted); font-size: var(--text-xs); }
 
 .home-mio-panel {
   min-height: 0;
   padding: 26px 20px;
   overflow-y: auto;
-  background: color-mix(in srgb, var(--bg) 83%, transparent);
+  background: var(--bg);
   border-left: 1px solid var(--border);
-  backdrop-filter: blur(18px);
 }
 
 .home-mio-panel > header { padding-bottom: 19px; }
-.home-mio-panel > header span { display: block; color: var(--accent); font-size: calc(12px * var(--fs, 1)); font-weight: 700; }
-.home-mio-panel > header strong { display: block; margin-top: 5px; font-size: calc(17px * var(--fs, 1)); font-weight: 650; }
+.home-mio-panel > header span { display: block; color: var(--accent); font-size: var(--text-xs); font-weight: 700; }
+.home-mio-panel > header strong { display: block; margin-top: 5px; font-size: var(--text-lg); font-weight: 650; }
 
 .home-state-block { padding: 17px 0; border-top: 1px solid var(--line-strong); }
 .home-state-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.home-state-heading span { color: var(--muted); font-size: calc(12px * var(--fs, 1)); }
-.home-state-heading em { color: var(--text); font-size: calc(12px * var(--fs, 1)); font-style: normal; font-weight: 650; text-align: right; }
+.home-state-heading span { color: var(--muted); font-size: var(--text-xs); }
+.home-state-heading em { color: var(--text); font-size: var(--text-xs); font-style: normal; font-weight: 650; text-align: right; }
 .home-state-block > p,
 .home-thirty-state p,
-.home-observation-list p { margin: 9px 0 0; color: var(--text-muted); font-size: calc(12px * var(--fs, 1)); line-height: 1.65; }
+.home-observation-list p { margin: 9px 0 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.65; }
 
 .home-mood-points { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-top: 13px; }
 .home-mood-points i { height: 4px; background: var(--border); border-radius: 2px; }
@@ -184,11 +183,11 @@
 .home-thirty-state { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 8px; margin-top: 12px; color: var(--green); }
 .home-thirty-state p { margin: -1px 0 0; }
 .home-observation-list > div + div { margin-top: 14px; }
-.home-observation-list span { color: var(--accent-dark); font-size: calc(12px * var(--fs, 1)); font-weight: 650; }
+.home-observation-list span { color: var(--accent-dark); font-size: var(--text-xs); font-weight: 650; }
 .home-observation-list p { margin-top: 4px; }
 
 .home-panel-links { border-top: 1px solid var(--line-strong); }
-.home-panel-links button { display: grid; grid-template-columns: 18px minmax(0, 1fr) 16px; align-items: center; width: 100%; min-height: 42px; gap: 7px; padding: 0; color: var(--text-muted); background: transparent; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; text-align: left; font-size: calc(12px * var(--fs, 1)); }
+.home-panel-links button { display: grid; grid-template-columns: 18px minmax(0, 1fr) 16px; align-items: center; width: 100%; min-height: 42px; gap: 7px; padding: 0; color: var(--text-muted); background: transparent; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; text-align: left; font-size: var(--text-xs); }
 .home-panel-links button:hover { color: var(--accent-dark); }
 
 @media (max-width: 1280px) {
@@ -196,7 +195,7 @@
   .home-main-stage { padding: 14px 16px 36px; }
   .home-hero { min-height: 340px; }
   .home-hero-copy { left: 34px; width: 40%; }
-  .home-hero-copy h2 { font-size: calc(25px * var(--fs, 1)); }
+  .home-hero-copy h2 { font-size: var(--text-2xl); }
   .home-shortcuts button { padding-inline: 10px; }
 }
 

@@ -25,13 +25,22 @@ MAX_AUDIO = 64 * 1024 * 1024
 EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".wma"}
 
 
-def synthesize(model, payload: dict) -> bytes:
+LANGUAGES = {"zh": "ZH", "en": "EN", "ja": "JA", "es": "ES", "ar": "AR"}
+
+
+def synthesize(model, payload: dict, *, model_version: str = "2") -> bytes:
     if payload.get("protocol") != PROTOCOL:
         raise ValueError("请求协议不匹配，请更新 Mio 与适配脚本。")
     text = str(payload.get("text") or "").strip()
     suffix = Path(str(payload.get("reference_name") or "")).suffix.lower()
     if not text or len(text) > 600 or suffix not in EXTENSIONS:
         raise ValueError("需要 1 到 600 字文本与支持格式的参考音频。")
+    requested_version = str(payload.get("model_version") or payload.get("version") or model_version)
+    if requested_version not in {model_version, "2.0" if model_version == "2" else model_version}:
+        raise ValueError(f"当前服务加载的是 IndexTTS {model_version}，请切换匹配的模型服务。")
+    language = str(payload.get("language") or "zh").lower()
+    if model_version == "2.5" and language not in LANGUAGES:
+        raise ValueError("IndexTTS 2.5 支持中文、英语、日语、西班牙语和阿拉伯语。")
     try:
         reference = base64.b64decode(payload.get("reference_audio_base64") or "", validate=True)
     except (ValueError, TypeError, binascii.Error) as exc:
@@ -42,7 +51,8 @@ def synthesize(model, payload: dict) -> bytes:
         ref = Path(folder) / f"reference{suffix}"
         output = Path(folder) / "speech.wav"
         ref.write_bytes(reference)
-        model.infer(spk_audio_prompt=str(ref), text=text, output_path=str(output), verbose=False)
+        options = {"lang": LANGUAGES[language]} if model_version == "2.5" else {}
+        model.infer(spk_audio_prompt=str(ref), text=text, output_path=str(output), verbose=False, **options)
         if output.stat().st_size > MAX_AUDIO:
             raise OSError("模型生成的音频超过 64 MB 限制。")
         content = output.read_bytes()
@@ -53,7 +63,7 @@ def synthesize(model, payload: dict) -> bytes:
         return content
 
 
-def handler_for(model):
+def handler_for(model, *, model_version: str = "2", memory_reclaimer=None):
     inference_lock = threading.Lock()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -73,7 +83,9 @@ def handler_for(model):
             if self.path != "/health":
                 self.error(404, "接口不存在。")
                 return
-            self.respond(200, json.dumps({"protocol": PROTOCOL, "ready": True, "engine": "indextts2"}).encode())
+            self.respond(200, json.dumps({"protocol": PROTOCOL, "ready": True, "engine": "indextts2", "model_version": model_version,
+                                         "streaming": "segment", "languages": list(LANGUAGES) if model_version == "2.5" else ["zh", "en"],
+                                         "cpu_memory_reclamation": memory_reclaimer.status() if memory_reclaimer else {}}).encode())
 
         def do_POST(self):
             if self.path != "/synthesize":
@@ -91,7 +103,7 @@ def handler_for(model):
                 if not isinstance(payload, dict):
                     raise ValueError("需要 JSON 对象。")
                 with inference_lock:
-                    content = synthesize(model, payload)
+                    content = synthesize(model, payload, model_version=model_version)
             except (ValueError, TypeError) as exc:
                 self.error(400, str(exc))
                 return
@@ -105,28 +117,89 @@ def handler_for(model):
     return Handler
 
 
+def load_index25(model_dir: Path, *, bf16: bool, low_memory: bool):
+    from indextts import infer_v2_5 as engine
+    options = dict(cfg_path=str(model_dir / "config.yaml"), model_dir=str(model_dir),
+                   use_bf16=bf16, use_cuda_kernel=False, use_deepspeed=False)
+    if not low_memory:
+        return engine.IndexTTS2(**options)
+    import torch
+    if not torch.cuda.is_available():
+        raise RuntimeError("--low-memory 需要 CUDA 与 --bf16；CPU 请去掉此参数。")
+    original_load, original_voice = torch.load, engine.UnifiedVoice
+
+    def mapped_load(file, *args, **kwargs):
+        if isinstance(file, (str, Path)):
+            with open(file, "rb") as checkpoint:
+                if checkpoint.read(2) == b"PK":
+                    kwargs.setdefault("mmap", True)
+        return original_load(file, *args, **kwargs)
+
+    def gpu_bf16_voice(*args, **kwargs):
+        previous_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(torch.bfloat16)
+        try:
+            with torch.device("cuda:0"):
+                return original_voice(*args, **kwargs)
+        finally:
+            torch.set_default_dtype(previous_dtype)
+
+    # Only the serialized startup phase is patched. Restore global hooks before serving.
+    torch.load, engine.UnifiedVoice = mapped_load, gpu_bf16_voice
+    try:
+        return engine.IndexTTS2(**options)
+    finally:
+        torch.load, engine.UnifiedVoice = original_load, original_voice
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path, help="IndexTTS source checkout")
     parser.add_argument("--model-dir", required=True, type=Path, help="Existing IndexTTS-2 checkpoint directory")
+    parser.add_argument("--version", choices=("2", "2.5"), default="2", help="Actual model family to load; 2.5 uses infer_v2_5 and BF16")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=11996)
     parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--bf16", action="store_true", help="Enable IndexTTS 2.5 BF16")
+    parser.add_argument("--low-memory", action="store_true", help="IndexTTS 2.5 CUDA/BF16 startup with mmap and direct GPU GPT construction")
     args = parser.parse_args()
     repo, model_dir = args.repo.resolve(), args.model_dir.resolve()
-    if not (repo / "indextts/infer_v2.py").is_file() or not (model_dir / "config.yaml").is_file():
-        parser.error("需要已安装的官方 IndexTTS2 源码与包含 config.yaml 的 IndexTTS-2 模型目录。")
+    module_file = "infer_v2_5.py" if args.version == "2.5" else "infer_v2.py"
+    if not (repo / "indextts" / module_file).is_file() or not (model_dir / "config.yaml").is_file():
+        parser.error(f"需要已安装的官方 IndexTTS {args.version} 源码与包含 config.yaml 的匹配模型目录。")
+    if (args.version == "2.5" and args.fp16) or (args.version == "2" and args.bf16):
+        parser.error("IndexTTS 2 使用 --fp16；IndexTTS 2.5 使用 --bf16。")
+    if args.low_memory and (args.version != "2.5" or not args.bf16):
+        parser.error("--low-memory 仅用于 IndexTTS 2.5，并需要 --bf16。")
     # Avoid implicit Hugging Face fetches; provision all weights separately.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     sys.path.insert(0, str(repo))
     os.chdir(repo)
-    from indextts.infer_v2 import IndexTTS2
-    model = IndexTTS2(cfg_path=str(model_dir / "config.yaml"), model_dir=str(model_dir),
-                      use_fp16=args.fp16, use_cuda_kernel=False, use_deepspeed=False)
+    reclaimer = None
+    if args.low_memory:
+        import torch
+        from local_tts_memory import install
+        reclaimer = install(torch)
+    try:
+        if reclaimer:
+            reclaimer.reclaim()
+        serve(args, model_dir, reclaimer)
+    finally:
+        if reclaimer:
+            reclaimer.close()
+
+
+def serve(args, model_dir, reclaimer):
+    if args.version == "2.5":
+        model = load_index25(model_dir, bf16=args.bf16, low_memory=args.low_memory)
+    else:
+        from indextts.infer_v2 import IndexTTS2
+        model = IndexTTS2(cfg_path=str(model_dir / "config.yaml"), model_dir=str(model_dir),
+                          use_fp16=args.fp16, use_cuda_kernel=False, use_deepspeed=False)
     # Inference lock serializes GPU work; health requests stay responsive.
-    server = HTTPServer((args.host, args.port), handler_for(model))
-    print(f"Mio IndexTTS2 适配服务已就绪：http://{args.host}:{args.port}", flush=True)
+    server = HTTPServer((args.host, args.port), handler_for(model, model_version=args.version, memory_reclaimer=reclaimer))
+    print(f"Mio IndexTTS {args.version} 适配服务已就绪：http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from io import BytesIO
+import contextlib
 import hashlib
 import json
 import tempfile
+import threading
+import time
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -118,6 +122,132 @@ class GenieTtsServiceTests(unittest.TestCase):
             genie_tts_service._stop_if_idle,
         )
         timer.start.assert_called_once_with()
+
+
+FAKE_STREAM_WORKER = r'''
+import base64, json, sys, time
+from pathlib import Path
+for line in sys.stdin:
+    request=json.loads(line)
+    request_id=request.get('request_id')
+    def emit(event):
+        print(json.dumps(dict(event, request_id=request_id)),flush=True)
+    action=request['action']
+    if action=='shutdown':
+        break
+    if action=='probe':
+        emit({'ok':True})
+        continue
+    text=request.get('text','')
+    print(json.dumps({'ok':True,'event':'audio','request_id':'stale-request','pcm_base64':'////'}),flush=True)
+    emit({'ok':True,'event':'start','sample_rate':44100 if text=='bad-format' else 32000,'channels':1,'sample_width':2})
+    Path('started').write_text('started')
+    if text=='hang':
+        time.sleep(60)
+    if text=='no-audio':
+        emit({'ok':True,'event':'done','frames':0})
+        continue
+    first = b'\x01\x00' * 800
+    if text=='bad-pcm':
+        first=b'\x01'
+    emit({'ok':True,'event':'audio','pcm_base64':base64.b64encode(first).decode()})
+    if text=='blocked':
+        while not Path('release').exists(): time.sleep(.01)
+    if text=='error-after-audio':
+        emit({'ok':False,'error':'synthetic generation error'})
+        continue
+    second=b'\x02\x00' * 800
+    emit({'ok':True,'event':'audio','pcm_base64':base64.b64encode(second).decode()})
+    emit({'ok':True,'event':'done','frames':999 if text=='bad-count' else 1600,'first_audio_ms':2,'total_ms':5})
+'''
+
+
+class GeniePcmStreamProtocolTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary=tempfile.TemporaryDirectory()
+        self.root=Path(self.temporary.name)
+        self.worker=self.root/'worker.py'
+        self.worker.write_text(FAKE_STREAM_WORKER,encoding='utf-8')
+        reference=self.root/'reference.wav';reference.write_bytes(_wav_bytes())
+        self.config={'gpt_sovits_ref_audio':str(reference),'gpt_sovits_prompt_text':'合成测试参考文本','voice_idle_timeout_seconds':0}
+        self.stack=contextlib.ExitStack()
+        self.stack.enter_context(mock.patch('app.local_voice_engines.manager.selection_reader', return_value={'voice_engine': 'gpt_sovits'}))
+        self.stack.enter_context(mock.patch.object(genie_tts_service,'_paths',return_value={'python':Path(sys.executable),'worker':self.worker,'root':self.root,'data':self.root}))
+        self.stack.enter_context(mock.patch.object(genie_tts_service,'runtime_status',return_value={'ready':True}))
+        self.stack.enter_context(mock.patch.object(genie_tts_service,'_resolve_character_model',return_value=self.root))
+        self.processes=[]
+        self.real_start=genie_tts_service._start_worker
+        def start():
+            pair=self.real_start()
+            if pair[0] not in self.processes: self.processes.append(pair[0])
+            return pair
+        self.stack.enter_context(mock.patch.object(genie_tts_service,'_start_worker',side_effect=start))
+
+    def tearDown(self):
+        genie_tts_service.stop_worker()
+        self.stack.close()
+        for process in self.processes:
+            if process.poll() is None:
+                process.kill();process.wait(timeout=2)
+            for stream in (process.stdin,process.stdout,process.stderr):
+                if stream is not None:stream.close()
+        self.temporary.cleanup()
+
+    def stream(self,text='normal',**kwargs):
+        return genie_tts_service.iter_speech_pcm(text,self.config,**kwargs)
+
+    def test_first_pcm_arrives_before_generation_finishes_and_stale_chunks_are_ignored(self):
+        stream=self.stream('blocked')
+        first=next(stream)
+        self.assertEqual(first,b'\x01\x00'*800)
+        self.assertFalse((self.root/'release').exists())
+        self.assertFalse(genie_tts_service._last_metrics['complete'])
+        (self.root/'release').write_text('release')
+        self.assertEqual(list(stream),[b'\x02\x00'*800])
+        self.assertTrue(genie_tts_service._last_metrics['complete'])
+        self.assertEqual(genie_tts_service._last_metrics['received_bytes'],3200)
+
+    def test_close_from_a_different_thread_kills_worker_and_next_request_is_clean(self):
+        stream=self.stream('blocked')
+        self.assertEqual(next(stream),b'\x01\x00'*800)
+        old=genie_tts_service._worker
+        thread=threading.Thread(target=stream.close);thread.start();thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+        self.assertIsNotNone(old.poll())
+        self.assertIsNone(genie_tts_service._worker)
+        self.assertEqual(list(self.stream()),[b'\x01\x00'*800,b'\x02\x00'*800])
+        self.assertIsNot(genie_tts_service._worker,old)
+
+    def test_cancel_event_interrupts_wait_before_first_audio(self):
+        cancel=threading.Event();stream=self.stream('hang',cancel_event=cancel)
+        errors=[]
+        def consume():
+            try:next(stream)
+            except BaseException as exc:errors.append(exc)
+        thread=threading.Thread(target=consume);thread.start()
+        deadline=time.monotonic()+3
+        while not (self.root/'started').exists() and time.monotonic()<deadline:time.sleep(.01)
+        self.assertTrue((self.root/'started').exists())
+        cancel.set();thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+        self.assertIsInstance(errors[0],InterruptedError)
+        self.assertIsNone(genie_tts_service._worker)
+
+    def test_timeout_discards_the_worker(self):
+        with self.assertRaises(TimeoutError):list(self.stream('hang',timeout=.2))
+        self.assertIsNone(genie_tts_service._worker)
+
+    def test_stream_rejects_wrong_format_odd_pcm_empty_audio_and_incomplete_counts(self):
+        for text in ('bad-format','bad-pcm','no-audio','bad-count'):
+            with self.subTest(text=text):
+                with self.assertRaises(OSError):list(self.stream(text))
+
+    def test_generation_error_after_first_pcm_is_not_reported_as_completion(self):
+        stream=self.stream('error-after-audio')
+        self.assertEqual(next(stream),b'\x01\x00'*800)
+        with self.assertRaisesRegex(OSError,'synthetic generation error'):next(stream)
+        self.assertIsNone(genie_tts_service._worker)
+        self.assertFalse(genie_tts_service._last_metrics['complete'])
 
 
 if __name__ == "__main__":

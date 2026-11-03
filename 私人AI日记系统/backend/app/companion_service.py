@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import audioop
 import base64
 import binascii
 import ctypes
@@ -131,6 +132,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "qq_voice_mode": "adaptive",
     "indextts2_url": "http://127.0.0.1:11996",
     "indextts2_ref_audio": "",
+    "indextts2_version": "2.5",
+    "indextts2_language": "zh",
+    "aniflive_url": "http://127.0.0.1:9882",
+    "aniflive_model": "",
+    "aniflive_voice_profile": "default",
+    "gpt_sovits_v5_url": "http://127.0.0.1:9885",
     "gpt_sovits_url": "http://127.0.0.1:9880",
     "gpt_sovits_ref_audio": "",
     "gpt_sovits_prompt_text": "",
@@ -140,6 +147,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "gpt_sovits_gpt_weights": "",
     "gpt_sovits_sovits_weights": "",
     "screen_ai_enabled": True,
+    "screen_watch_mode": "single",
+    "screen_watch_pace": "normal",
     "screen_audio_enabled": True,
     "screen_audio_model": "base",
     "screen_audio_language": "auto",
@@ -223,6 +232,7 @@ _voice_synthesis_lock = threading.Lock()
 _gpt_sovits_process: subprocess.Popen | None = None
 _gpt_sovits_lock = threading.Lock()
 _gpt_sovits_last_error = ""
+_external_voice_last_errors: dict[str, str] = {}
 _frontend_ready_event: asyncio.Event | None = None
 _voice_quality_lock = threading.Lock()
 _voice_quality_last: dict[str, Any] = {
@@ -982,6 +992,160 @@ def _record_reference_audio_block(
         }
 
 
+def _uses_mio_v2_runtime(config: dict | None = None) -> bool:
+    selected = config if config is not None else load_config()
+    return selected.get("voice_engine", MIO_VOICE_ENGINE) == MIO_VOICE_ENGINE and selected.get("local_voice_runtime") == "mio_v2"
+
+
+def _managed_voice_engine(config: dict) -> str:
+    return "mio_v2" if _uses_mio_v2_runtime(config) else str(config.get("voice_engine") or MIO_VOICE_ENGINE)
+
+
+def _ensure_aniflive_service(config: dict, *, cancel_event=None, timeout_seconds=180.0) -> None:
+    """Start only a registered local Anif selected by this still-current request."""
+    from . import aniflive_tts_service, local_voice_engines, tts_http_audio
+    manager = local_voice_engines.manager
+    tts_http_audio.check_cancel(cancel_event)
+    url = aniflive_tts_service.service_url(config)
+
+    def owned():
+        with manager.lock:
+            return (manager.engine == "aniflive" and manager.url == url
+                    and manager.child is not None and manager.child.poll() is None)
+
+    # An already listening independent service remains outside Mio's ownership.
+    if local_voice_engines.loopback_port_open(url) and not owned():
+        return
+    try:
+        entry = local_voice_engines.load_entry("aniflive", config)
+    except (OSError, ValueError):
+        return  # Remote/custom/unregistered installations keep direct HTTP use.
+
+    def selection_key(selected):
+        return (selected.get("voice_engine"), aniflive_tts_service.service_url(selected),
+                str(selected.get("aniflive_model") or ""), str(selected.get("aniflive_voice_profile") or ""))
+
+    expected = selection_key(config)
+
+    def require_current():
+        if selection_key(load_config()) != expected:
+            raise OSError("语音引擎、地址、模型或音色已切换，请重新开始语音回复。")
+
+    with manager.lifecycle_lock:
+        tts_http_audio.check_cancel(cancel_event)
+        require_current()
+        local_voice_engines.load_entry("aniflive", config)  # Revalidate before releasing any owned model.
+        if local_voice_engines.loopback_port_open(url) and not owned():
+            return
+        _stop_owned_original_voice()
+        tts_http_audio.check_cancel(cancel_event)
+        require_current()
+        manager.start("aniflive", config)  # Includes the unchanged RAM/VRAM/disk guards.
+    deadline = time.monotonic() + min(timeout_seconds, float(entry.get("startup_timeout", timeout_seconds)))
+    while True:
+        tts_http_audio.check_cancel(cancel_event)
+        require_current()
+        observed = aniflive_tts_service.runtime_status(config)
+        tts_http_audio.check_cancel(cancel_event)
+        require_current()
+        if observed.get("service_running"):
+            if observed.get("identity_matches_selection") is False:
+                raise OSError(observed.get("last_error") or "AnifLive实际模型或音色与当前选择不一致。")
+            return
+        status = manager.status("aniflive", config)
+        if status.get("managed_last_error"):
+            raise OSError(status["managed_last_error"])
+        if not status.get("managed_running"):
+            raise OSError("AnifLive服务已停止，请检查本机语音安装与模型。")
+        if time.monotonic() >= deadline:
+            raise TimeoutError("AnifLive模型加载超时，请检查语音服务状态后重试。")
+        if cancel_event is not None:
+            cancel_event.wait(.2)
+        else:
+            time.sleep(.2)
+
+
+def _ensure_mio_v2_service(config: dict, *, cancel_event=None, timeout_seconds=180.0) -> None:
+    from . import mio_v2_tts_service, tts_http_audio
+    from .local_voice_engines import manager, native_selection_key
+    tts_http_audio.check_cancel(cancel_event)
+    with manager.lifecycle_lock:
+        current = load_config()
+        if not _uses_mio_v2_runtime(current):
+            raise OSError("语音运行时已切换，请重新开始语音回复。")
+        _, current_profile = resolve_voice_profile(config=current)
+        if native_selection_key(current_profile) != native_selection_key(config):
+            raise OSError("语音音色已变化，请重新开始语音回复。")
+        initial = mio_v2_tts_service.runtime_status(config)
+        if initial.get("model_ready") and not initial.get("service_running"):
+            raise OSError(initial["last_error"])
+        if not initial.get("service_running"):
+            from . import genie_tts_service
+            if _gpt_sovits_process_running() or genie_tts_service.runtime_status().get("running"):
+                raise OSError("原语音运行时仍在运行；请在语音设置显式启动GPT-SoVITS V2完成切换。")
+            manager.ensure_mio_v2(config)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        tts_http_audio.check_cancel(cancel_event)
+        current = load_config()
+        if not _uses_mio_v2_runtime(current) or native_selection_key(current) != native_selection_key(config):
+            raise OSError("语音音色或运行时已切换，请重新开始语音回复。")
+        observed = mio_v2_tts_service.runtime_status(config)
+        if observed.get("model_ready") and not observed.get("service_running"):
+            raise OSError(observed["last_error"])
+        if observed.get("service_running"):
+            return
+        status = manager.status("mio_v2", config)
+        if status.get("managed_last_error"):
+            raise OSError(status["managed_last_error"])
+        if not status.get("managed_running"):
+            raise OSError("GPT-SoVITS V2服务已停止。")
+        if time.monotonic() >= deadline:
+            raise TimeoutError("GPT-SoVITS V2服务加载超时。")
+        if cancel_event is not None:
+            cancel_event.wait(.2)
+        else:
+            time.sleep(.2)
+
+
+def _prepare_mio_v2_input(text: str, config: dict, *, model_id="", language="", cancel_event=None):
+    _, selected = resolve_voice_profile(model_id, config=config, speech_language=language)
+    if selected.get("engine", MIO_VOICE_ENGINE) != MIO_VOICE_ENGINE:
+        raise OSError("GPT-SoVITS V2流式运行时仅支持原GPT-SoVITS音色。")
+    prepared, prepared_language, _ = _prepare_speech_input(text, selected)
+    if prepared_language not in {"zh", "all_zh", "ja", "all_ja"}:
+        raise ValueError("GPT-SoVITS V2当前已验证的输出语言为中文和日语。")
+    _ensure_mio_v2_service(selected, cancel_event=cancel_event)
+    return prepared, selected, "ja" if prepared_language in {"ja", "all_ja"} else "zh"
+
+
+def _external_voice_service(config: dict):
+    if _uses_mio_v2_runtime(config):
+        from . import mio_v2_tts_service
+        return mio_v2_tts_service
+    engine = config.get("voice_engine")
+    if engine == "indextts2":
+        from . import indextts2_service
+        return indextts2_service
+    if engine == "aniflive":
+        from . import aniflive_tts_service
+        return aniflive_tts_service
+    if engine == "gpt_sovits_v5":
+        from . import gpt_sovits_v5_service
+        return gpt_sovits_v5_service
+    return None
+
+
+def supports_call_speech_stream(model_id: str = "", *, config: dict | None = None, language: str = "") -> bool:
+    base = config if config is not None else load_config()
+    if base.get("voice_engine") in {"indextts2", "aniflive", "gpt_sovits_v5"}:
+        return True
+    if base.get("voice_engine", MIO_VOICE_ENGINE) != MIO_VOICE_ENGINE:
+        return False
+    _, selected = resolve_voice_profile(model_id, config=base, speech_language=language)
+    return selected.get("engine", MIO_VOICE_ENGINE) == MIO_VOICE_ENGINE and (_uses_genie_runtime(selected) or _uses_mio_v2_runtime(selected))
+
+
 def iter_speech_wav_stream(
     text: str,
     *,
@@ -989,15 +1153,77 @@ def iter_speech_wav_stream(
     emotion: str | None = None,
     model_id: str = "",
     language: str = "",
+    cancel_event: threading.Event | None = None,
+    config_snapshot: dict | None = None,
 ) -> Iterator[bytes]:
-    """Yield GPT-SoVITS WAV bytes as they arrive, with complete-WAV fallback."""
+    from .voice_asset_service import stable_selection
+    with stable_selection():
+        yield from _iter_speech_wav_stream_impl(
+            text, context=context, emotion=emotion, model_id=model_id, language=language,
+            cancel_event=cancel_event, config_snapshot=config_snapshot,
+        )
+
+
+def _iter_speech_wav_stream_impl(
+    text: str,
+    *,
+    context: str = "",
+    emotion: str | None = None,
+    model_id: str = "",
+    language: str = "",
+    cancel_event: threading.Event | None = None,
+    config_snapshot: dict | None = None,
+) -> Iterator[bytes]:
+    """Yield speech WAV; cancellable call streams require Genie PCM format."""
     global _gpt_sovits_last_error
 
+    engine_config = dict(config_snapshot) if config_snapshot is not None else load_config()
+    if cancel_event is not None:
+        if cancel_event.is_set():
+            return
+        if not supports_call_speech_stream(model_id, config=engine_config, language=language):
+            raise ValueError("通话音色已变化，请重新开始语音回复。")
     clean = clean_speech_text(text)
     if not clean:
         raise ValueError("这条消息没有可朗读的正文。")
     clean = clean[:600]
-    if load_config().get("voice_engine") in {"cloud", "indextts2"}:
+    external = _external_voice_service(engine_config)
+    if external is not None:
+        from . import tts_http_audio
+        if engine_config.get("voice_engine") == "aniflive":
+            _ensure_aniflive_service(engine_config, cancel_event=cancel_event)
+        selected_language = language or str(engine_config.get("pet_speech_language") or "zh")
+        if _uses_mio_v2_runtime(engine_config):
+            clean, engine_config, selected_language = _prepare_mio_v2_input(
+                clean, engine_config, model_id=model_id, language=language, cancel_event=cancel_event,
+            )
+        if engine_config.get("voice_engine") == "indextts2":
+            selected_language = str(engine_config.get("indextts2_language") or selected_language)
+        volume = max(0, min(100, int(engine_config.get("voice_volume", 85)))) / 100
+        yield tts_http_audio.streaming_header()
+        if hasattr(external, "iter_speech_pcm"):
+            pieces = external.iter_speech_pcm(clean, engine_config, language=selected_language, cancel_event=cancel_event)
+            try:
+                for pcm in pieces:
+                    tts_http_audio.check_cancel(cancel_event)
+                    if _uses_mio_v2_runtime(engine_config):
+                        from .local_voice_engines import native_selection_key
+                        current = load_config()
+                        if not _uses_mio_v2_runtime(current) or native_selection_key(current) != native_selection_key(engine_config):
+                            raise OSError("语音音色或运行时已切换，已停止旧音色的回复。")
+                    yield audioop.mul(pcm, 2, volume)
+            finally:
+                pieces.close()
+        else:
+            content = external.synthesize_wav(clean, engine_config, language=selected_language, cancel_event=cancel_event)
+            pcm = tts_http_audio.wav_pcm(tts_http_audio.normalize_wav(content))[0]
+            for offset in range(0, len(pcm), 8192):
+                tts_http_audio.check_cancel(cancel_event)
+                yield audioop.mul(pcm[offset:offset + 8192], 2, volume)
+        return
+    if config_snapshot is not None and engine_config.get("voice_engine") != load_config().get("voice_engine"):
+        raise ValueError("通话音色已变化，请重新开始语音回复。")
+    if engine_config.get("voice_engine") == "cloud":
         # 云端引擎一次合成完整 WAV，兼容流式接口的消费方。
         yield synthesize_speech_wav(clean, context=context, emotion=emotion)
         return
@@ -1028,6 +1254,8 @@ def iter_speech_wav_stream(
         last_segment_error: Exception | None = None
         for segment, is_line_break in _split_genie_stream_segments(prepared_text):
             try:
+                if cancel_event is not None and cancel_event.is_set():
+                    return
                 content = synthesize_speech_wav(
                     segment,
                     context=context,
@@ -1035,14 +1263,24 @@ def iter_speech_wav_stream(
                     model_id=model_id,
                     language=language,
                     _prepared_language=prepared_language,
+                    **({"_stream_cancel_event": cancel_event} if cancel_event is not None else {}),
                 )
             except Exception as exc:
+                if cancel_event is not None:
+                    raise
                 # A malformed short segment must not discard already generated
                 # audio or prevent later dialogue lines from being spoken.
                 last_segment_error = exc
                 logger.warning("Genie 语音片段失败，继续后续片段：%s", exc)
                 continue
-            yield _wav_pcm_payload(content)
+            pcm = _wav_pcm_payload(content)
+            if cancel_event is None:
+                yield pcm
+            else:
+                for offset in range(0, len(pcm), 8192):
+                    if cancel_event.is_set():
+                        return
+                    yield pcm[offset:offset + 8192]
             successful_segments += 1
             if is_line_break:
                 # Explicit source line breaks are meaningful dialogue boundaries.
@@ -1266,6 +1504,8 @@ def _play_gpt_sovits_stream(
     on_audio_started: Callable[[float], None] | None = None,
     started_at: float = 0.0,
 ) -> bool:
+    if _uses_mio_v2_runtime(config):
+        return _play_mio_v2_stream(text, config, generation, on_audio_started=on_audio_started, started_at=started_at)
     if os.name != "nt":
         raise OSError("流式本地语音当前只支持 Windows。")
     url, payload = _gpt_sovits_request_payload(
@@ -1275,6 +1515,7 @@ def _play_gpt_sovits_stream(
         context=context,
         streaming_mode=2,
     )
+    from .audio_output_devices import resolve_output_device
     winmm = ctypes.WinDLL("winmm")
     audio_handle = wintypes.HANDLE()
     pending = bytearray()
@@ -1302,7 +1543,7 @@ def _play_gpt_sovits_stream(
                             wav_format, audio_start = parsed
                             if winmm.waveOutOpen(
                                 ctypes.byref(audio_handle),
-                                0xFFFFFFFF,
+                                resolve_output_device(),
                                 ctypes.byref(wav_format),
                                 0,
                                 0,
@@ -1343,6 +1584,59 @@ def _play_gpt_sovits_stream(
     if not played_any:
         raise OSError("GPT-SoVITS 流式响应没有音频数据。")
     return True
+
+
+def _play_mio_v2_stream(text: str, config: dict, generation: int, *, on_audio_started=None, started_at=0.0) -> bool:
+    """Play original-model PCM as it arrives; cancellation also stops its owned session."""
+    if os.name != "nt":
+        raise OSError("流式本地语音当前只支持 Windows。")
+    from . import mio_v2_tts_service, tts_http_audio
+    from .audio_output_devices import resolve_output_device
+    cancelled, done = threading.Event(), threading.Event()
+    def watch_generation():
+        while not done.wait(.03):
+            with _speech_lock:
+                if generation != _speech_generation:
+                    cancelled.set()
+                    return
+    watcher = threading.Thread(target=watch_generation, daemon=True, name="mio-v2-playback-cancel")
+    watcher.start()
+    pieces = None
+    handle = wintypes.HANDLE()
+    winmm = ctypes.WinDLL("winmm")
+    played = False
+    try:
+        prepared, selected, language = _prepare_mio_v2_input(
+            text, config, language=str(config.get("gpt_sovits_text_language") or ""), cancel_event=cancelled,
+        )
+        fmt, _ = _stream_wav_header(bytearray(tts_http_audio.streaming_header()))
+        if winmm.waveOutOpen(ctypes.byref(handle), resolve_output_device(), ctypes.byref(fmt), 0, 0, 0) != 0:
+            raise OSError("Windows 无法打开流式语音播放设备。")
+        volume = round(0xFFFF * max(0, min(100, int(config.get("voice_volume", 85)))) / 100)
+        winmm.waveOutSetVolume(handle, volume | (volume << 16))
+        pieces = mio_v2_tts_service.iter_speech_pcm(prepared, selected, language=language, cancel_event=cancelled)
+        for pcm in pieces:
+            tts_http_audio.check_cancel(cancelled)
+            if not played and on_audio_started is not None:
+                on_audio_started(max(0.0, time.monotonic() - started_at))
+            played = True
+            if not _wave_out_play_chunk(winmm, handle, pcm, generation):
+                cancelled.set()
+                return False
+        if not played:
+            raise OSError("GPT-SoVITS V2没有生成可播放音频。")
+        return True
+    except InterruptedError:
+        return False
+    finally:
+        cancelled.set()
+        done.set()
+        if pieces is not None:
+            pieces.close()
+        if handle:
+            winmm.waveOutReset(handle)
+            winmm.waveOutClose(handle)
+        watcher.join(1)
 
 
 def inspect_speech_wav_quality(
@@ -1427,6 +1721,7 @@ def _speak_wav_worker_impl(
 ) -> None:
     global _gpt_sovits_last_error
     started_at = time.monotonic()
+    playback_engine = str(load_config().get("voice_engine") or MIO_VOICE_ENGINE)
     try:
         def notify_audio_started(latency: float) -> None:
             with _voice_runtime_metrics_lock:
@@ -1436,7 +1731,7 @@ def _speak_wav_worker_impl(
             if on_audio_started is not None:
                 on_audio_started(latency)
 
-        if load_config().get("voice_engine") in {"cloud", "indextts2"}:
+        if load_config().get("voice_engine") in {"cloud", "indextts2", "aniflive", "gpt_sovits_v5"}:
             content = synthesize_speech_wav(
                 text,
                 context=context,
@@ -1461,7 +1756,8 @@ def _speak_wav_worker_impl(
         _, config = resolve_voice_profile(model_id, speech_language=language)
         if streaming and config.get("engine") == MIO_VOICE_ENGINE and not _uses_genie_runtime(config):
             try:
-                _ensure_gpt_sovits_service()
+                if not _uses_mio_v2_runtime(config):
+                    _ensure_gpt_sovits_service()
                 played = _play_gpt_sovits_stream(
                     text,
                     config,
@@ -1520,6 +1816,8 @@ def _speak_wav_worker_impl(
     except Exception as exc:
         message = f"本地播放失败：{exc}"
         _gpt_sovits_last_error = message
+        if playback_engine in {"indextts2", "aniflive", "gpt_sovits_v5"}:
+            _external_voice_last_errors[playback_engine] = message
         if result is not None:
             result["error"] = message
 
@@ -1534,12 +1832,14 @@ def _speak_wav_worker(
     on_audio_started: Callable[[float], None] | None = None,
     model_id: str = "",
     language: str = "",
+    on_completed: Callable[[bool], None] | None = None,
 ) -> None:
     global _speech_owner_generation, _speech_owner_priority, _speech_owner_source
     # Only one expensive TTS synthesis may run at once. A newer utterance
     # supersedes queued work before it can enter Genie/ONNX.
     try:
-        with _speech_synthesis_lock:
+        from .voice_asset_service import stable_selection
+        with _speech_synthesis_lock, stable_selection():
             with _speech_lock:
                 if generation != _speech_generation:
                     if result is not None:
@@ -1556,12 +1856,18 @@ def _speak_wav_worker(
                 model_id,
                 language,
             )
+    except (ValueError, OSError) as exc:
+        if result is not None:
+            result['error'] = str(exc)
+            result['canceled'] = True
     finally:
         with _speech_lock:
             if _speech_owner_generation == generation:
                 _speech_owner_generation = 0
                 _speech_owner_priority = 0
                 _speech_owner_source = ""
+        if on_completed is not None:
+            on_completed(bool(result and result.get("played") and not result.get("canceled") and not result.get("error")))
 
 
 _realtime_text_bridge_lock = threading.Lock()
@@ -1596,10 +1902,12 @@ def speak_text(
     emotion: str | None = None,
     streaming: bool | None = None,
     on_audio_started: Callable[[float], None] | None = None,
+    on_completed: Callable[[bool], None] | None = None,
     model_id: str = "",
     language: str = "",
     source: str = "chat",
     priority: int | None = None,
+    allow_realtime_bridge: bool = True,
 ) -> bool:
     global _speech_generation, _gpt_sovits_last_error
     global _speech_owner_generation, _speech_owner_priority, _speech_owner_source
@@ -1607,7 +1915,7 @@ def speak_text(
     config = load_config()
     if not clean or not config["voice_enabled"]:
         return False
-    if _bridged_speak(clean[:600]):
+    if allow_realtime_bridge and _bridged_speak(clean[:600]):
         return True
     clean = clean[:600]
     use_streaming = bool(config.get("voice_streaming_enabled", True)) if streaming is None else bool(streaming)
@@ -1628,7 +1936,7 @@ def speak_text(
     result: dict[str, Any] = {"played": False, "canceled": False, "error": ""}
     worker = threading.Thread(
         target=_speak_wav_worker,
-        args=(clean, generation, context, result, emotion, use_streaming, on_audio_started, model_id, language),
+        args=(clean, generation, context, result, emotion, use_streaming, on_audio_started, model_id, language, on_completed),
         name="mio-gpt-sovits-playback",
         daemon=True,
     )
@@ -1651,6 +1959,28 @@ def synthesize_speech_wav(
     model_id: str = "",
     language: str = "",
     _prepared_language: str = "",
+    _stream_cancel_event: threading.Event | None = None,
+) -> bytes:
+    from .voice_asset_service import stable_selection
+    with stable_selection():
+        return _synthesize_speech_wav_impl(
+            text, context=context, emotion=emotion,
+            require_configured_engine=require_configured_engine, model_id=model_id,
+            language=language, _prepared_language=_prepared_language,
+            _stream_cancel_event=_stream_cancel_event,
+        )
+
+
+def _synthesize_speech_wav_impl(
+    text: str,
+    *,
+    context: str = "",
+    emotion: str | None = None,
+    require_configured_engine: bool = False,
+    model_id: str = "",
+    language: str = "",
+    _prepared_language: str = "",
+    _stream_cancel_event: threading.Event | None = None,
 ) -> bytes:
     global _gpt_sovits_last_error
     clean = clean_speech_text(text)
@@ -1658,16 +1988,27 @@ def synthesize_speech_wav(
         raise ValueError("这条消息没有可朗读的正文。")
     clean = clean[:600]
     engine_config = load_config()
-    if engine_config.get("voice_engine") == "indextts2":
-        from . import indextts2_service
+    external = _external_voice_service(engine_config)
+    if external is not None:
         try:
-            content = indextts2_service.synthesize_wav(clean, engine_config)
+            if engine_config.get("voice_engine") == "aniflive":
+                _ensure_aniflive_service(engine_config, cancel_event=_stream_cancel_event)
+            selected_language = language or str(engine_config.get("pet_speech_language") or "zh")
+            if _uses_mio_v2_runtime(engine_config):
+                clean, engine_config, selected_language = _prepare_mio_v2_input(
+                    clean, engine_config, model_id=model_id, language=language, cancel_event=_stream_cancel_event,
+                )
+            if engine_config.get("voice_engine") == "indextts2":
+                selected_language = str(engine_config.get("indextts2_language") or selected_language)
+            content = external.synthesize_wav(clean, engine_config, language=selected_language, cancel_event=_stream_cancel_event)
             content = _postprocess_speech_wav(content, int(engine_config.get("voice_volume", 85)))
             _gpt_sovits_last_error = ""
+            _external_voice_last_errors[str(engine_config["voice_engine"])] = ""
             return content
         except (ValueError, OSError) as exc:
             _gpt_sovits_last_error = str(exc)
-            raise OSError(f"IndexTTS2 语音暂时不可用：{exc}") from exc
+            _external_voice_last_errors[str(engine_config["voice_engine"])] = str(exc)
+            raise OSError(f"当前独立语音引擎暂时不可用：{exc}") from exc
     if engine_config.get("voice_engine") == "cloud":
         try:
             content = cloud_tts.synthesize_wav(clean, engine_config)
@@ -1704,7 +2045,31 @@ def synthesize_speech_wav(
                 "gpt_sovits_text_language": expected_language,
             })
             speech_text = prepare_speech_prosody(expected_speech_text, selected_emotion, expected_language)
-            content = genie_tts_service.synthesize_wav(speech_text, genie_config)
+            def generate_genie_wav(source_text: str) -> bytes:
+                if _stream_cancel_event is None:
+                    return genie_tts_service.synthesize_wav(source_text, genie_config)
+                if _stream_cancel_event.is_set():
+                    raise OSError("电话语音已取消")
+                # Genie generates complete short sentences internally. Keep the
+                # existing reference-copy/duration checks before releasing audio,
+                # while avoiding a temporary WAV and allowing prompt cancellation.
+                pieces = genie_tts_service.iter_speech_pcm(
+                    source_text, genie_config, cancel_event=_stream_cancel_event,
+                )
+                try:
+                    pcm = b"".join(pieces)
+                finally:
+                    pieces.close()
+                if _stream_cancel_event.is_set():
+                    raise OSError("电话语音已取消")
+                with BytesIO() as memory:
+                    with wave.open(memory, "wb") as writer:
+                        writer.setnchannels(1)
+                        writer.setsampwidth(2)
+                        writer.setframerate(32000)
+                        writer.writeframes(pcm)
+                    return memory.getvalue()
+            content = generate_genie_wav(speech_text)
             reference_candidates = _reference_audio_candidates(synthesis_config, reference)
             duration_limit = _short_speech_duration_limit(expected_speech_text)
             duration_seconds = _wav_duration_seconds(content)
@@ -1746,7 +2111,7 @@ def synthesize_speech_wav(
                     selected_emotion,
                     expected_language,
                 )
-                content = genie_tts_service.synthesize_wav(retry_text, genie_config)
+                content = generate_genie_wav(retry_text)
                 retry_duration = _wav_duration_seconds(content)
                 retry_limit = (
                     _recovery_speech_duration_limit(retry_source_text)
@@ -1860,11 +2225,17 @@ def _probe_gpt_sovits(*, force: bool = False) -> bool:
 
 def voice_runtime_status(*, force_probe: bool = False) -> dict[str, Any]:
     config = load_config()
-    if config.get("voice_engine") == "indextts2":
-        from . import indextts2_service
-        status = indextts2_service.runtime_status(config)
-        if _gpt_sovits_last_error:
-            status["last_error"] = _gpt_sovits_last_error
+    external = _external_voice_service(config)
+    if external is not None:
+        status = external.runtime_status(config)
+        from .local_voice_engines import manager as local_voice_manager
+        status.update(local_voice_manager.status(_managed_voice_engine(config), config))
+        if status.get("managed_last_error"):
+            status["last_error"] = status["managed_last_error"]
+        synthesis_error = _external_voice_last_errors.get(str(config["voice_engine"]), "")
+        if synthesis_error:
+            status["last_synthesis_error"] = synthesis_error
+            status["last_error"] = status.get("last_error") or synthesis_error
         return status
     reference = str(config.get("gpt_sovits_ref_audio") or "")
     reference_path = Path(reference) if reference else None
@@ -2022,10 +2393,14 @@ def voice_runtime_status(*, force_probe: bool = False) -> dict[str, Any]:
 
 def voice_runtime_health() -> dict[str, Any]:
     """Return cached/process-only TTS health without issuing an HTTP probe."""
-    if load_config().get("voice_engine") == "indextts2":
-        return {"runtime": "indextts2", "managed_running": False, "desired_running": False,
+    config = load_config()
+    external_engine = _managed_voice_engine(config)
+    if external_engine in {"indextts2", "aniflive", "gpt_sovits_v5", "mio_v2"}:
+        from .local_voice_engines import manager as local_voice_manager
+        managed = local_voice_manager.status(external_engine, load_config())
+        return {"runtime": external_engine, **managed, "desired_running": managed["managed_running"],
                 "observed_running": None, "probe_age_seconds": None, "probe_stale": True,
-                "last_error": _gpt_sovits_last_error, "warmup_state": "idle", "warmup_error": "",
+                "last_error": managed.get("managed_last_error") or "", "warmup_state": "idle", "warmup_error": "",
                 "last_first_audio_ms": None}
     if _uses_genie_runtime():
         from . import genie_tts_service
@@ -2078,8 +2453,18 @@ def voice_runtime_health() -> dict[str, Any]:
 
 
 def start_voice_service() -> dict[str, Any]:
-    if load_config().get("voice_engine") == "indextts2":
-        raise OSError("IndexTTS2 使用独立服务，请按语音设置中的启动命令运行；Mio 不代管此进程。")
+    from .local_voice_engines import manager as local_voice_manager, load_entry
+    with local_voice_manager.lifecycle_lock:
+        config = load_config()
+        engine = _managed_voice_engine(config)
+        if engine in {"indextts2", "aniflive", "gpt_sovits_v5", "mio_v2"}:
+            load_entry(engine, config)  # Validate installation before releasing an old owned model.
+            _stop_owned_original_voice()
+            local_voice_manager.start(engine, config)
+        else:
+            local_voice_manager.stop_all()
+    if engine in {"indextts2", "aniflive", "gpt_sovits_v5", "mio_v2"}:
+        return voice_runtime_status()
     status = start_gpt_sovits_service()
     warm_voice_runtime_async()
     return status
@@ -2093,7 +2478,7 @@ async def start_voice_on_app_startup() -> bool:
         return False
     if not bool(config.get("voice_enabled", True)):
         return False
-    if str(config.get("voice_engine") or MIO_VOICE_ENGINE) != MIO_VOICE_ENGINE:
+    if str(config.get("voice_engine") or MIO_VOICE_ENGINE) not in {MIO_VOICE_ENGINE, "indextts2", "aniflive", "gpt_sovits_v5"}:
         return False
     if os.getenv("MIO_DESKTOP_APP", "").strip() == "1":
         event = _frontend_ready_event
@@ -2128,16 +2513,43 @@ def signal_frontend_ready() -> bool:
     return not was_ready
 
 
+def cancel_speech_playback(*, sources: set[str] | None = None) -> None:
+    """Invalidate queued utterances and let active PCM playback stop at its next chunk."""
+    global _speech_generation, _speech_owner_generation, _speech_owner_priority, _speech_owner_source
+    with _speech_lock:
+        if sources and _speech_owner_source not in sources:
+            return
+        _speech_generation += 1
+        _speech_owner_generation = 0
+        _speech_owner_priority = 0
+        _speech_owner_source = ""
+
+
 def stop_voice_service() -> dict[str, Any]:
-    if load_config().get("voice_engine") == "indextts2":
-        raise OSError("请在 IndexTTS2 独立服务终端按 Ctrl+C 停止。")
+    cancel_speech_playback()
+    engine = _managed_voice_engine(load_config())
+    if engine in {"indextts2", "aniflive", "gpt_sovits_v5", "mio_v2"}:
+        from .local_voice_engines import manager as local_voice_manager
+        local_voice_manager.stop(engine)
+        return voice_runtime_status()
     return stop_gpt_sovits_service()
 
 
 def restart_voice_service() -> dict[str, Any]:
-    if load_config().get("voice_engine") == "indextts2":
-        raise OSError("请在 IndexTTS2 独立服务终端停止后重新运行启动命令。")
-    return restart_gpt_sovits_service()
+    stop_voice_service()
+    return start_voice_service()
+
+
+def _stop_owned_original_voice() -> None:
+    """Release both possible original owned runtimes, independent of saved engine selection."""
+    global _gpt_sovits_process, _gpt_sovits_desired_running, _gpt_sovits_probe_at
+    from . import genie_tts_service
+    genie_tts_service.stop_worker()
+    _gpt_sovits_desired_running = False
+    with _gpt_sovits_lock:
+        process, _gpt_sovits_process = _gpt_sovits_process, None
+    _terminate_process_tree(process)
+    _gpt_sovits_probe_at = 0.0
 
 
 def _prepare_gpt_sovits_nltk_data(root: Path, python: Path) -> Path:
@@ -2211,6 +2623,14 @@ def _prepare_gpt_sovits_nltk_data(root: Path, python: Path) -> Path:
 
 
 def start_gpt_sovits_service() -> dict[str, Any]:
+    if _uses_mio_v2_runtime():
+        return start_voice_service()
+    from .local_voice_engines import manager as local_voice_manager
+    local_voice_manager.require_original_selected()
+    return _start_gpt_sovits_service_impl()
+
+
+def _start_gpt_sovits_service_impl() -> dict[str, Any]:
     global _gpt_sovits_process, _gpt_sovits_probe_at, _gpt_sovits_last_error
     global _gpt_sovits_desired_running
     _gpt_sovits_desired_running = True
@@ -2255,7 +2675,9 @@ def start_gpt_sovits_service() -> dict[str, Any]:
     ffmpeg_dir = root / "cache" / "bin"
     if (ffmpeg_dir / "ffmpeg.exe").is_file():
         env["PATH"] = f"{ffmpeg_dir}{os.pathsep}{env.get('PATH', '')}"
-    with _gpt_sovits_lock:
+    from .local_voice_engines import manager as local_voice_manager
+    with local_voice_manager.lifecycle_lock, _gpt_sovits_lock:
+        local_voice_manager.require_original_selected()
         if _gpt_sovits_process is None or _gpt_sovits_process.poll() is not None:
             _gpt_sovits_process = subprocess.Popen(
                 [
@@ -2312,8 +2734,8 @@ def _warm_genie_language(language: str) -> None:
 
 
 def warm_voice_runtime() -> dict[str, Any]:
-    if load_config().get("voice_engine") == "indextts2":
-        return {"warmup_state": "idle", "warmup_error": "IndexTTS2 由独立服务加载，请保存并试听验证。"}
+    if _external_voice_service(load_config()) is not None:
+        return {"warmup_state": "idle", "warmup_error": "当前引擎由独立服务加载，请保存并试听验证。"}
     uses_genie = _uses_genie_runtime()
     genie_hot = False
     if uses_genie:
@@ -2370,7 +2792,7 @@ def warm_voice_runtime() -> dict[str, Any]:
 
 
 def warm_voice_runtime_async() -> bool:
-    if load_config().get("voice_engine") == "indextts2":
+    if _external_voice_service(load_config()) is not None:
         return False
     uses_genie = _uses_genie_runtime()
     genie_cold = False
@@ -2399,7 +2821,7 @@ def warm_voice_language_async(language: str) -> bool:
     if selected not in {"zh", "ja"}:
         return False
     config = load_config()
-    if not config.get('voice_enabled', True) or config.get('voice_engine') in {'cloud', 'indextts2'}:
+    if not config.get('voice_enabled', True) or _external_voice_service(config) is not None or config.get('voice_engine') == 'cloud':
         return False
 
     if _uses_genie_runtime():
@@ -2434,6 +2856,9 @@ def warm_voice_language_async(language: str) -> bool:
 
 
 def _ensure_gpt_sovits_service(*, timeout_seconds: float = 90.0, poll_seconds: float = 0.5) -> None:
+    if _uses_mio_v2_runtime():
+        _ensure_mio_v2_service(load_config(), timeout_seconds=timeout_seconds)
+        return
     if _uses_genie_runtime():
         from . import genie_tts_service
 
@@ -2456,6 +2881,8 @@ def _ensure_gpt_sovits_service(*, timeout_seconds: float = 90.0, poll_seconds: f
 def stop_gpt_sovits_service() -> dict[str, Any]:
     global _gpt_sovits_process, _gpt_sovits_probe_at, _gpt_sovits_desired_running
     _gpt_sovits_desired_running = False
+    if _uses_mio_v2_runtime():
+        return stop_voice_service()
     if _uses_genie_runtime():
         from . import genie_tts_service
 
@@ -2518,7 +2945,15 @@ resolve_voice_profile = _configuration_service.resolve_voice_profile
 _resolve_base_voice_profile = _configuration_service._resolve_base_voice_profile
 _apply_voice_profile_config = _configuration_service._apply_voice_profile_config
 load_config = _configuration_service.load_config
-save_config = _configuration_service.save_config
+from .local_voice_engines import manager as _local_voice_manager
+_local_voice_manager.selection_reader = lambda: load_config()
+
+
+def save_config(changes: dict[str, Any]) -> dict[str, Any]:
+    # The short disk update and all model spawns use the same outer lock. A
+    # scheduled old warmup cannot pass its selection check during a saved switch.
+    with _local_voice_manager.lifecycle_lock:
+        return _configuration_service.save_config(changes)
 load_normalized_config = _configuration_service.load_normalized_config
 save_pet_position = _configuration_service.save_pet_position
 save_pet_size = _configuration_service.save_pet_size
@@ -2692,6 +3127,8 @@ def shutdown() -> None:
     run("临时预览", cleanup_legacy_preview)
     run("Live2D 桌宠", stop_pet)
     run("GPT-SoVITS", stop_gpt_sovits_service)
+    from .local_voice_engines import manager as local_voice_manager
+    run("本地语音引擎", local_voice_manager.stop_all)
     try:
         from . import local_vision_service
     except Exception:

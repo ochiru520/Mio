@@ -1,0 +1,14 @@
+<!doctype html><html lang="zh-CN" data-font-size="medium"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>屏幕模型隔离验收</title><style>body{margin:0}*{box-sizing:border-box}#app{min-height:100vh}.settings-page{height:auto!important;overflow:visible!important;max-width:1050px;margin:auto;padding:20px}</style></head><body><div id="app"></div><script type="module">
+import {createApp,h,reactive,markRaw} from 'vue'
+import SettingsPage from '../src/components/SettingsPage.vue'
+import {Monitor} from '../src/icons/index.js'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+const mode=new URLSearchParams(location.search).get('mode')||'stopped'
+const runtime={configured_model:'qwen3.5:2b',model:'qwen3.5:2b',owned_server:mode!=='stopped',server_running:mode!=='stopped',loaded_models:mode==='mismatch'?['different:4b']:mode==='running'?['qwen3.5:2b']:[],model_observation_known:mode!=='unknown'}
+window.fixtureActions=[]
+const context=reactive({activeSettingsSection:'pet',activeSettingsItem:{label:'桌宠与语音',description:'隔离验收',icon:markRaw(Monitor)},settingsFeedback:{section:'',message:''},isSettingsSectionDirty:()=>false,companionStatusReady:true,companionAvatarUrl:'/mio-avatar.png',companionBusy:'',companionStatus:{pet:{settings:{screen_vision_route:mode==='cloud'?'cloud':'local',screen_vision_model_id:'fixture-cloud',screen_analysis_interval_seconds:10,screen_voice_cooldown_seconds:5,screen_daily_cost_limit_yuan:1,screen_ai_enabled:true}},screen:{running:false},screen_analysis:{local_vision:runtime,vision_model_options:[{id:'fixture-cloud',label:'现有云端视觉模型'}],budget:{daily:{}}}},openSettingsSection:id=>window.fixtureActions.push(id),loadCompanionStatus:()=>window.fixtureActions.push('refresh'),saveCompanionSettings(){},resetActiveSettings(){},importLive2DModel(){},deleteLive2DModel(){},replaceLive2DPreview(){},previewLive2DMotion(){},previewLive2DExpression(){},controlCompanion(){},saveCompanionSize(){}})
+window.fixture=context
+createApp({render:()=>h(SettingsPage,{ref:instance=>{if(instance)instance.petSettingsTab='observation'}})}).provide('mio-settings-page',context).mount('#app')
+</script></body></html>

@@ -14,6 +14,7 @@ qrcode==8.2
 cryptography==50.0.1
 dxcam==0.0.5
 mss==10.2.0
+windows-capture==2.0.1; sys_platform == "win32"
 websockets==16.0
 PyYAML==6.0.3
 playwright==1.63.0

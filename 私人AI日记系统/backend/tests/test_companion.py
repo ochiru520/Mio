@@ -2717,6 +2717,7 @@ class CompanionConfigTests(unittest.TestCase):
         self.assertEqual(options["sovits"][0]["path"], str(sovits.resolve()))
 
     def test_observation_start_and_stop_bind_system_audio_without_stopping_phone_asr(self) -> None:
+        companion_service.save_config({"screen_audio_enabled": True})
         observer = companion_service.window_observer
         with (
             patch.object(observer, "select_screen"),
@@ -2739,10 +2740,7 @@ class CompanionConfigTests(unittest.TestCase):
 
         self.assertTrue(started["running"])
         self.assertFalse(stopped["running"])
-        self.assertEqual(
-            [call.args[0] for call in save_config.call_args_list],
-            [{"screen_audio_enabled": True}, {"screen_audio_enabled": False}],
-        )
+        save_config.assert_not_called()
         self.assertEqual(audio_start.call_count, 2)
         self.assertTrue(audio_start.call_args.kwargs['transcription_only'])
         audio_stop.assert_not_called()
@@ -3503,6 +3501,7 @@ class CompanionConfigTests(unittest.TestCase):
         self.assertTrue(response["heard"])
         self.assertEqual(response["reply"], "我看见了")
         self.assertEqual(response["timings"]["model_first_token_ms"], 321.0)
+        self.assertEqual(call_session_service.manager.status()["timings"], response["timings"])
         record_route.assert_called_once()
         self.assertEqual(record_route.call_args.kwargs["source"], "desktop_pet_call")
         transcribe.assert_called_once()
@@ -3947,14 +3946,16 @@ class CompanionConfigTests(unittest.TestCase):
         observer._prefer_native = True
         observer._native_capture_retry_at = 0.0
         with (
-            patch("app.companion_observation_service.create_native_capture", return_value=recovered_native) as create_native,
+            patch("app.companion_observation_service.WindowCapture", return_value=SimpleNamespace(
+                hwnd=123, capture=lambda: recovered_native.capture(), release=lambda: None,
+            )) as create_window,
             patch("app.companion_observation_service.ImageGrab.grab") as legacy,
             patch.object(observer, "_client_bbox", return_value=(0, 0, 640, 360)),
         ):
             recovered_result = observer.capture()
-        create_native.assert_called_once()
+        create_window.assert_called_once_with(123)
         legacy.assert_not_called()
-        self.assertEqual(recovered_result["capture_backend"], "dxgi")
+        self.assertEqual(recovered_result["capture_backend"], "wgc (独立窗口)")
 
     def test_screen_capture_uses_dxgi_before_imagegrab_and_retries_mss(self) -> None:
         class FakeCapture:

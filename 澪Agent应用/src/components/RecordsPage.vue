@@ -123,10 +123,10 @@ function diaryListTitle(diary) {
 }
 
 function diaryListDetail(diary) {
-  const state = `${context.statusLabel(diary.daily_thirty_status)} · ${diary.confirmed_at ? '已确认' : '未确认'}`
+  const state = `${context.statusLabel(diary.daily_thirty_status)}，${diary.confirmed_at ? '已确认' : '未确认'}`
   if (isGenericDiaryTitle(diary)) return state
   const summary = excerpt(diary.markdown_content)
-  return summary ? `${summary} · ${state}` : state
+  return summary ? `${summary}，${state}` : state
 }
 
 const activeMonthDiaries = computed(() => (context.selectedMonthlyReview?.source_diaries || [])
@@ -201,7 +201,7 @@ function memoryTimeLabel(memory) {
     parts.push(`有效期 ${memory.valid_from ? context.formatShortTime(memory.valid_from) : '未知'} 至 ${memory.valid_until ? context.formatShortTime(memory.valid_until) : '未结束'}`)
   }
   if (memory?.last_confirmed_at) parts.push(`最后确认 ${context.formatShortTime(memory.last_confirmed_at)}`)
-  return parts.join(' · ')
+  return parts.join('，')
 }
 
 function startDiaryEdit() {
@@ -305,7 +305,7 @@ async function saveDiaryEdit() {
       <div v-else-if="context.statsError"><p role="alert">成长记录读取失败：{{ context.statsError }}</p><button type="button" @click="context.loadStats(context.statsData.year, context.statsData.month)">重新读取</button></div>
       <template v-else-if="context.statsLoaded">
       <div class="growth-metrics"><article><span>日记</span><strong>{{ context.statsSummary.total || 0 }}<small>篇</small></strong></article><article><span>成长完成率</span><strong>{{ ((context.statsSummary.completion_rate || 0) * 100).toFixed(1) }}<small>%</small></strong></article><article><span>当前连续</span><strong>{{ context.statsSummary.current_streak || 0 }}<small>天</small></strong></article><article><span>最长连续</span><strong>{{ context.statsSummary.longest_streak || 0 }}<small>天</small></strong></article></div>
-      <div class="growth-dashboard"><section class="stats-calendar-panel"><header><div><CalendarDays :size="18" /><h3>{{ context.statsMonthLabel }}</h3></div><div><button type="button" :disabled="context.statsLoading" aria-label="上个月" @click="context.changeStatsMonth(-1)"><ChevronLeft :size="16" /></button><button type="button" :disabled="context.statsLoading" aria-label="下个月" @click="context.changeStatsMonth(1)"><ChevronRight :size="16" /></button></div></header><div class="stats-weekdays"><span v-for="day in ['一','二','三','四','五','六','日']" :key="day">{{ day }}</span></div><div class="stats-calendar-grid"><span v-for="cell in context.statsCalendarCells" :key="cell.key" :class="{ blank: cell.blank }"><button v-if="!cell.blank" type="button" :class="[`status-${cell.status}`, { today: cell.isToday }]" :disabled="!cell.hasDiary" @click="context.openStatsDiary(cell)">{{ cell.day }}</button></span></div></section><section class="growth-summary-panel"><h3>近 30 天情绪</h3><div v-if="context.statsMoodPoints.length" class="growth-mood-bars"><i v-for="point in context.statsMoodPoints" :key="point.date" :style="{ height: `${20 + point.score * 14}%` }" :title="`${point.date} · ${point.score}/5`" /></div><p v-else>还没有足够的情绪记录</p></section></div>
+      <div class="growth-dashboard"><section class="stats-calendar-panel"><header><div><CalendarDays :size="18" /><h3>{{ context.statsMonthLabel }}</h3></div><div><button type="button" :disabled="context.statsLoading" aria-label="上个月" @click="context.changeStatsMonth(-1)"><ChevronLeft :size="16" /></button><button type="button" :disabled="context.statsLoading" aria-label="下个月" @click="context.changeStatsMonth(1)"><ChevronRight :size="16" /></button></div></header><div class="stats-weekdays"><span v-for="day in ['一','二','三','四','五','六','日']" :key="day">{{ day }}</span></div><div class="stats-calendar-grid"><span v-for="cell in context.statsCalendarCells" :key="cell.key" :class="{ blank: cell.blank }"><button v-if="!cell.blank" type="button" :class="[`status-${cell.status}`, { today: cell.isToday }]" :disabled="!cell.hasDiary" @click="context.openStatsDiary(cell)">{{ cell.day }}</button></span></div></section><section class="growth-summary-panel"><h3>近 30 天情绪</h3><div v-if="context.statsMoodPoints.length" class="growth-mood-bars"><i v-for="point in context.statsMoodPoints" :key="point.date" :style="{ height: `${20 + point.score * 14}%` }" :title="`${point.date}，${point.score}/5`" /></div><p v-else>还没有足够的情绪记录</p></section></div>
       </template>
     </section>
   </section>
@@ -334,7 +334,7 @@ async function saveDiaryEdit() {
         <summary><History :size="15" />历史版本 <span>{{ restorableMemoryHistory.length }}</span></summary>
         <div>
           <article v-for="memory in restorableMemoryHistory" :key="memory.id">
-            <span><b>{{ context.memoryCategoryLabel(memory.category) }}</b><small>{{ memory.status === 'superseded' ? '被新版本替代' : '已停用' }} · {{ context.formatShortTime(memory.updated_at) }}</small></span>
+            <span><b>{{ context.memoryCategoryLabel(memory.category) }}</b><small>{{ memory.status === 'superseded' ? '被新版本替代' : '已停用' }}，{{ context.formatShortTime(memory.updated_at) }}</small></span>
             <p>{{ memory.content }}</p>
             <button type="button" :disabled="Boolean(context.memoryBusy)" @click="context.restoreStructuredMemory(memory)"><RotateCcw :size="14" />恢复这个版本</button>
           </article>
@@ -377,7 +377,7 @@ async function saveDiaryEdit() {
 .record-mode-tabs { flex-shrink: 0; }
 .records-load-error { flex-shrink: 0; padding: 12px; overflow-wrap: anywhere; }
 .record-reader-layout, .period-record-layout { flex: 1; height: auto; min-height: 0; }
-.auto-diary-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: calc(12px * var(--fs, 1)); flex-shrink: 0; }
+.auto-diary-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: var(--text-xs); flex-shrink: 0; }
 .auto-diary-status > div:first-child { flex: 1; min-width: 180px; overflow-wrap: anywhere; }
 .auto-diary-status p { margin: 5px 0; }
 .auto-diary-status small { display: block; margin-top: 4px; opacity: .8; }
@@ -387,4 +387,4 @@ async function saveDiaryEdit() {
 .auto-diary-actions button:disabled { opacity: .5; cursor: default; }
 </style>
 
-<style scoped>.daily-review-section{border-top:1px solid var(--line);margin-top:24px;padding-top:18px}.daily-review-section>header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.daily-review-section h3{margin:0;font-size:16px}.record-pagination{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;margin-top:10px}.record-pagination button{display:grid;place-items:center;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--surface-raised);color:var(--text);cursor:pointer}.record-pagination button:disabled{opacity:.4;cursor:default}.record-pagination small{white-space:nowrap}</style>
+<style scoped>.daily-review-section{border-top:1px solid var(--line);margin-top:24px;padding-top:18px}.daily-review-section>header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.daily-review-section h3{margin:0;font-size: var(--text-lg)}.record-pagination{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;margin-top:10px}.record-pagination button{display:grid;place-items:center;padding:5px;border:1px solid var(--border);border-radius:6px;background:var(--surface-raised);color:var(--text);cursor:pointer}.record-pagination button:disabled{opacity:.4;cursor:default}.record-pagination small{white-space:nowrap}</style>

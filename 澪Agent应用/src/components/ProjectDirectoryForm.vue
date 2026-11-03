@@ -37,17 +37,17 @@ function submit() {
 <style scoped>
 .agent-project-directory-form { display: grid; gap: 18px; }
 .project-directory-modes { display: flex; gap: 4px; padding: 4px; border-radius: 9px; background: var(--surface-soft); }
-button { border: 1px solid var(--border); border-radius: 7px; padding: 9px 14px; color: var(--text); background: var(--surface-raised); font: inherit; font-size: calc(13px * var(--fs, 1)); cursor: pointer; }
+button { border: 1px solid var(--border); border-radius: 7px; padding: 9px 14px; color: var(--text); background: var(--surface-raised); font: inherit; font-size: var(--text-base); cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
 .project-directory-modes button { flex: 1; border-color: transparent; background: transparent; }
 .project-directory-modes button[aria-pressed=true] { background: var(--surface-raised); border-color: var(--border); font-weight: 600; }
-label { display: grid; gap: 8px; color: var(--text); font-size: calc(13px * var(--fs, 1)); }
+label { display: grid; gap: 8px; color: var(--text); font-size: var(--text-base); }
 input { width: 100%; min-width: 0; height: 40px; padding: 9px 11px; font: inherit; }
 .project-directory-path { display: flex; gap: 8px; }
 .project-directory-path input { flex: 1; }
 .project-directory-path button { display: grid; place-items: center; flex: none; padding: 9px 11px; }
-small { color: var(--text-muted); font-size: calc(12px * var(--fs, 1)); line-height: 1.6; }
-p { margin: 0; color: var(--danger); font-size: calc(12px * var(--fs, 1)); }
+small { color: var(--text-muted); font-size: var(--text-xs); line-height: 1.6; }
+p { margin: 0; color: var(--danger); font-size: var(--text-xs); }
 footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; }
 .project-create-primary { color: var(--accent-contrast); background: var(--accent-hover); border-color: var(--accent-hover); }
 </style>

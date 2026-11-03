@@ -102,7 +102,7 @@ async function main() {
     assert.equal(presented.length, 2); assert.equal(dismissed.length, 1)
     checks.push('通知同任务去重/跨任务同ID保留，展示一次、隐藏不复现、点击归属正确')
     assert.deepEqual(errors, [])
-    const output = path.join(os.tmpdir(), 'mio-learning-notifications-ui-20261026'); await fs.mkdir(output, { recursive: true })
+    const output = process.env.MIO_UI_EVIDENCE || path.join(os.tmpdir(), 'mio-learning-notifications-ui-20261026'); await fs.mkdir(output, { recursive: true })
     await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ checks, errors }, null, 2)); console.log(JSON.stringify({ checks, errors, output }))
   } finally { await browser.close() }
 }

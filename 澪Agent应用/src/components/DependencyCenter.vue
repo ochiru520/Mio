@@ -6,11 +6,12 @@ import { Check, CheckCircle2, CircleAlert, CircleHelp, Download, ExternalLink, R
 import { activateLocalVision, verifyDependency, installDependency, loadDependencies, loadDependencyStatus, previewDependencyUninstall, uninstallDependency, loadDependencyPackage, saveDependencyPackageSource } from '../services/dependenciesApi.js'
 
 import CapabilityChecks from './CapabilityChecks.vue'
+import ModelCenter from './ModelCenter.vue'
 
 const props = defineProps({
   compact: { type: Boolean, default: false },
 })
-const emit = defineEmits(['refresh-environment', 'navigate'])
+const emit = defineEmits(['refresh-environment', 'navigate', 'voices-changed', 'storage-changed'])
 
 const busy = ref(false)
 const error = ref('')
@@ -24,6 +25,7 @@ const uninstallPanel = ref(null)
 const packagePanel = ref(null)
 const packageInfo = ref(null)
 const packageUrls = ref('')
+const diagnosticsText = ref('')
 
 async function showPackage(item) {
   if (busy.value) return
@@ -86,9 +88,9 @@ const statusMeta = {
   configured: { label: '已配置', icon: CheckCircle2, tone: 'ok' },
   unconfigured: { label: '未配置', icon: CircleHelp, tone: 'hint' },
   missing: { label: '缺失', icon: CircleAlert, tone: 'warn' },
-  installed: { label: '已安装 · 未启动', icon: CheckCircle2, tone: 'hint' },
-  unverified: { label: '文件已安装 · 待验证', icon: CircleHelp, tone: 'hint' },
-  degraded: { label: '已安装 · 暂不可用', icon: CircleAlert, tone: 'warn' },
+  installed: { label: '已安装，未启动', icon: CheckCircle2, tone: 'hint' },
+  unverified: { label: '文件已安装，待验证', icon: CircleHelp, tone: 'hint' },
+  degraded: { label: '已安装，暂不可用', icon: CircleAlert, tone: 'warn' },
 }
 
 async function copyDiagnostics() {
@@ -96,10 +98,27 @@ async function copyDiagnostics() {
   busy.value = true
   try {
     const report = await dependenciesApi.loadDiagnostics({})
-    await navigator.clipboard.writeText(JSON.stringify(report, null, 2))
+    diagnosticsText.value = JSON.stringify(report, null, 2)
+    await navigator.clipboard.writeText(diagnosticsText.value)
     notice.value = `已复制脱敏诊断（${report.checked_at}）`
   } catch (cause) { error.value = cause.message }
   finally { busy.value = false }
+}
+
+async function previewDiagnostics() {
+  if (busy.value) return
+  busy.value = true; error.value = ''
+  try { diagnosticsText.value = JSON.stringify(await dependenciesApi.loadDiagnostics({}), null, 2); notice.value = '诊断已准备好。请先预览，再决定是否保存或分享。' }
+  catch (cause) { error.value = cause.message }
+  finally { busy.value = false }
+}
+
+function downloadDiagnostics() {
+  if (!diagnosticsText.value) return
+  const url = URL.createObjectURL(new Blob([diagnosticsText.value], { type: 'application/json;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url; link.download = `Mio-脱敏诊断-${new Date().toISOString().slice(0,10)}.json`
+  link.click(); URL.revokeObjectURL(url)
 }
 
 async function refresh() {
@@ -289,6 +308,9 @@ onBeforeUnmount(stopPolling)
 
 <template>
   <div class="dependency-center" :class="{ compact }">
+    <ModelCenter @refresh-environment="emit('refresh-environment')" @navigate="emit('navigate', $event)" @voices-changed="emit('voices-changed')" @storage-changed="emit('storage-changed')" />
+    <details class="dependency-advanced">
+      <summary>高级：组件、下载源与诊断</summary>
     <div class="dependency-center-heading">
       <div>
         <strong>环境与模型中心</strong>
@@ -298,7 +320,9 @@ onBeforeUnmount(stopPolling)
         <RefreshCw :class="{ spin: busy }" :size="14" />重新检查
       </button>
       <button type="button" :disabled="busy" @click="copyDiagnostics">复制脱敏诊断</button>
+      <button type="button" :disabled="busy" @click="previewDiagnostics">预览 / 保存诊断</button>
     </div>
+    <details v-if="diagnosticsText" class="dependency-diagnostics" open><summary>脱敏诊断预览</summary><p>请确认内容后再分享。不会自动上传。</p><pre>{{ diagnosticsText }}</pre><button type="button" @click="downloadDiagnostics">保存诊断 JSON</button><button type="button" @click="diagnosticsText = ''">关闭预览</button></details>
 
     <div v-if="dependencies.length" class="dependency-summary">
       <span><strong>{{ summary.ready }}</strong><small>已就绪或已配置 / {{ summary.total }} 项</small></span>
@@ -310,7 +334,7 @@ onBeforeUnmount(stopPolling)
     <div v-if="error" class="dependency-error">{{ error }}</div>
     <p v-if="notice" role="status" class="dependency-notice">{{ notice }}</p>
     <section v-if="packageInfo" ref="packagePanel" tabindex="-1" class="dependency-package-panel" aria-label="组件获取与安装">
-      <div class="dependency-package-heading"><strong>{{ packageInfo.label }} · 获取与安装</strong><button type="button" @click="packageInfo = null">收起</button></div>
+      <div class="dependency-package-heading"><strong>{{ packageInfo.label }}，获取与安装</strong><button type="button" @click="packageInfo = null">收起</button></div>
       <p>{{ packageInfo.message }}</p>
       <dl><dt>对应文件</dt><dd>{{ packageInfo.file_name }}</dd><dt>大小</dt><dd>{{ (packageInfo.size_bytes / 1024 / 1024).toFixed(1) }} MB</dd><dt>SHA-256</dt><dd>{{ packageInfo.sha256 }}</dd></dl>
       <p class="dependency-package-note">{{ packageInfo.license_notice }}</p>
@@ -391,16 +415,35 @@ onBeforeUnmount(stopPolling)
     </ul>
 
     <p class="dependency-footnote">在线组件会尝试可用下载源，能否连接取决于当前网络。离线组件需选择对应 ZIP 包；“已配置”不代表已连接，文件安装完成后请验证或试听。</p>
+    </details>
   </div>
 </template>
 
 <style scoped>
+.dependency-center { font-size: var(--text-base); }
+.dependency-center summary { list-style:none; text-decoration:underline; text-underline-offset:3px; }
+.dependency-center summary::-webkit-details-marker { display:none; }
+.dependency-center .dependency-center-heading { flex-wrap:wrap; }
+.dependency-center .dependency-center-heading strong { font-size: var(--text-lg); }
+.dependency-center .dependency-summary strong { font-size: var(--text-lg); }
+.dependency-center .dependency-item-title strong { font-size: var(--text-base); }
+.dependency-center :deep(.capability-checks h3) { font-size: var(--text-lg); }
+.dependency-center .dependency-item { border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; }
+.dependency-center .dependency-item-title b { background:transparent; border-radius:0; padding:0; font-weight:400; }
+.dependency-center .dependency-summary-installing { background:transparent; padding:0; border-radius:0; }
+.dependency-center .spin { animation:none; }
+.dependency-center .dependency-item-actions button,.dependency-center .dependency-center-heading button { font-size: var(--text-base); border-radius:6px; }
+.dependency-advanced { margin-top: 20px; }
+.dependency-advanced > summary { cursor: pointer; margin-bottom: 16px; color: var(--text-muted); font-size: var(--text-base); }
+.dependency-diagnostics { border:1px solid var(--line); padding:12px; border-radius:8px; margin:12px 0; font-size: var(--text-base); }
+.dependency-diagnostics pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:340px; overflow:auto; font-size:12px; }
+.dependency-diagnostics button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:7px; padding:7px 11px; margin-right:8px; cursor:pointer; }
 .dependency-uninstall-confirm { margin: 12px 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; }
-.dependency-uninstall-confirm p, .dependency-uninstall-confirm li { font-size: calc(12px * var(--fs, 1)); line-height: 1.6; }
-.dependency-uninstall-confirm button { margin-right: 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: calc(12px * var(--fs, 1)); cursor: pointer; }
+.dependency-uninstall-confirm p, .dependency-uninstall-confirm li { font-size: var(--text-xs); line-height: 1.6; }
+.dependency-uninstall-confirm button { margin-right: 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: var(--text-xs); cursor: pointer; }
 .dependency-uninstall-confirm button:first-of-type { color: var(--danger); border-color: var(--danger); }
 .dependency-uninstall-confirm button:disabled { cursor: wait; opacity: .5; }
-.dependency-package-panel { margin: 16px 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; font-size: calc(12px * var(--fs, 1)); line-height: 1.7; overflow-wrap: anywhere; }
+.dependency-package-panel { margin: 16px 0; padding: 18px; border: 1px solid var(--line); border-radius: 10px; font-size: var(--text-xs); line-height: 1.7; overflow-wrap: anywhere; }
 .dependency-package-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .dependency-package-panel dl { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 5px 12px; }
 .dependency-package-panel dd { margin: 0; }

@@ -51,12 +51,12 @@ const allowedSections = computed(() => props.agent
   : [...settings.settingsNavigation.flatMap(group => group.items.map(item => item.id)), ...commonExtras.map(item => item.id)])
 watch(search, value => { settings.settingsSearch = value }, { immediate: true })
 onBeforeUnmount(() => { settings.settingsSearch = '' })
-const groups = computed(() => settings.settingsNavigation.map(group => ({
-  ...group, label: props.agent ? '共用功能' : '聊天设置',
-  items: group.items.filter(item => !props.agent || sharedIds.includes(item.id)).map(item => props.agent ? {
+const groups = computed(() => (props.agent ? [{
+  label: '共用功能',
+  items: settings.settingsNavigation.flatMap(group => group.items).filter(item => sharedIds.includes(item.id)).map(item => ({
     ...item, label: ({ appearance: '外观主题', profile: '人设与表达' })[item.id] || item.label,
-  } : item),
-})).map(group => ({ ...group, items: group.items.filter(item => `${item.label} ${item.description} ${item.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase())) })).filter(group => group.items.length))
+  })),
+}] : settings.settingsNavigation).map(group => ({ ...group, items: group.items.filter(item => `${item.label} ${item.description} ${item.keywords}`.toLowerCase().includes(search.value.trim().toLowerCase())) })).filter(group => group.items.length))
 const primaryIds = ['execution', 'budget', 'skills', 'self-upgrade']
 const filteredExtras = computed(() => extras.filter(item => primaryIds.includes(item.id) && item.label.toLowerCase().includes(search.value.trim().toLowerCase())))
 const advancedExtras = computed(() => extras.filter(item => !primaryIds.includes(item.id) && item.label.toLowerCase().includes(search.value.trim().toLowerCase())))

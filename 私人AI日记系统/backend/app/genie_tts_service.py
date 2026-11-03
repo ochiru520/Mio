@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import base64
 import functools
 import hashlib
 import json
@@ -12,7 +13,8 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Iterator
+import uuid
 import wave
 
 from .config import settings
@@ -20,6 +22,7 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 _worker_lock = threading.RLock()
+_request_lock = threading.Lock()
 _convert_lock = threading.Lock()
 _worker: subprocess.Popen[str] | None = None
 _responses: queue.Queue[dict[str, Any]] | None = None
@@ -33,6 +36,9 @@ _idle_timeout_seconds = 180.0
 # Genie keeps several ONNX sessions resident. Reclaim the worker after a
 # short idle period so normal Mio use does not retain several GB of memory.
 GENIE_IDLE_SECONDS = 180.0
+PCM_SAMPLE_RATE = 32000
+PCM_CHANNELS = 1
+PCM_SAMPLE_WIDTH = 2
 
 REQUIRED_CHARACTER_FILES = (
     "t2s_encoder_fp32.bin",
@@ -119,7 +125,15 @@ def _read_stdout(process: subprocess.Popen[str], responses: queue.Queue[dict[str
             logger.warning("Genie Worker 输出了非 JSON 内容：%s", line.rstrip()[:500])
             continue
         if isinstance(payload, dict):
-            responses.put(payload)
+            # Bounded delivery applies pipe backpressure to long audio streams.
+            # A cancelled worker must not leave its reader blocked on a full queue.
+            while True:
+                try:
+                    responses.put(payload, timeout=0.1)
+                    break
+                except queue.Full:
+                    if process.poll() is not None:
+                        return
 
 
 def _read_stderr(process: subprocess.Popen[str]) -> None:
@@ -130,6 +144,8 @@ def _read_stderr(process: subprocess.Popen[str]) -> None:
 
 def _start_worker() -> tuple[subprocess.Popen[str], queue.Queue[dict[str, Any]]]:
     global _worker, _responses, _last_request_monotonic, _worker_hot
+    from .local_voice_engines import manager as local_voice_manager
+    local_voice_manager.require_original_selected()
     status = runtime_status()
     if not status["ready"]:
         raise OSError("Genie 本地音色未就绪：" + "、".join(status["missing"]))
@@ -159,7 +175,7 @@ def _start_worker() -> tuple[subprocess.Popen[str], queue.Queue[dict[str, Any]]]
         env=environment,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    responses: queue.Queue[dict[str, Any]] = queue.Queue()
+    responses: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=16)
     threading.Thread(target=_read_stdout, args=(process, responses), name="mio-genie-output", daemon=True).start()
     threading.Thread(target=_read_stderr, args=(process,), name="mio-genie-errors", daemon=True).start()
     _worker = process
@@ -197,36 +213,108 @@ def _stop_if_idle() -> None:
     stop_worker()
 
 
+def _abort_worker(process: subprocess.Popen[str]) -> None:
+    """Discard this process and its queue immediately after a cancelled request."""
+    global _worker, _responses, _worker_hot, _idle_timer
+    with _worker_lock:
+        if _worker is process:
+            _worker = None
+            _responses = None
+            _worker_hot = False
+            if _idle_timer is not None:
+                _idle_timer.cancel()
+                _idle_timer = None
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+
+
+def _request_events(
+    payload: dict[str, Any],
+    *,
+    timeout: float,
+    idle_seconds: float = GENIE_IDLE_SECONDS,
+    cancel_event: threading.Event | None = None,
+) -> Iterator[dict[str, Any]]:
+    global _last_error, _last_request_monotonic
+    deadline = time.monotonic() + timeout
+    process = None
+    completed = False
+    acquired = False
+    try:
+        while not acquired:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Genie 语音合成已取消。")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Genie 合成排队超时。")
+            acquired = _request_lock.acquire(timeout=0.1)
+        request_id = uuid.uuid4().hex
+        from .local_voice_engines import manager as local_voice_manager
+        with local_voice_manager.lifecycle_lock, _worker_lock:
+            _last_request_monotonic = time.monotonic()
+            process, responses = _start_worker()
+            if _idle_timer is not None:
+                _idle_timer.cancel()
+            if process.stdin is None:
+                raise OSError("Genie Worker 输入通道不可用。")
+            process.stdin.write(json.dumps({**payload, "request_id": request_id}, ensure_ascii=False, separators=(",", ":")) + "\n")
+            process.stdin.flush()
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Genie 语音合成已取消。")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Genie 合成超时。")
+            try:
+                result = responses.get(timeout=min(0.1, remaining))
+            except queue.Empty:
+                if process.poll() is not None:
+                    raise OSError("Genie Worker 已断开。")
+                continue
+            if result.get("fatal"):
+                raise OSError(str(result.get("error") or "Genie Worker 加载失败。"))
+            if result.get("request_id") != request_id:
+                # Every protocol reply is scoped to one request. Never reuse an
+                # old audio chunk or completion as the next request's response.
+                continue
+            if not result.get("ok"):
+                raise OSError(str(result.get("error") or "Genie 合成失败。"))
+            terminal = result.get("event") in {None, "done"}
+            if terminal:
+                completed = True
+                _last_error = ""
+                _last_request_monotonic = time.monotonic()
+                _schedule_idle_shutdown(idle_seconds)
+            yield result
+            if terminal:
+                return
+    except (BrokenPipeError, OSError, TimeoutError) as exc:
+        _last_error = str(exc)
+        raise
+    finally:
+        if process is not None and not completed:
+            _abort_worker(process)
+        if acquired:
+            _request_lock.release()
+
+
 def _request(
     payload: dict[str, Any],
     *,
     timeout: float,
     idle_seconds: float = GENIE_IDLE_SECONDS,
 ) -> dict[str, Any]:
-    global _last_error, _last_request_monotonic
-    with _worker_lock:
-        _last_request_monotonic = time.monotonic()
-        process, responses = _start_worker()
-        if process.stdin is None:
-            raise OSError("Genie Worker 输入通道不可用。")
-        try:
-            process.stdin.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-            process.stdin.flush()
-            result = responses.get(timeout=timeout)
-        except (BrokenPipeError, OSError, queue.Empty) as exc:
-            stop_worker()
-            if isinstance(exc, queue.Empty):
-                _last_error = "Genie 合成超时。"
-                raise TimeoutError(_last_error) from exc
-            _last_error = "Genie Worker 已断开。"
-            raise OSError(_last_error) from exc
-        if not result.get("ok"):
-            _last_error = str(result.get("error") or "Genie 合成失败。")
-            raise OSError(_last_error)
-        _last_error = ""
-        _last_request_monotonic = time.monotonic()
-        _schedule_idle_shutdown(idle_seconds)
-        return result
+    events = _request_events(payload, timeout=timeout, idle_seconds=idle_seconds)
+    try:
+        for result in events:
+            return result
+        raise OSError("Genie Worker 没有返回结果。")
+    finally:
+        events.close()
 
 
 def start_worker() -> dict[str, Any]:
@@ -261,6 +349,10 @@ def _converter_python(paths: dict[str, Path]) -> tuple[Path, dict[str, str]]:
 
 
 def _resolve_character_model(config: dict[str, Any]) -> Path:
+    from .voice_asset_service import genie_model_override
+    pinned = genie_model_override(config)
+    if pinned is not None:
+        return pinned
     paths = _paths()
     gpt = Path(str(config.get("gpt_sovits_gpt_weights") or "")).expanduser()
     sovits = Path(str(config.get("gpt_sovits_sovits_weights") or "")).expanduser()
@@ -373,6 +465,90 @@ def synthesize_wav(text: str, config: dict[str, Any], *, timeout: float = 120) -
         return content
     finally:
         output.unlink(missing_ok=True)
+
+
+def iter_speech_pcm(
+    text: str,
+    config: dict[str, Any],
+    *,
+    timeout: float = 120,
+    cancel_event: threading.Event | None = None,
+) -> Iterator[bytes]:
+    """Yield generated mono 32kHz PCM16 chunks without waiting for a WAV file.
+
+    Closing this generator before completion kills only its worker, which also
+    discards any queued output from the cancelled request. Callers that may
+    cancel while waiting for the first chunk should also set ``cancel_event``.
+    ``first_pcm_received_ms`` measures the backend receipt, never speaker output.
+    """
+    global _last_metrics, _worker_hot
+    model_dir = _resolve_character_model(config)
+    reference = Path(str(config.get("gpt_sovits_ref_audio") or "")).expanduser()
+    prompt_text = str(config.get("gpt_sovits_prompt_text") or "").strip()
+    if not reference.is_file():
+        raise FileNotFoundError(f"参考音频不存在：{reference}")
+    if not prompt_text:
+        raise ValueError("参考音频准确原文不能为空。")
+    started = time.monotonic()
+    first_pcm_ms: float | None = None
+    received_bytes = 0
+    metadata_received = False
+    events = _request_events({
+        "action": "stream",
+        "model_dir": str(model_dir),
+        "reference_audio": str(reference.resolve()),
+        "prompt_text": prompt_text,
+        "prompt_language": str(config.get("gpt_sovits_prompt_language") or "zh"),
+        "text_language": str(config.get("gpt_sovits_text_language") or "zh"),
+        "text": text,
+    }, timeout=timeout, idle_seconds=float(config.get("voice_idle_timeout_seconds", 180)), cancel_event=cancel_event)
+    try:
+        for event in events:
+            kind = event.get("event")
+            if kind == "start":
+                if metadata_received or (event.get("sample_rate"), event.get("channels"), event.get("sample_width")) != (PCM_SAMPLE_RATE, PCM_CHANNELS, PCM_SAMPLE_WIDTH):
+                    raise OSError("Genie PCM 流不是 32 kHz / 16-bit / 单声道。")
+                metadata_received = True
+            elif kind == "audio":
+                if not metadata_received:
+                    raise OSError("Genie PCM 流缺少音频格式信息。")
+                try:
+                    pcm = base64.b64decode(str(event.get("pcm_base64") or ""), validate=True)
+                except ValueError as exc:
+                    raise OSError("Genie PCM 数据编码无效。") from exc
+                if not pcm or len(pcm) % PCM_SAMPLE_WIDTH:
+                    raise OSError("Genie PCM 流包含无效的音频帧。")
+                if first_pcm_ms is None:
+                    first_pcm_ms = (time.monotonic() - started) * 1000
+                received_bytes += len(pcm)
+                _last_metrics = {
+                    "model_dir": str(model_dir),
+                    "streaming": True,
+                    "first_pcm_received_ms": round(first_pcm_ms, 1),
+                    "received_bytes": received_bytes,
+                    "complete": False,
+                }
+                yield pcm
+            elif kind == "done":
+                if not metadata_received or received_bytes <= 0:
+                    raise OSError("Genie 没有生成可播放的 PCM 音频。")
+                if event.get("frames") != received_bytes // PCM_SAMPLE_WIDTH:
+                    raise OSError("Genie PCM 流的音频帧数量不完整。")
+                _worker_hot = True
+                _last_metrics = {
+                    "model_dir": str(model_dir),
+                    "streaming": True,
+                    "first_audio_ms": event.get("first_audio_ms"),
+                    "first_pcm_received_ms": round(first_pcm_ms, 1),
+                    "total_ms": event.get("total_ms"),
+                    "duration_seconds": received_bytes / (PCM_SAMPLE_RATE * PCM_SAMPLE_WIDTH),
+                    "received_bytes": received_bytes,
+                    "complete": True,
+                }
+            else:
+                raise OSError("Genie PCM 流收到未知事件。")
+    finally:
+        events.close()
 
 
 def stop_worker() -> None:

@@ -20,7 +20,7 @@ async function main() {
     installed: '模型文件已完整安装，Mio 本地视觉服务尚未启动。',
     degraded: 'CUDA out of memory: 模型加载失败，请释放显存后重试。',
     ready: 'Mio 独立本地视觉服务已通过推理验证。',
-    missing: '运行器已安装，但 qwen2.5vl:3b 模型文件缺失或不完整。',
+    missing: '运行器已安装，但 qwen3.5:2b 模型文件缺失或不完整。',
   }
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url())
@@ -29,7 +29,7 @@ async function main() {
     if (url.pathname === '/api/dependencies') {
       data = { dependencies: [{ id: 'ollama_vision', label: '本地视觉', kind: 'script', status: state, installing,
         what: '本地屏幕观察模型', detail: details[state], how: '下载安装运行器和模型',
-        install_path: 'D:\\Mio\\Data\\本地视觉\\models\\manifests\\registry.ollama.ai\\library\\qwen2.5vl\\3b' }] }
+        install_path: 'D:\\Mio\\Data\\本地视觉\\models\\manifests\\registry.ollama.ai\\library\\qwen3.5\\2b' }] }
     } else if (url.pathname.endsWith('/activate')) {
       activations++
       await new Promise(resolve => setTimeout(resolve, 200))

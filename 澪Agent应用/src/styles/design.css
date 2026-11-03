@@ -1,0 +1,498 @@
+/* ============================================================================
+ * 设计层：除「晴窗 / 夜窗」以外的主题共用的结构样式
+ *
+ * 颜色全部来自 tokens.css。规则：
+ *   1. 外壳是实色：标题栏、侧栏、右栏同一个底色，和内容之间只有一条细线。
+ *      不用半透明，不用多层阴影。
+ *   2. 内容不再套卡片：分组靠标题、留白和标题下的一条细线。
+ *   3. 全应用只用一个强调色，只出现在「当前位置」和每页唯一的实心主按钮上。
+ *   4. 悬停只改变文字和图标的颜色，不出现底色块。
+ *   5. 圆角只取令牌：控件 --radius-md，按钮 --radius-pill，大块面 --radius-lg。
+ *   6. 字号只用 --text-xs / --text-base / --text-lg / --text-2xl 四档。
+ * ========================================================================== */
+
+/* ---- 外壳 ------------------------------------------------------------------ */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) {
+  --view-accent: var(--accent);
+  --view-accent-dark: var(--accent-hover);
+  --view-accent-soft: var(--accent-soft);
+  --mio-teal: var(--accent);
+  --mio-teal-soft: var(--accent-soft);
+  --mio-blue: var(--accent);
+  --mio-blue-soft: var(--accent-soft);
+  --mio-pink: var(--accent);
+  --mio-pink-soft: var(--accent-soft);
+  background: var(--bg-elevated);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.integrated-titlebar, .integrated-sidebar, .integrated-right-rail) {
+  background: var(--bg-elevated);
+  backdrop-filter: none;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-titlebar { border-bottom: 1px solid var(--border); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-sidebar { border-right: 1px solid var(--border); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-right-rail { border-left: 1px solid var(--border); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.integrated-sidebar.expanded, .integrated-right-rail.expanded) { box-shadow: var(--shadow-md); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-workspace { background: var(--surface); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(
+  .home-page, .page-layout, .tasks-page, .memory-center, .companion-hub,
+  .integrated-diary-reader, .period-reader, .compact-reader-empty, .growth-report-page
+) { background: transparent; }
+
+/* 标题栏右侧的「Mio Agent」切换：描边胶囊，不再是填色方块 */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .workspace-title-switch {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .workspace-title-switch:hover { color: var(--accent); background: transparent; border-color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .shell-toggle:hover { color: var(--accent); background: transparent; }
+
+/* ---- 左侧导航 -------------------------------------------------------------- */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-sidebar .main-nav { gap: var(--space-1); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-sidebar .nav-item {
+  min-height: 40px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  transition: color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-sidebar .nav-item:hover { color: var(--text); background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-sidebar .nav-item.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-sidebar .sidebar-pin:hover { color: var(--accent); background: transparent; }
+
+/* 桌宠开关：和导航项同一种写法，没有底色和描边，只用状态点表示是否在运行 */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-sidebar .sidebar-footer { padding-top: var(--space-2); border-top: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .pet-launcher > button {
+  min-height: 40px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  transition: color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .pet-launcher > button:hover:not(:disabled) { color: var(--accent); background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .pet-launcher strong { color: var(--text); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .pet-launcher i.online { box-shadow: none; }
+
+/* ---- 右栏：一列开放的状态，没有框 ------------------------------------------ */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-right-rail { gap: var(--space-1); padding: var(--space-3) var(--space-2); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-right-rail > :is(header, section, button) {
+  padding: var(--space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-right-rail > :is(header, .rail-relationship, .rail-growth, .rail-token) { min-height: 48px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-right-rail > .rail-services {
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-right-rail :is(svg) { color: var(--text-muted); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-right-rail strong { color: var(--text); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .rail-services button {
+  min-height: 40px;
+  border-radius: var(--radius-md);
+  transition: color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.rail-services button, .rail-token, .integrated-right-rail > header button):hover { background: transparent; border-color: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.rail-services button, .rail-token):hover :is(svg, strong) { color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .rail-token { margin-top: auto; cursor: pointer; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .rail-state-list div { border-bottom: 0; }
+
+/* ---- 首页 ------------------------------------------------------------------ */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-page.integrated-home { width: min(1080px, calc(100% - 64px)); padding: var(--space-8) 0 48px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-today-header { padding: var(--space-4) 0 var(--space-8); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-today-header > time { margin-bottom: var(--space-2); color: var(--text-muted); font-size: var(--text-base); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-today-header h1 { margin: 0 0 var(--space-2); font-size: var(--text-2xl); font-weight: 600; line-height: 1.3; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-today-header p { font-size: var(--text-base); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-focus-grid { grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); gap: 48px; align-items: start; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.home-focus-grid > article, .home-activity-section, .home-records-section) {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+/* 全页唯一的一块底色：上次没做完的事 */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-focus-grid > .home-focus-primary {
+  min-height: 0;
+  padding: var(--space-6) 28px;
+  background: var(--surface-soft);
+  border-radius: var(--radius-lg);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.home-focus-primary, .home-attention-panel) > h2 { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: 600; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-focus-primary p { min-height: 0; color: var(--text-muted); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-focus-primary button {
+  height: 36px;
+  margin-top: var(--space-5);
+  padding: 0 18px;
+  color: var(--accent-contrast);
+  font-weight: 600;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-focus-primary button:hover { background: var(--accent-hover); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-attention-panel { padding: var(--space-1) 0 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-attention-panel > div { padding: var(--space-3) 0; border-bottom: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-attention-panel strong { font-size: var(--text-base); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.home-activity-section, .home-records-section) { margin-top: 48px; padding: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.home-activity-section, .home-records-section) > header { padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.home-activity-section, .home-records-section) h2 { font-size: var(--text-lg); font-weight: 600; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-activity-section > header button { padding: 0; color: var(--accent); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-activity-list { gap: var(--space-6); margin-top: var(--space-4); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-activity-list span { color: var(--text-muted); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-activity-list p { font-size: var(--text-base); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-records-list { margin-top: var(--space-1); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-records-list button {
+  min-height: 48px;
+  padding-inline: 0;
+  background: transparent;
+  border: 0;
+  transition: color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-records-list span { color: var(--text-muted); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-records-list strong { font-size: var(--text-base); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-records-list button > svg { color: var(--text-faint); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-records-list button:hover { background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-records-list button:hover :is(strong, svg) { color: var(--accent); }
+@media (max-width: 960px) {
+  .app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .home-focus-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-6); }
+}
+
+/* ---- 页内标签：文字加下划线，不用填色块 -------------------------------------- */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-mode-tabs, .memory-view-tabs, .compact-companion-tabs) {
+  min-height: 48px;
+  gap: var(--space-6);
+  padding: 0 clamp(20px, 3vw, 40px);
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-mode-tabs, .memory-view-tabs, .compact-companion-tabs) button {
+  align-self: stretch;
+  min-height: 0;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: inset 0 -2px 0 transparent;
+  transition: color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-mode-tabs, .memory-view-tabs, .compact-companion-tabs, .task-center-tabs) button:hover { color: var(--text); background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-mode-tabs, .memory-view-tabs, .compact-companion-tabs) button.active {
+  color: var(--text);
+  font-weight: 600;
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-mode-tabs, .memory-view-tabs, .compact-companion-tabs, .task-center-tabs) button.active svg { color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-center-tabs { gap: var(--space-6); border-bottom-color: var(--border); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-center-tabs button { font-size: var(--text-base); transition: color var(--dur-fast) var(--ease); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-center-tabs button.active { color: var(--text); }
+
+/* ---- 日记 ------------------------------------------------------------------ */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .auto-diary-status {
+  margin: 0;
+  padding: var(--space-2) clamp(20px, 3vw, 40px);
+  color: var(--text-muted);
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .auto-diary-status strong { font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .auto-diary-status.error { color: var(--danger); background: var(--danger-soft); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .auto-diary-actions button {
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .auto-diary-actions button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-date-rail, .period-record-layout > aside) {
+  padding: var(--space-4) var(--space-3);
+  background: transparent;
+  border-right: 1px solid var(--border);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .record-date-rail > header span { color: var(--text-muted); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .record-search {
+  flex: none;
+  height: 36px;
+  min-height: 36px;
+  margin: var(--space-2) 0 var(--space-3);
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  background: var(--surface-soft);
+  border: 0;
+  border-radius: var(--radius-pill);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .record-search input,
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .record-search input:focus {
+  height: 100%;
+  padding: 0;
+  font-size: var(--text-base);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .record-search:focus-within { box-shadow: 0 0 0 2px var(--focus-ring); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-date-list button, .period-record-layout > aside > button) {
+  border-radius: var(--radius-md);
+  transition: color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-date-list button, .period-record-layout > aside > button):hover { background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-date-list button, .period-record-layout > aside > button):hover strong { color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.record-date-list button.active, .period-record-layout > aside > button.active) { background: var(--accent-soft); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .record-date-list strong { font-size: var(--text-base); font-weight: 500; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.integrated-diary-reader, .period-reader) > header > div > span { color: var(--text-muted); }
+
+/* ---- 记忆 ------------------------------------------------------------------ */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-center-heading { padding: var(--space-6) clamp(20px, 3vw, 40px) var(--space-4); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.memory-center-heading, .tasks-heading, .compact-pet-panel .pet-appearance-heading, .companion-simple-panel > header) > div > svg { display: none; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.memory-center-heading h2, .tasks-heading h2, .compact-pet-panel .pet-appearance-heading strong, .companion-simple-panel h2) { font-size: var(--text-lg); font-weight: 600; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.memory-center-heading p, .tasks-heading p) { margin-top: var(--space-1); color: var(--text-muted); font-size: var(--text-base); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.memory-center-heading > button, .tasks-heading > .icon-button) {
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  transition: color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.memory-center-heading > button, .tasks-heading > .icon-button):hover:not(:disabled) { color: var(--accent); background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-view-tabs { position: sticky; top: 0; background: var(--surface); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-understanding {
+  margin-top: var(--space-6);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-understanding span { color: var(--text-muted); font-size: var(--text-xs); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-understanding p { margin-top: var(--space-2); color: var(--text); font-size: var(--text-lg); line-height: var(--leading-normal); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-natural-add { grid-template-columns: 160px minmax(0, 1fr) auto; gap: var(--space-2); margin-top: var(--space-6); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-natural-add > input { height: 40px; padding: 0 var(--space-3); border-radius: var(--radius-md); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-natural-add .app-select { min-height: 40px; border-radius: var(--radius-md); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-natural-add > button {
+  height: 40px;
+  padding: 0 var(--space-5);
+  color: var(--accent-contrast);
+  font-weight: 600;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-natural-add > button:hover:not(:disabled) { background: var(--accent-hover); }
+
+/* 待确认：一条浅底的提示行，「忽略」是文字按钮，「确认记住」是描边按钮（主按钮留给「记住」） */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-candidate-panel {
+  margin-top: var(--space-6);
+  padding: var(--space-4) var(--space-5);
+  background: var(--warning-soft);
+  border: 0;
+  border-radius: var(--radius-lg);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-candidate-panel > header span { color: var(--text-muted); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-candidate-panel p { font-size: var(--text-base); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-candidate-panel article > div { display: flex; align-items: center; gap: var(--space-2); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-candidate-panel button {
+  min-height: 32px;
+  margin: 0;
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-candidate-panel button.primary-button { color: var(--text); border-color: var(--border-strong); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-candidate-panel button:hover:not(:disabled) { color: var(--accent); background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-candidate-panel button.primary-button:hover:not(:disabled) { border-color: var(--accent); }
+
+/* 分类：开放的两列，标题下一条细线，条目之间只靠留白 */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-category-grid { gap: 40px 48px; margin-top: 40px; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-category-grid > section { padding: 0; background: transparent; border: 0; border-radius: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-category-grid > section > header { padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-category-grid > section > header span { color: var(--text-muted); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-category-grid article { padding: var(--space-4) 0 var(--space-2); border-bottom: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-category-grid p { font-size: var(--text-base); line-height: var(--leading-normal); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-item-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); margin-top: var(--space-2); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-item-actions > details { margin-right: auto; color: var(--text-muted); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-item-actions button {
+  width: auto;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 var(--space-1);
+  color: var(--text-muted);
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  transition: color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-item-actions button:hover:not(:disabled) { color: var(--accent); background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .memory-item-actions button[title="忘记"]:hover:not(:disabled) { color: var(--danger); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.memory-version-history, .memory-thread-list article) { background: transparent; border-radius: var(--radius-lg); }
+
+/* ---- 任务 ------------------------------------------------------------------ */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .tasks-heading { margin-bottom: var(--space-4); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-center-tabs { margin-bottom: var(--space-4); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-filter-bar {
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-filter-bar button {
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-filter-bar button:hover { color: var(--text); background: transparent; border-color: var(--border-strong); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-filter-bar button.active { color: var(--accent); font-weight: 600; background: var(--accent-soft); border-color: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-filter-bar button.active span { color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-list { background: transparent; border: 0; border-top: 1px solid var(--border); border-radius: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-row { padding: var(--space-4) 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-actions button { border-radius: var(--radius-pill); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .task-actions button.primary { color: var(--accent-contrast); background: var(--accent); border-color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.tasks-empty, .tasks-center-state) {
+  min-height: 0;
+  padding: 72px var(--space-6);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .tasks-empty > svg { display: none; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .tasks-empty strong { font-size: var(--text-base); font-weight: 600; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .tasks-empty span { color: var(--text-muted); font-size: var(--text-base); }
+
+/* ---- 桌宠 ------------------------------------------------------------------ */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.compact-pet-panel, .companion-workspace) .connection-label { color: var(--text-muted); background: transparent; padding: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.compact-pet-panel, .companion-workspace) .connection-label.online { color: var(--success); background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .compact-pet-panel .appearance-unified-list > button.appearance-add {
+  background: var(--surface-soft);
+  border: 0;
+  border-radius: var(--radius-lg);
+  transition: color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .compact-pet-panel .appearance-unified-list > button.appearance-add:hover { background: var(--surface-soft); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .compact-pet-panel .appearance-unified-list > button.appearance-add:hover :is(svg, strong) { color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.compact-pet-panel .pet-runtime-actions, .companion-workspace .companion-action-bar) button {
+  font-size: var(--text-base);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.compact-pet-panel .pet-runtime-actions, .companion-workspace .companion-action-bar) button:hover:not(:disabled, .primary-button) { color: var(--accent); background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.compact-pet-panel .pet-runtime-actions button:last-child, .companion-workspace .companion-action-bar button.companion-apply-button):hover:not(:disabled) { border-color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.compact-pet-panel .pet-runtime-actions, .companion-workspace .companion-action-bar) button:disabled { opacity: 1; color: var(--text-faint); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.compact-pet-panel .pet-runtime-actions, .companion-workspace .companion-action-bar) button.primary-button:disabled { color: var(--text-faint); background: var(--surface-sunken); border-color: var(--surface-sunken); }
+
+/* ---- 对话 ------------------------------------------------------------------ */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-chat-layout .composer {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  box-shadow: none;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-chat-layout .composer:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--focus-ring) !important; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-chat-layout .message-row.user .message-bubble { background: var(--accent-soft); border-radius: var(--radius-xl); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-chat-layout .send-button { color: var(--accent-contrast); background: var(--accent); border: 0; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .integrated-chat-layout .send-button:disabled { opacity: 1; color: var(--text-faint); background: var(--surface-sunken); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .conversation-drawer-trigger {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .conversation-drawer-trigger:hover { color: var(--accent); background: transparent; border-color: var(--accent); }
+
+/* ---- 设置 ------------------------------------------------------------------ */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-sidebar { background: var(--bg-elevated); border-right: 1px solid var(--border); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-content { background: var(--surface); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-search {
+  flex: none;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  background: var(--surface-soft);
+  border: 0;
+  border-radius: var(--radius-pill);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-search input,
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-search input:focus {
+  height: 100%;
+  padding: 0;
+  font-size: var(--text-base);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-search:focus-within { box-shadow: 0 0 0 2px var(--focus-ring); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-sidebar nav > button {
+  min-height: 40px;
+  color: var(--text);
+  border-radius: var(--radius-md);
+  transition: color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) :is(.mio-settings-sidebar nav > button, .mio-settings-sidebar > button):hover { color: var(--accent); background: transparent; }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-sidebar nav > button:is(.selected, .active, [aria-current="page"]) { color: var(--accent); font-weight: 600; background: var(--accent-soft); }
+
+/* 设置页按钮：保存是唯一的实心按钮，取消和「重新读取」是描边胶囊。停用时不变透明，只把字变淡 */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-content :is(.settings-save-actions button, .settings-page-header .text-button, .settings-page .text-button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  color: var(--text);
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  opacity: 1;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-content :is(.settings-save-actions button, .text-button):hover:not(:disabled) { color: var(--accent); background: transparent; border-color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-content .settings-save-actions button.primary-button { color: var(--accent-contrast); font-weight: 600; background: var(--accent); border-color: var(--accent); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-content .settings-save-actions button.primary-button:hover:not(:disabled) { color: var(--accent-contrast); background: var(--accent-hover); border-color: var(--accent-hover); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-content :is(.settings-save-actions button, .text-button):disabled,
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-content .settings-save-actions button.primary-button:disabled {
+  color: var(--text-faint);
+  background: transparent;
+  border-color: var(--border);
+  opacity: 1;
+  cursor: default;
+}
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-content .settings-header-actions { display: flex; align-items: center; gap: var(--space-2); }
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .mio-settings-content .settings-item :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea, .app-select) { border-radius: var(--radius-md); }
+
+/* ---- 系统停用态：整体变淡会让文字看不清，改成只把文字调淡 ------------------- */
+.app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) .primary-button:disabled { opacity: 1; color: var(--text-faint); background: var(--surface-sunken); border-color: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell.integrated-shell:not(.agent-workspace-shell, [data-theme^="calm-"]) * { transition: none !important; }
+}

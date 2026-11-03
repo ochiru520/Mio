@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import subprocess
 import socket
@@ -73,6 +74,36 @@ def test_complete_download_without_running_server_is_installed(installed, monkey
     client.assert_not_called()
 
 
+def test_status_reports_configured_and_actual_loaded_models_separately(installed, monkeypatch):
+    fake_server(monkeypatch)
+    process = Mock(); process.poll.return_value = None
+    monkeypatch.setattr(vision, '_server_process', process)
+    def request(path, **kwargs):
+        return {'version': 'test'} if path == '/api/version' else {'models': [{'name': 'different:4b'}]}
+    monkeypatch.setattr(vision, '_request_json', request)
+    result = vision.status(force=True)
+    assert result['configured_model'] == vision.DEFAULT_MODEL
+    assert result['loaded_models'] == ['different:4b']
+    assert result['model_observation_known'] and not result['model_loaded']
+    assert vision.passive_status()['loaded_models'] == ['different:4b']
+    monkeypatch.setattr(vision, '_probe_at', time.monotonic() - 20)
+    assert not vision.passive_status()['model_observation_known']
+    process.poll.return_value = 0
+    assert vision.passive_status()['loaded_models'] == []
+    assert not vision.passive_status()['model_observation_known']
+
+
+def test_failed_loaded_model_probe_is_unknown_not_confirmed_empty(installed, monkeypatch):
+    fake_server(monkeypatch)
+    def request(path, **kwargs):
+        if path == '/api/ps': raise OSError('probe unavailable')
+        return {'version': 'test'} if path == '/api/version' else {'models': []}
+    monkeypatch.setattr(vision, '_request_json', request)
+    result = vision.status(force=True)
+    assert result['server_running']
+    assert not result['model_observation_known']
+
+
 def test_existing_files_do_not_launch_installer_again(installed, monkeypatch):
     popen = Mock(side_effect=AssertionError("Must not reinstall"))
     monkeypatch.setattr(dependency_installer.subprocess, "Popen", popen)
@@ -101,7 +132,8 @@ def test_user_ollama_environment_is_not_inherited(installed, monkeypatch):
     env = vision._runtime_env()
     assert env["OLLAMA_HOST"] == "127.0.0.1:34567"
     assert env["OLLAMA_MODELS"] == str(vision._models_dir())
-    assert "OLLAMA_NUM_PARALLEL" not in env
+    assert env["OLLAMA_NUM_PARALLEL"] == "1"
+    assert env["OLLAMA_MAX_LOADED_MODELS"] == "1"
     assert vision.os.environ["OLLAMA_MODELS"] == "external-models"
 
 
@@ -168,6 +200,69 @@ def test_inference_failure_keeps_files_installed_and_real_error(installed, monke
     assert result["status"] == "degraded"
     assert result["detail"] == "out of memory"
     assert result["model_installed"]
+
+
+def test_reasoning_capable_model_probe_requests_visible_answer(installed, monkeypatch):
+    fake_server(monkeypatch)
+    vision.start_server()
+    original = vision._request_json
+
+    def request(path, **kwargs):
+        if path == "/api/generate":
+            payload = kwargs["payload"]
+            assert payload["keep_alive"] == "90s"
+            assert payload["options"]["num_ctx"] == 2048
+            # Reproduce a runtime that spends the old two-token budget on thinking.
+            if payload.get("think") is not False or payload["options"]["num_predict"] < 8:
+                return {"response": "", "thinking": "Let me", "done_reason": "length"}
+            return {"response": "OK", "done_reason": "stop"}
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(vision, "_request_json", request)
+    assert vision.probe_inference(force=True)["ready"] is True
+
+
+def test_thinking_only_probe_response_is_not_ready(installed, monkeypatch):
+    fake_server(monkeypatch)
+    vision.start_server()
+    original = vision._request_json
+
+    def request(path, **kwargs):
+        if path == "/api/generate":
+            return {"response": "", "thinking": "The model may be running."}
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(vision, "_request_json", request)
+    result = vision.probe_inference(force=True)
+    assert result["ready"] is False
+    assert result["state"] == "failed"
+
+
+@pytest.mark.parametrize("visible_answer", ["观察状态：已暂停", ""])
+def test_image_analysis_uses_visible_answer_without_thinking(installed, monkeypatch, visible_answer):
+    async def ready():
+        return {"inference_ready": True}
+
+    monkeypatch.setattr(vision, "ensure_ready", ready)
+    monkeypatch.setattr(vision, "_owned_server_url", lambda: "http://127.0.0.1:34567")
+
+    def respond(request):
+        payload = json.loads(request.content)
+        assert payload["messages"][1]["images"] == ["dGVzdCBpbWFnZQ=="]
+        # A reasoning-capable endpoint exposes the requested observation only
+        # when reasoning is disabled. Internal thinking is never the observation.
+        content = visible_answer if payload.get("think") is False else ""
+        return httpx.Response(200, json={"message": {"content": content, "thinking": "Internal analysis"}})
+
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(vision.httpx, "AsyncClient", lambda **kwargs: client_type(transport=transport, **kwargs))
+    call = vision.analyze_image(prompt="读取观察状态", image=b"test image", system_prompt="只根据截图回答")
+    if visible_answer:
+        assert asyncio.run(call).content == visible_answer
+    else:
+        with pytest.raises(RuntimeError, match="没有返回识别结果"):
+            asyncio.run(call)
 
 
 @pytest.mark.parametrize("state", ["installed", "unverified", "degraded"])

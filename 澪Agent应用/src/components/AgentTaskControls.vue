@@ -24,5 +24,5 @@ onBeforeUnmount(()=>{disposed=true;++generation})
   </section>
 </template>
 <style scoped>
-.task-inline-controls{padding:8px 4px;color:var(--text-muted);font-size:calc(12px * var(--fs,1))}.task-control-row,.inline-approvals>div{display:flex;align-items:center;gap:12px}.task-control-row>span{margin-right:auto}.task-inline-controls button{background:transparent;border:0;color:var(--text);cursor:pointer;font:inherit;padding:6px}.inline-approvals{padding:10px 0}.inline-approvals small{display:block}.inline-approvals>div{justify-content:space-between}
+.task-inline-controls{padding:8px 4px;color:var(--text-muted);font-size: var(--text-xs)}.task-control-row,.inline-approvals>div{display:flex;align-items:center;gap:12px}.task-control-row>span{margin-right:auto}.task-inline-controls button{background:transparent;border:0;color:var(--text);cursor:pointer;font:inherit;padding:6px}.inline-approvals{padding:10px 0}.inline-approvals small{display:block}.inline-approvals>div{justify-content:space-between}
 </style>

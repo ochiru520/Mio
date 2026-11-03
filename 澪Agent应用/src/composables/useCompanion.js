@@ -1,22 +1,52 @@
 
 import * as companionApi from '../services/companionApi.js'
+import { ref } from 'vue'
 /** Companion operations. Reactive values and cross-domain callbacks are explicitly injected.
  * This module owns behavior, not application-global mutable state.
  * Dependencies are accessors so async callbacks see the latest state.
  */
 import * as observationApi from '../services/observationApi.js'
 
+const VOICE_SELECTION_KEYS = ['voice_engine', 'local_voice_runtime', 'default_voice_profile_id', 'voice_profiles', 'aniflive_model', 'aniflive_voice_profile']
+
+function preserveSettingsDraft(settings, serverSettings, savedSections) {
+  const sections = Object.fromEntries(Object.entries(savedSections || {}).flatMap(([name, text]) => {
+    try {
+      const value = JSON.parse(text)
+      return value && typeof value === 'object' && !Array.isArray(value) ? [[name, value]] : []
+    } catch { return [] }
+  }))
+  const baseline = { ...(sections.pet || {}), ...(sections.voice || {}) }
+  for (const key of VOICE_SELECTION_KEYS) {
+    // Preserve an explicit user edit, while allowing an unchanged old window to
+    // observe a selection saved by another window or by the runtime controller.
+    if (!Object.hasOwn(baseline, key) || !Object.hasOwn(serverSettings, key)
+      || JSON.stringify(settings[key]) !== JSON.stringify(baseline[key])) continue
+    settings[key] = serverSettings[key]
+    for (const [name, snapshot] of Object.entries(sections)) {
+      if (!Object.hasOwn(snapshot, key)) continue
+      snapshot[key] = serverSettings[key]
+      savedSections[name] = JSON.stringify(snapshot)
+    }
+  }
+  return settings
+}
+
 export function useCompanion(deps) {
-  async function loadCompanionStatus({ quiet = false, preserveSettings = false } = {}) {
+  let voiceRuntimePollGeneration = 0
+  let observationOperation = 0
+  const observationStarting = ref(false)
+  async function loadCompanionStatus({ quiet = false, preserveSettings = false, stillCurrent = null } = {}) {
     if (deps.companionStatusLoading) return
     deps.companionStatusLoading = true
     deps.companionStatusError.value = ''
     try {
-      const editingSettings = deps.companionStatus.value.pet?.settings
       const previousSpriteVersion = deps.companionStatus.value.pet?.sprite_version || ''
       const nextStatus = await observationApi.loadCompanionStatus()
+      if (stillCurrent && !stillCurrent()) return
+      const editingSettings = deps.companionStatus.value.pet?.settings
       if (preserveSettings && editingSettings && nextStatus.pet) {
-        nextStatus.pet.settings = editingSettings
+        nextStatus.pet.settings = preserveSettingsDraft(editingSettings, nextStatus.pet.settings || {}, deps.savedCompanionSettings?.value)
       } else if (nextStatus.pet?.settings && nextStatus.voice_runtime?.active_weights) {
         nextStatus.pet.settings.gpt_sovits_gpt_weights ||= nextStatus.voice_runtime.active_weights.gpt || ''
         nextStatus.pet.settings.gpt_sovits_sovits_weights ||= nextStatus.voice_runtime.active_weights.sovits || ''
@@ -37,6 +67,7 @@ export function useCompanion(deps) {
         deps.companionAvatarNonce.value = Date.now()
       }
     } catch (error) {
+      if (stillCurrent && !stillCurrent()) return
       deps.companionStatusError.value = error.message
       if (!preserveSettings) deps.companionStatusReady.value = false
       if (!quiet) deps.errorMessage.value = error.message
@@ -117,9 +148,6 @@ export function useCompanion(deps) {
     deps.errorMessage.value = ''
     try {
       const settings = deps.companionStatus.value.pet.settings
-      if (section === 'observation') {
-        settings.screen_audio_enabled = Boolean(deps.companionStatus.value.screen?.running)
-      }
       let previousPetSettings = {}
       if (section === 'pet' && deps.savedCompanionSettings.value.pet) {
         try { previousPetSettings = JSON.parse(deps.savedCompanionSettings.value.pet) || {} } catch (_) {}
@@ -155,22 +183,27 @@ export function useCompanion(deps) {
       deps.companionBusy.value = ''
     }
   }
-  async function testCompanionVoice() {
+  async function testCompanionVoice(options = {}) {
     deps.companionBusy.value = 'voice'
     deps.errorMessage.value = ''
     try {
-      await companionApi.submitVoiceTest({}, deps.request)
+      const text = typeof options?.text === 'string' ? options.text.trim().slice(0, 600) : ''
+      const result = await companionApi.submitVoiceTest({}, deps.request, text ? { text } : {})
+      if (result?.spoken !== true) throw new Error(result?.voice_error || result?.last_error || '语音服务未确认试听播放完成，请检查音频输出与语音服务。')
       await loadCompanionStatus({ quiet: true, preserveSettings: true })
+      deps.showSettingsFeedback('voice', 'success', '试听已完成，请按听感选择音色和引擎')
     } catch (error) {
       deps.errorMessage.value = error.message
+      deps.showSettingsFeedback('voice', 'error', `试听失败：${error.message}`)
+      await loadCompanionStatus({ quiet: true, preserveSettings: true })
     } finally {
       deps.companionBusy.value = ''
     }
   }
-  async function testCompanionVoiceProfile() {
+  async function testCompanionVoiceProfile(profileId = '', options = {}) {
     const saved = await saveCompanionSettings('voice')
     if (!saved) return
-    await testCompanionVoice()
+    await testCompanionVoice(options)
   }
   async function uploadVoiceReference(event, profileId) {
     const file = event.target.files?.[0]
@@ -198,7 +231,7 @@ export function useCompanion(deps) {
         }, {}, deps.request)
       deps.savedCompanionSettings.value.voice = deps.companionSettingsSnapshot('voice')
       deps.savedCompanionSettings.value.pet = deps.companionSettingsSnapshot('pet')
-      deps.showSettingsFeedback('voice', 'success', deps.companionStatus.value.pet?.settings?.voice_engine === 'indextts2' ? 'IndexTTS2 参考音频已保存' : '参考音频已保存到当前音色')
+      deps.showSettingsFeedback('voice', 'success', deps.companionStatus.value.pet?.settings?.voice_engine === 'indextts2' ? 'IndexTTS 参考音频已保存' : '参考音频已保存到当前音色')
     } catch (error) {
       deps.errorMessage.value = error.message
       deps.showSettingsFeedback('pet', 'error', `参考音频上传失败：${error.message}`)
@@ -233,6 +266,31 @@ export function useCompanion(deps) {
     } catch (error) {
       deps.errorMessage.value = error.message
       deps.showSettingsFeedback('pet', 'error', `音色包导出失败：${error.message}`)
+    } finally {
+      deps.companionBusy.value = ''
+    }
+  }
+  async function uploadVoiceWeight(event, profileId, kind) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || deps.companionBusy.value) return
+    const suffix = kind === 'gpt' ? '.ckpt' : kind === 'sovits' ? '.pth' : ''
+    if (!suffix || !file.name.toLowerCase().endsWith(suffix) || !file.size || file.size > 2 * 1024 ** 3) {
+      deps.showSettingsFeedback('voice', 'error', `请选择不超过 2 GiB 的 ${suffix || 'GPT / SoVITS'} 权重文件`)
+      return
+    }
+    if (!(await saveCompanionSettings('voice'))) return
+    deps.companionBusy.value = `voice-weight-${kind}`
+    deps.errorMessage.value = ''
+    try {
+      const next = await companionApi.submitVoiceWeight(profileId, kind, file, {}, deps.request)
+      deps.companionStatus.value = next
+      deps.savedCompanionSettings.value.voice = deps.companionSettingsSnapshot('voice')
+      deps.savedCompanionSettings.value.pet = deps.companionSettingsSnapshot('pet')
+      deps.showSettingsFeedback('voice', 'success', `${kind === 'gpt' ? 'GPT' : 'SoVITS'} 文件已保存；加载音色后检查模型兼容性`)
+    } catch (error) {
+      deps.errorMessage.value = error.message
+      deps.showSettingsFeedback('voice', 'error', `权重导入失败：${error.message}`)
     } finally {
       deps.companionBusy.value = ''
     }
@@ -299,10 +357,25 @@ export function useCompanion(deps) {
   }
   async function controlVoiceRuntime(action) {
     if (deps.companionBusy.value) return
+    if (['start', 'restart', 'warmup'].includes(action)) {
+      const saved = await saveCompanionSettings('voice')
+      if (!saved) return
+    }
+    const generation = ++voiceRuntimePollGeneration
     deps.companionBusy.value = `voice-runtime-${action}`
     deps.errorMessage.value = ''
     try {
       deps.companionStatus.value.voice_runtime = await companionApi.submitVoiceRuntime(action, {}, deps.request)
+      if (deps.companionStatus.value.voice_runtime.service_loading) {
+        const poll = async (remaining) => {
+          if (generation !== voiceRuntimePollGeneration || remaining <= 0) return
+          await loadCompanionStatus({ quiet: true, preserveSettings: true })
+          if (generation === voiceRuntimePollGeneration && deps.companionStatus.value.voice_runtime?.service_loading) {
+            window.setTimeout(() => { void poll(remaining - 1) }, 2000)
+          }
+        }
+        window.setTimeout(() => { void poll(150) }, 2000)
+      }
     } catch (error) {
       deps.errorMessage.value = error.message
     } finally {
@@ -466,29 +539,44 @@ export function useCompanion(deps) {
     }
   }
   async function controlObservation(action) {
-    if (deps.companionBusy.value) return
+    const stopping = action === 'stop'
+    if (deps.companionBusy.value && !(stopping && deps.companionBusy.value === 'observation-start')) return
+    if (!stopping && observationStarting.value) return
+    const operation = ++observationOperation
+    if (!stopping) observationStarting.value = true
     deps.companionBusy.value = `observation-${action}`
     deps.errorMessage.value = ''
     try {
       if (action === 'stop') {
-        deps.companionStatus.value.screen = await companionApi.submitScreenStop({}, deps.request)
-        deps.companionStatus.value.pet.settings.screen_audio_enabled = false
+        const result = await companionApi.submitScreenStop({}, deps.request)
+        if (operation === observationOperation) deps.companionStatus.value.screen = result
         return
       }
 
+      if (deps.observationMode.value === 'game' && !deps.selectedGameHwnd.value) throw new Error('请选择要观察的游戏窗口。')
+      const keys = deps.companionSettingKeys.observation
+      const settings = deps.companionStatus.value.pet.settings
+      await companionApi.updateSettings(Object.fromEntries(keys.map(key => [key, settings[key]])), {}, deps.request)
+      if (operation !== observationOperation) return
+      deps.savedCompanionSettings.value.observation = deps.companionSettingsSnapshot('observation')
       if (deps.observationMode.value === 'game') {
-        if (!deps.selectedGameHwnd.value) throw new Error('请选择要观察的游戏窗口。')
-        deps.companionStatus.value.screen = await companionApi.submitGameSelect({ hwnd: Number(deps.selectedGameHwnd.value) }, {}, deps.request)
-        deps.companionStatus.value.screen = await companionApi.submitGameStart({ interval_ms: deps.observationInterval.value }, {}, deps.request)
+        const selected = await companionApi.submitGameSelect({ hwnd: Number(deps.selectedGameHwnd.value) }, {}, deps.request)
+        if (operation !== observationOperation) return
+        deps.companionStatus.value.screen = selected
+        const started = await companionApi.submitGameStart({ interval_ms: deps.observationInterval.value }, {}, deps.request)
+        if (operation !== observationOperation) return
+        deps.companionStatus.value.screen = started
       } else {
-        deps.companionStatus.value.screen = await companionApi.submitScreenStart({ interval_ms: deps.observationInterval.value, scope: deps.screenScope.value }, {}, deps.request)
+        const started = await companionApi.submitScreenStart({ interval_ms: deps.observationInterval.value, scope: deps.screenScope.value }, {}, deps.request)
+        if (operation !== observationOperation) return
+        deps.companionStatus.value.screen = started
       }
-      deps.companionStatus.value.pet.settings.screen_audio_enabled = true
-      await loadCompanionStatus({ quiet: true, preserveSettings: true })
+      await loadCompanionStatus({ quiet: true, preserveSettings: true, stillCurrent: () => operation === observationOperation })
     } catch (error) {
-      deps.errorMessage.value = error.message
+      if (operation === observationOperation) deps.errorMessage.value = error.message
     } finally {
-      deps.companionBusy.value = ''
+      if (!stopping) observationStarting.value = false
+      if (operation === observationOperation) deps.companionBusy.value = ''
     }
   }
   async function letMioSeeObservation() {
@@ -517,5 +605,5 @@ export function useCompanion(deps) {
       deps.companionBusy.value = ''
     }
   }
-  return { loadCompanionStatus, openScreenPreviewWindow, saveCompanionSize, controlCompanion, previewLive2DMotion, previewLive2DExpression, saveCompanionSettings, testCompanionVoice, testCompanionVoiceProfile, uploadVoiceReference, exportVoicePackage, importVoicePackage, controlVoiceRuntime, controlLocalVision, pullLocalVisionModel, controlVoiceTraining, importLive2DModel, deleteLive2DModel, replaceLive2DPreview, uploadCompanionSpriteSheet, loadGameWindows, controlObservation, letMioSeeObservation }
+  return { loadCompanionStatus, openScreenPreviewWindow, saveCompanionSize, controlCompanion, previewLive2DMotion, previewLive2DExpression, saveCompanionSettings, testCompanionVoice, testCompanionVoiceProfile, uploadVoiceReference, uploadVoiceWeight, exportVoicePackage, importVoicePackage, controlVoiceRuntime, controlLocalVision, pullLocalVisionModel, controlVoiceTraining, importLive2DModel, deleteLive2DModel, replaceLive2DPreview, uploadCompanionSpriteSheet, loadGameWindows, controlObservation, letMioSeeObservation, observationStarting }
 }

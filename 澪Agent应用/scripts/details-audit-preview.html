@@ -1,0 +1,25 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mio 信息层级隔离验收</title></head><body><div id="app"></div><script type="module">
+import {createApp,h,ref} from 'vue'
+import Usage from '../src/components/MioUsageSettings.vue'
+import Workspace from '../src/components/AgentWorkspaceHub.vue'
+import Preview from '../src/components/AgentFilesPreview.vue'
+import Tools from '../src/components/AgentToolSettings.vue'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+import '../src/styles/refinements.css'
+import '../src/styles/agent-settings.css'
+import '../src/styles/agent-surface.css'
+import '../src/styles/ui-polish.css'
+import '../src/styles/calm.css'
+const args=new URLSearchParams(location.search),view=args.get('view')||'usage'
+document.documentElement.dataset.theme=args.get('theme')||'xuan'
+document.documentElement.dataset.fontSize=args.get('font')||'medium'
+const toolTab=ref('tools')
+window.uiDetailsFixture={setToolTab:v=>toolTab.value=v}
+createApp({render:()=>h('div',{class:'mio-agent-surface sidebar-closed preview-closed',style:'display:block;height:100vh;min-width:0'},[
+ view==='preview'?h('aside',{class:'mio-agent-preview-sidebar',style:'position:relative;width:min(440px,100%);height:100vh;margin-left:auto'},[h(Preview,{conversationId:'synthetic-details',projectId:'synthetic-project',artifact:{id:'plain',name:'正文.txt',version:1,mime_type:'text/plain',size:80,url:'/api/artifacts/plain/download'}})])
+ :h('main',{class:view==='workspace'?'mio-agent-main':'mio-settings-content',style:'height:100vh;min-width:0;overflow:auto'},[view==='usage'?h(Usage):view==='workspace'?h(Workspace):h(Tools,{initialTab:toolTab.value})])
+])}).mount('#app')
+</script></body></html>

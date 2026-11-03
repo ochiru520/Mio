@@ -10,7 +10,7 @@ export function classifyApiRequest(url, method = 'GET') {
   const path = String(url || '').toLowerCase()
   const normalizedMethod = String(method || 'GET').toUpperCase()
   if (path.includes('/backups') || path.includes('/migrations')) return 'backup'
-  if (path.includes('/voice/audio') || path.includes('/voice/test') || path.includes('/call/turn')) return 'media'
+  if (path.includes('/voice/audio') || path.includes('/voice/stream') || path.includes('/voice/test') || path.includes('/call/turn')) return 'media'
   if (
     path.endsWith('/chat')
     || path.includes('/generate')

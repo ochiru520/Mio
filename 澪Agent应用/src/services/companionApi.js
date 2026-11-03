@@ -6,12 +6,14 @@ export const screenPreviewUrl = (timestamp = Date.now()) => `/api/companion/scre
 // Package responses retain their native HTTP status and streaming/blob interface.
 export const exportVoicePackage = (profileId, transport = fetch) => transport('/api/companion/voice/profiles/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: profileId }) })
 export const importVoicePackage = (file, transport = fetch) => transport('/api/companion/voice/profiles/import-package', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
+export const submitVoiceWeight = (profileId, kind, file, options = {}, transport = apiRequest) => transport(`/api/companion/voice/profiles/${encodeURIComponent(profileId)}/weights/${selectOperation(kind, ['gpt', 'sovits'])}?filename=${encodeURIComponent(file.name)}`, { ...options, method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
 
 export const loadStartupGreeting = (options = {}, transport = apiRequest) => transport("/api/companion/startup-greeting", Object.keys(options).length ? options : undefined)
 export const loadQqStartup = (options = {}, transport = apiRequest) => transport("/api/companion/qq-startup", Object.keys(options).length ? options : undefined)
 export const updateStartupGreeting = (payload, options = {}, transport = apiRequest) => transport("/api/companion/startup-greeting", { ...options, method: 'PATCH', body: JSON.stringify(payload) })
 export const updateQqStartup = (payload, options = {}, transport = apiRequest) => transport("/api/companion/qq-startup", { ...options, method: 'PATCH', body: JSON.stringify(payload) })
 export const submitVoiceAudio = (payload, options = {}, transport = apiRequest) => transport("/api/companion/voice/audio", { ...options, method: 'POST', body: JSON.stringify(payload) })
+export const submitVoiceStream = (payload, options = {}, transport = apiRequest) => transport("/api/companion/voice/stream", { ...options, method: 'POST', body: JSON.stringify(payload) })
 export const updateChatSettings = (payload, options = {}, transport = apiRequest) => transport("/api/companion/chat-settings", { ...options, method: 'PATCH', body: JSON.stringify(payload) })
 export const updateSize = (payload, options = {}, transport = apiRequest) => transport("/api/companion/size", { ...options, method: 'PATCH', body: JSON.stringify(payload) })
 export const submitCompanion = (action, options = {}, transport = apiRequest) => transport(`/api/companion/${selectOperation(action, ['start', 'stop', 'restart'])}`, { ...options, method: 'POST', body: "{}" })
@@ -19,7 +21,7 @@ export const submitLive2dMotionPreview = (payload, options = {}, transport = api
 export const submitLive2dExpressionPreview = (payload, options = {}, transport = apiRequest) => transport("/api/companion/live2d/expression/preview", { ...options, method: 'POST', body: JSON.stringify(payload) })
 export const updateSettings = (payload, options = {}, transport = apiRequest) => transport("/api/companion/settings", { ...options, method: 'PATCH', body: JSON.stringify(payload) })
 export const submitRestart = (options = {}, transport = apiRequest) => transport("/api/companion/restart", { ...options, method: 'POST', body: "{}" })
-export const submitVoiceTest = (options = {}, transport = apiRequest) => transport("/api/companion/voice/test", { ...options, method: 'POST', body: "{}" })
+export const submitVoiceTest = (options = {}, transport = apiRequest, payload = {}) => transport("/api/companion/voice/test", { ...options, method: 'POST', body: JSON.stringify(payload) })
 export const submitVoiceReference = (payload, options = {}, transport = apiRequest) => transport("/api/companion/voice/reference", { ...options, method: 'POST', body: JSON.stringify(payload) })
 export const submitVoiceRuntime = (action, options = {}, transport = apiRequest) => transport(`/api/companion/voice/runtime/${selectOperation(action, ['start', 'stop', 'restart', 'warmup'])}`, { ...options, method: 'POST', body: "{}" })
 export const submitLocalVisionRuntime = (action, options = {}, transport = apiRequest) => transport(`/api/companion/local-vision/runtime/${selectOperation(action, ['start', 'stop', 'restart', 'unload'])}`, { ...options, method: 'POST', body: "{}" })

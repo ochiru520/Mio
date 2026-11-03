@@ -34,12 +34,12 @@ async function install() {
         <Info :size="16" /><div><span>{{ statusMessage }}</span><p v-if="error" role="alert">{{ error }}</p><p v-if="state.last_result?.message">上次升级：{{ state.last_result.message }}</p></div>
       </div>
       <div v-if="state.release" class="update-release">
-        <strong>版本 {{ state.release.version }} · {{ size(state.release.size) }}</strong>
+        <strong>版本 {{ state.release.version }}，{{ size(state.release.size) }}</strong>
         <p class="update-notes">{{ state.release.notes }}</p>
       </div>
       <div v-if="state.state === 'downloading'" class="update-progress">
         <progress :value="progress" max="100" aria-label="更新下载进度" />
-        <span>{{ size(state.downloaded) }} / {{ size(state.total) }} · {{ Math.floor(progress) }}%</span>
+        <span>{{ size(state.downloaded) }} / {{ size(state.total) }}，{{ Math.floor(progress) }}%</span>
       </div>
       <div v-if="state.release || ['checking', 'downloading'].includes(state.state)" class="update-actions">
         <button v-if="state.release && ['available', 'failed', 'cancelled'].includes(state.state)" type="button" :disabled="working || state.privacy_paused" @click="invoke('download_update')"><ArrowDownToLine :size="15" />{{ state.downloaded ? '继续下载' : '下载更新' }}</button>
@@ -58,42 +58,42 @@ async function install() {
 
 <style scoped>
 .update-panel { min-width: 0; }
-.update-panel button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--ink); font: inherit; font-size: calc(12px * var(--fs, 1)); cursor: pointer; }
+.update-panel button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--ink); font: inherit; font-size: var(--text-xs); cursor: pointer; }
 .update-panel button:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
 .update-panel button:disabled { opacity: .5; cursor: default; }
 .update-panel button:focus-visible,.update-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .update-panel .primary-button { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
-.update-version-card { display: flex; align-items: center; gap: 16px; padding: 22px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 13px; background: linear-gradient(115deg, var(--surface-raised), var(--surface-soft)); }
+.update-version-card { display: flex; align-items: center; gap: 16px; padding: 22px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: var(--radius-lg, 14px); background: var(--surface-raised); }
 .update-version-icon { display: grid; place-items: center; flex: 0 0 48px; height: 48px; border-radius: 14px; background: var(--accent-soft); color: var(--accent-dark); }
 .update-version-copy { display: grid; gap: 5px; flex: 1; min-width: 0; }
-.update-version-copy > span { display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--fs, 1)); color: var(--muted); }
-.update-version-copy b { padding: 2px 7px; font-size: calc(12px * var(--fs, 1)); font-weight: 500; border-radius: 5px; background: var(--accent-soft); color: var(--accent-dark); }
-.update-version-copy > strong { font-size: calc(23px * var(--fs, 1)); letter-spacing: .3px; overflow-wrap: anywhere; }
-.update-version-copy > small { font-size: calc(12px * var(--fs, 1)); color: var(--muted); line-height: 1.6; }
+.update-version-copy > span { display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--muted); }
+.update-version-copy b { padding: 2px 7px; font-size: var(--text-xs); font-weight: 500; border-radius: 5px; background: var(--accent-soft); color: var(--accent-dark); }
+.update-version-copy > strong { font-size: var(--text-2xl); letter-spacing: .3px; overflow-wrap: anywhere; }
+.update-version-copy > small { font-size: var(--text-xs); color: var(--muted); line-height: 1.6; }
 .update-preferences { border-top: 1px solid var(--line); border-radius: 12px; }
 .update-preferences .settings-item { min-height: 74px; gap: 18px; padding: 15px 20px; cursor: pointer; }
 .update-preferences .settings-item > span { min-width: 0; }
 .update-preferences .settings-item small { line-height: 1.6; }
-.update-preferences input.update-switch { appearance: none; position: relative; flex: 0 0 36px; width: 36px; min-width: 36px; height: 21px; min-height: 21px; padding: 0; margin: 0; border: 0; border-radius: 20px; background: var(--border-strong); cursor: pointer; transition: background .15s; }
-.update-preferences input.update-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 50%; background: var(--surface-raised); box-shadow: 0 1px 3px var(--shadow-tint); transition: transform .15s; }
+.update-preferences input.update-switch { appearance: none; position: relative; flex: 0 0 36px; width: 36px; min-width: 36px; height: 21px; min-height: 21px; padding: 0; margin: 0; border: 0; border-radius: 20px; background: var(--border-strong); cursor: pointer; transition: background var(--dur-fast) var(--ease); }
+.update-preferences input.update-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: 50%; background: var(--surface-raised); box-shadow: 0 1px 3px var(--shadow-tint); transition: transform var(--dur-fast) var(--ease); }
 .update-preferences input.update-switch:checked { background: var(--accent); }
 .update-preferences input.update-switch:checked::after { background: var(--accent-contrast); transform: translateX(15px); }
 .update-preferences input.update-switch:disabled { opacity: .45; cursor: default; }
-.update-note { font-size: calc(12px * var(--fs, 1)); color: var(--muted); line-height: 1.7; }
+.update-note { font-size: var(--text-xs); color: var(--muted); line-height: 1.7; }
 .update-privacy { display: flex; align-items: center; gap: 7px; margin-top: 20px; }
 .update-privacy svg { flex-shrink: 0; }
-.update-status { display: flex; align-items: flex-start; gap: 9px; padding: 13px 15px; margin: 14px 0; border-radius: 9px; background: var(--surface-soft); color: var(--muted); font-size: calc(12px * var(--fs, 1)); line-height: 1.6; overflow-wrap: anywhere; }
+.update-status { display: flex; align-items: flex-start; gap: 9px; padding: 13px 15px; margin: 14px 0; border-radius: 9px; background: var(--surface-soft); color: var(--muted); font-size: var(--text-xs); line-height: 1.6; overflow-wrap: anywhere; }
 .update-status > svg { flex-shrink: 0; margin-top: 2px; }
 .update-status.has-error { background: var(--danger-soft); color: var(--danger); }
 .update-status p { margin: 7px 0 0; }
-.update-release { padding: 16px; border: 1px solid var(--line); border-radius: 10px; font-size: calc(13px * var(--fs, 1)); }
+.update-release { padding: 16px; border: 1px solid var(--line); border-radius: 10px; font-size: var(--text-base); }
 .update-notes { white-space: pre-wrap; line-height: 1.7; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 .update-actions { display: flex; gap: 10px; margin: 12px 0; flex-wrap: wrap; }
-.update-progress { display: grid; gap: 8px; margin: 18px 0; font-size: calc(12px * var(--fs, 1)); color: var(--muted); }
+.update-progress { display: grid; gap: 8px; margin: 18px 0; font-size: var(--text-xs); color: var(--muted); }
 .update-progress progress { appearance: none; width: 100%; height: 6px; border: 0; border-radius: 8px; overflow: hidden; }
 .update-progress progress::-webkit-progress-bar { background: var(--line); }
 .update-progress progress::-webkit-progress-value { background: var(--accent); border-radius: 8px; }
-.update-confirm { border: 1px solid var(--line); border-radius: 10px; padding: 16px; font-size: calc(12px * var(--fs, 1)); }
+.update-confirm { border: 1px solid var(--line); border-radius: 10px; padding: 16px; font-size: var(--text-xs); }
 .update-confirm p { line-height: 1.8; margin-top: 0; }
 .update-confirm button { margin: 4px 10px 0 0; }
 @media (max-width: 620px) {

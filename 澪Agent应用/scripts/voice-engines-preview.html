@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN" data-font-size="medium" style="height:auto;overflow:visible">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Mio 语音引擎隔离验收</title><style>html,body,#app {height:auto;min-height:100%;overflow:visible}.voice-preview-layout{display:grid;grid-template-columns:210px minmax(0,1fr);align-items:start}.voice-preview-sidebar{padding:28px 22px;min-height:100vh;border-right:1px solid var(--border);font:14px "Microsoft YaHei UI",sans-serif;color:var(--text-muted)}@media(max-width:700px){.voice-preview-layout{display:block}.voice-preview-sidebar{display:none}}</style></head>
+<body style="height:auto;overflow:visible"><div class="settings-window-shell" style="display:block;height:auto;min-height:100vh;overflow:visible"><div id="app" style="height:auto;overflow:visible"></div></div><script type="module">
+import { createApp, h, reactive } from 'vue'
+import VoiceSettingsPanel from '../src/components/VoiceSettingsPanel.vue'
+import { createCompanionState } from '../src/state/companionState.js'
+import '../src/styles/tokens.css'
+import '../src/styles/base.css'
+import '../src/styles.css'
+import '../src/styles/integrated.css'
+import '../src/styles/refinements.css'
+import '../src/styles/agent-settings.css'
+import '../src/styles/agent-surface.css'
+import '../src/styles/ui-polish.css'
+import '../src/styles/calm.css'
+const status = reactive(createCompanionState().companionStatus.value)
+Object.assign(status.pet.settings.voice_profiles.mio, { gpt_sovits_gpt_weights: 'D:/synthetic/mio_v1-e15.ckpt', gpt_sovits_sovits_weights: 'D:/synthetic/mio_v1_e8_s200.pth', gpt_sovits_ref_audio: 'D:/synthetic/mio_v2_00.wav', gpt_sovits_prompt_text: 'つまらないものですが、いや、ありがとうございます。', gpt_sovits_prompt_language: 'ja' })
+status.voice_runtime = { engine: 'gpt_sovits', service_running: true, model_version: 'v2', local_voice_runtime: 'genie', model_ready: true, model_dir: 'D:/synthetic-voice/Mio' }
+window.voiceEngineFixture = { status, tests: [], controls: [], uploads: [] }
+const shellPreview = new URLSearchParams(location.search).has('settings-shell')
+createApp({ render: () => h('div', { class: shellPreview ? 'voice-preview-layout' : '' }, [shellPreview ? h('aside', { class: 'voice-preview-sidebar' }, ['设置', h('p', '桌宠 / 语音')]) : null, h('main', { class: 'settings-page', style: 'width:min(100%,900px);margin:0 auto;padding:32px;height:auto;overflow:visible;box-sizing:border-box' }, [
+  h(VoiceSettingsPanel, { status, busy: false, modelOptions: [], rangeInputStyle: () => ({}),
+    onUploadWeight: (event, profileId, kind) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+      window.voiceEngineFixture.uploads.push({ profileId, kind, name: file.name })
+      status.pet.settings.voice_profiles[profileId][`gpt_sovits_${kind}_weights`] = `D:/synthetic/${file.name}`
+      event.target.value = ''
+    },
+    onUploadReference: (event, profileId) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+      window.voiceEngineFixture.uploads.push({ profileId, kind: 'reference', name: file.name })
+      status.pet.settings.voice_profiles[profileId].gpt_sovits_ref_audio = `D:/synthetic/${file.name}`
+      event.target.value = ''
+    },
+    onControlRuntime: action => window.voiceEngineFixture.controls.push({ action, engine: status.pet.settings.voice_engine }),
+    onTest: (profileId, options) => window.voiceEngineFixture.tests.push({ engine: status.pet.settings.voice_engine, profileId, ...options }) }),
+])]) }).mount('#app')
+</script></body></html>

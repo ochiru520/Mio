@@ -1,4 +1,6 @@
 * text=auto
+/scripts/deps/wheels/jieba-fast-LICENSE.txt -text
+/scripts/deps/wheels/*.whl -text
 *.py text eol=lf
 *.js text eol=lf
 *.vue text eol=lf

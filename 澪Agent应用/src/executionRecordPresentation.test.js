@@ -137,7 +137,7 @@ test('execution center renders short summaries with collapsed technical IDs and 
   assert.equal(html.includes(request), false)
   assert.match(html, /<details class="task-record-details"[^>]*><summary>技术详情<\/summary>/)
   assert.match(html, /<dt>会话编号<\/dt><dd>private-session-id<\/dd>/)
-  assert.match(html, /<details class="task-technical-records"[^>]*><summary>技术记录 · 1 次任务进度更新<\/summary>/)
+  assert.match(html, /<details class="task-technical-records"[^>]*><summary>技术记录，1 次任务进度更新<\/summary>/)
   assert.equal(/<details[^>]*\bopen(?:=|\s|>)/.test(html), false)
 })
 

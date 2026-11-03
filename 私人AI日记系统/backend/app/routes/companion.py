@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from contextlib import nullcontext
 from difflib import SequenceMatcher
 import re
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -17,9 +19,11 @@ from pydantic import BaseModel, Field
 from .. import companion_runtime_service as companion_runtime
 from .. import (
     call_session_service,
+    call_speech_stream,
     companion_service,
     db,
     local_vision_service,
+    local_vision_speech_stream,
     pet_event_service,
     route_observation_service,
     screen_observation_service,
@@ -153,8 +157,8 @@ class CompanionSettingsRequest(BaseModel):
     voice_enabled: bool = True
     voice_startup_enabled: bool = False
     voice_idle_timeout_seconds: int = Field(default=180, ge=0, le=1800)
-    voice_engine: str = Field(default="gpt_sovits", pattern="^(gpt_sovits|cloud|indextts2)$")
-    local_voice_runtime: str = Field(default="genie", pattern="^(genie|gpt_sovits)$")
+    voice_engine: str = Field(default="gpt_sovits", pattern="^(gpt_sovits|cloud|indextts2|gpt_sovits_v5|aniflive)$")
+    local_voice_runtime: str = Field(default="genie", pattern="^(genie|gpt_sovits|mio_v2)$")
     cloud_tts_api_key: str = Field(default="", max_length=2000)
     cloud_tts_app_id: str = Field(default="", max_length=200)
     cloud_tts_speaker: str = Field(default="zh_female_vv_uranus_bigtts", max_length=200)
@@ -184,6 +188,12 @@ class CompanionSettingsRequest(BaseModel):
     qq_voice_mode: str = Field(default="adaptive", pattern="^(explicit|adaptive|always)$")
     indextts2_url: str = Field(default="http://127.0.0.1:11996", max_length=2000)
     indextts2_ref_audio: str = Field(default="", max_length=4000)
+    indextts2_version: str = Field(default="2.5", pattern="^(2|2.5)$")
+    indextts2_language: str = Field(default="zh", pattern="^(zh|en|ja|es|ar)$")
+    gpt_sovits_v5_url: str = Field(default="http://127.0.0.1:9885", max_length=2000)
+    aniflive_url: str = Field(default="http://127.0.0.1:9882", max_length=2000)
+    aniflive_model: str = Field(default="", max_length=160)
+    aniflive_voice_profile: str = Field(default="default", max_length=160)
     gpt_sovits_url: str = "http://127.0.0.1:9880"
     gpt_sovits_ref_audio: str = ""
     gpt_sovits_prompt_text: str = Field(default="", max_length=1000)
@@ -193,6 +203,8 @@ class CompanionSettingsRequest(BaseModel):
     gpt_sovits_gpt_weights: str = ""
     gpt_sovits_sovits_weights: str = ""
     screen_ai_enabled: bool = True
+    screen_watch_mode: str = Field(default="single", pattern="^(single|adaptive)$")
+    screen_watch_pace: str = Field(default="normal", pattern="^(calm|normal|dense)$")
     screen_audio_enabled: bool = True
     screen_audio_model: str = Field(default="base", pattern="^(tiny|base|small)$")
     screen_audio_language: str = Field(default="auto", pattern="^(auto|zh|ja|en)$")
@@ -268,6 +280,15 @@ class SpeechRequest(BaseModel):
     emotion: str = Field(default="", pattern="^(|neutral|gentle|cheerful|concerned|serious|shy)$")
     model_id: str = Field(default="", max_length=200)
     language: str = Field(default="", pattern="^(|zh|ja)$")
+    speech_stream: bool = False
+    response_id: str = Field(default="", max_length=160)
+    call_session_id: str = Field(default="", max_length=80)
+
+
+class LocalVisionDescriptionRequest(BaseModel):
+    image_data_url: str = Field(min_length=1, max_length=12_000_000)
+    question: str = Field(default="请简短描述这张截图中的状态和重要信息。", min_length=1, max_length=1000)
+    language: str = Field(default="zh", pattern="^(zh|ja)$")
 
 
 class CompanionChatImageRequest(BaseModel):
@@ -297,6 +318,7 @@ class CompanionCallTurnRequest(BaseModel):
 class CompanionCallControlRequest(BaseModel):
     call_session_id: str = Field(default="", max_length=80)
     response_id: str = Field(default="", max_length=160)
+    turn_id: int = Field(default=0, ge=0, le=1_000_000)
 
 
 class CompanionCallDeviceRequest(BaseModel):
@@ -471,10 +493,13 @@ async def _wake_pet_from_screen() -> None:
 
 def _start_pet_with_screen_observation() -> bool:
     screen_observation_service.set_capture_only(False)
+    config = companion_service.load_config()
+    companion_service.window_observer.configure_watch(str(config.get("screen_watch_mode") or "single"),
+                                                     str(config.get("screen_watch_pace") or "normal"))
     companion_service.window_observer.select_screen("primary")
     companion_service.window_observer.start(1000)
-    companion_service.save_config({"screen_audio_enabled": True})
-    system_audio_service.start(companion_service.load_config())
+    if config.get("screen_audio_enabled", True):
+        system_audio_service.start(config)
     companion_service.set_pet_activity(
         "thinking",
         emotion="gentle",
@@ -496,7 +521,6 @@ def _stop_companion_runtime() -> None:
     companion_service.stop_pet()
     companion_service.window_observer.stop()
     screen_observation_service.end_session()
-    companion_service.save_config({"screen_audio_enabled": False})
     system_audio_service.stop()
 
 
@@ -509,16 +533,15 @@ def _restart_companion_runtime() -> tuple[dict[str, object], bool]:
 
 def _apply_companion_settings(changes: dict[str, object]) -> None:
     was_running = companion_service.pet_running()
-    if "screen_audio_enabled" in changes:
-        # 系统声音观察是视觉观察的一部分，不再接受独立开关状态。
-        changes["screen_audio_enabled"] = bool(
-            companion_service.window_observer.status().get("running")
-        )
     previous_model_id = str(companion_service.load_config().get("live2d_model_id") or "hiyori")
     selected_model_id = str(changes.get("live2d_model_id") or "")
     if selected_model_id:
         companion_service.select_live2d_model(selected_model_id)
     companion_service.save_config(changes)
+    if {"screen_watch_mode", "screen_watch_pace"} & changes.keys():
+        config = companion_service.load_config()
+        companion_service.window_observer.configure_watch(str(config.get("screen_watch_mode") or "single"),
+                                                         str(config.get("screen_watch_pace") or "normal"))
     if was_running and selected_model_id and selected_model_id != previous_model_id:
         companion_service.restart_pet()
     audio_settings_changed = bool(
@@ -526,10 +549,13 @@ def _apply_companion_settings(changes: dict[str, object]) -> None:
         & changes.keys()
     )
     if audio_settings_changed and companion_service.window_observer.status().get("running"):
-        system_audio_service.stop()
-        saved_config = companion_service.load_config()
-        if saved_config["screen_audio_enabled"]:
-            system_audio_service.start(saved_config)
+        if companion_runtime._pet_call_resource_owner:
+            companion_runtime.ensure_call_asr_ready()
+        else:
+            system_audio_service.stop()
+            saved_config = companion_service.load_config()
+            if saved_config["screen_audio_enabled"]:
+                system_audio_service.start(saved_config)
 
 
 def _normalized_echo_text(text: str) -> str:
@@ -1087,6 +1113,7 @@ async def companion_call_start():
     previous = call_session_service.manager.status()
     if previous.get("active"):
         previous_response_id = str(previous.get("current_response_id") or "")
+        call_speech_stream.abort(previous_response_id, "电话会话已替换")
         call_session_service.manager.stop(
             str(previous.get("call_session_id") or ""),
             reason="call_replaced",
@@ -1162,6 +1189,7 @@ async def companion_call_stop(payload: CompanionCallControlRequest | None = None
         reason="call_ended",
     )
     if response_id:
+        call_speech_stream.abort(response_id, "电话已结束")
         pet_event_service.publish(
             "speech_interrupt",
             {"reason": "call_ended", "response_id": response_id},
@@ -1179,13 +1207,22 @@ async def companion_call_interrupt(payload: CompanionCallControlRequest | None =
     response_id = call_session_service.manager.interrupt(
         str(payload.call_session_id if payload else ""),
         str(payload.response_id if payload else ""),
+        turn_id=int(payload.turn_id if payload else 0),
     )
     if response_id:
+        call_speech_stream.abort(response_id, "用户已插话")
+        await chat_run_coordinator.cancel(
+            DESKTOP_PET_CONVERSATION_ID,
+            source="desktop_pet_call",
+            reason="user_started_speaking",
+            expected_request_id=response_id,
+        )
         pet_event_service.publish(
             "speech_interrupt",
             {"reason": "user_started_speaking", "response_id": response_id},
         )
-    return {"interrupted": bool(response_id), "response_id": response_id}
+    return {"interrupted": bool(response_id), "response_id": response_id,
+            "next_turn_id": call_session_service.manager.status()["next_turn_id"]}
 
 
 @router.post("/call/device")
@@ -1256,6 +1293,7 @@ async def companion_call_turn(payload: CompanionCallTurnRequest):
         call_session_service.manager.require_current(turn)
     except call_session_service.CallSessionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    call_session_service.manager.record_timings(turn, {"asr_ms": asr_ms})
     if not transcript_result:
         raise HTTPException(status_code=503, detail="本地语音识别尚未准备好。")
     if transcript_result.get("error"):
@@ -1344,6 +1382,36 @@ async def companion_call_turn(payload: CompanionCallTurnRequest):
         selected_reasoning,
     )
 
+    speech_stream = None
+    if config.get("voice_enabled", True) and companion_service.supports_call_speech_stream(selected_model, config=config):
+        speech_stream = call_speech_stream.create(turn, selected_model, runtime_config=config)
+
+    async def queue_voice(piece: str, cumulative: str) -> None:
+        if speech_stream is None:
+            return
+        # Keep the audible preview for echo rejection if the user interrupts
+        # before the complete model result is ready; this does not persist it.
+        call_session_service.manager.update_turn(turn, "", reply=cumulative)
+        if speech_stream.append(piece):
+            pet_event_service.publish("speak", {
+                "response_id": turn.response_id,
+                "request_id": turn.response_id,
+                "call_session_id": turn.call_session_id,
+                "speech_stream": True,
+                "priority": pet_event_service.speech_priority("desktop_pet_call"),
+                "interruptible": True,
+                "text": piece,
+                "source": "desktop_pet_call",
+                "model_id": selected_model,
+                "should_speak": True,
+            })
+
+    def abort_voice(reason: str) -> None:
+        if speech_stream is not None:
+            speech_stream.abort(reason)
+            if speech_stream.announced:
+                pet_event_service.publish("speech_interrupt", {"response_id": turn.response_id, "reason": reason})
+
     model_started = time.monotonic()
     try:
         result = await chat_with_ai(
@@ -1360,12 +1428,21 @@ async def companion_call_turn(payload: CompanionCallTurnRequest):
             request_id=turn.response_id,
             persist=False,
             agent_tools_enabled=agent_tools_enabled,
+            **({"on_reply_delta": queue_voice} if speech_stream is not None else {}),
         )
-    except ChatRunCancelledError as exc:
+        if speech_stream is not None and not speech_stream.sentences:
+            await queue_voice(result.reply, result.reply)
+    except asyncio.CancelledError:
+        abort_voice("电话回复已取消")
+        raise
+    except (ChatRunCancelledError, call_session_service.CallSessionConflict) as exc:
+        abort_voice("电话回复已取消")
         raise HTTPException(status_code=409, detail=f"电话会话已取消：{exc}") from exc
     except ValueError as exc:
+        abort_voice(str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        abort_voice("电话回复生成失败")
         _record_chat_route_failure(
             route,
             source="desktop_pet_call",
@@ -1376,24 +1453,36 @@ async def companion_call_turn(payload: CompanionCallTurnRequest):
         )
         raise HTTPException(status_code=502, detail=f"Mio 暂时没有回复：{exc}") from exc
     model_ms = (time.monotonic() - model_started) * 1000
+    def persist_turn():
+        # Cancellation and persistence have one boundary: a failed/disconnected
+        # early audio request cannot become a successful chat history entry.
+        with speech_stream.changed if speech_stream is not None else nullcontext():
+            if speech_stream is not None and speech_stream.cancelled.is_set():
+                raise call_session_service.CallSessionConflict("电话语音已取消，回复未提交。")
+            return persist_generated_chat_result(
+                transcript, result, conversation_id=DESKTOP_PET_CONVERSATION_ID,
+                source="desktop_pet_call", voice_reply_requested=True,
+            )
     try:
         call_session_service.manager.update_turn(turn, "committing", reply=result.reply)
         call_session_service.manager.commit_if_current(
             turn,
-            lambda: persist_generated_chat_result(
-                transcript,
-                result,
-                conversation_id=DESKTOP_PET_CONVERSATION_ID,
-                source="desktop_pet_call",
-                voice_reply_requested=True,
-            ),
+            persist_turn,
         )
     except call_session_service.CallSessionConflict as exc:
-        abandon_deferred_final_response(
-            str(getattr(result, "agent_run_id", "") or ""),
-            error="电话会话已结束，暂存回复未提交。",
-        )
+        abort_voice("电话轮次已失效")
+        agent_run_id = str(getattr(result, "agent_run_id", "") or "")
+        if agent_run_id:
+            abandon_deferred_final_response(
+                agent_run_id,
+                error="电话会话已结束，暂存回复未提交。",
+            )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BaseException:
+        abort_voice("电话回复提交失败")
+        raise
+    if speech_stream is not None:
+        speech_stream.finish()
     _record_chat_route_success(
         route,
         source="desktop_pet_call",
@@ -1402,25 +1491,28 @@ async def companion_call_turn(payload: CompanionCallTurnRequest):
         selected_reasoning_level=selected_reasoning,
         result=result,
     )
+    timings = {
+        "asr_ms": round(asr_ms, 1),
+        "model_ms": round(model_ms, 1),
+        "model_first_token_ms": result.first_token_latency_ms,
+        "server_total_ms": round((time.monotonic() - request_started) * 1000, 1),
+    }
+    call_session_service.manager.record_timings(turn, timings)
     return {
         "active": True,
         "heard": True,
         "call_session_id": turn.call_session_id,
         "turn_id": turn.turn_id,
         "response_id": turn.response_id,
-        "voice_state": "awaiting_voice",
+        "voice_state": call_session_service.manager.status().get("stage", "awaiting_voice"),
+        "speech_stream": bool(speech_stream and speech_stream.announced),
         "transcript": transcript,
         "reply": result.reply,
         "replies": result.replies,
         "request_id": result.request_id,
         "model_id": result.model_id,
         "reasoning_level": result.reasoning_level,
-        "timings": {
-            "asr_ms": round(asr_ms, 1),
-            "model_ms": round(model_ms, 1),
-            "model_first_token_ms": result.first_token_latency_ms,
-            "server_total_ms": round((time.monotonic() - request_started) * 1000, 1),
-        },
+        "timings": timings,
     }
 
 
@@ -1447,8 +1539,12 @@ async def companion_chat_history(limit: int = Query(default=120, ge=1, le=500)):
     }
 
 
+class VoiceTestRequest(BaseModel):
+    text: str = Field(default="", max_length=600)
+
+
 @router.post("/voice/test")
-async def companion_voice_test():
+async def companion_voice_test(payload: VoiceTestRequest | None = None):
     config = await asyncio.to_thread(companion_service.load_config)
     profile_id = str(config.get("default_voice_profile_id") or "mio")
     profile = (config.get("voice_profiles") or {}).get(profile_id) or {}
@@ -1459,19 +1555,22 @@ async def companion_voice_test():
         if language == "ja"
         else f"你好，我是{profile_name}。这样听得清楚吗？"
     )
+    if payload is not None and payload.text.strip():
+        test_text = payload.text.strip()
     try:
         spoken = await asyncio.to_thread(
             companion_service.speak_text,
             test_text,
             wait=True,
             language=language,
+            allow_realtime_bridge=False,
         )
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"语音测试失败：{exc}") from exc
     if not spoken:
         error = str(companion_service.voice_runtime_status().get("last_error") or "没有完成播放")
         raise HTTPException(status_code=500, detail=f"语音测试失败：{error}")
-    return {"spoken": spoken}
+    return {"spoken": spoken, "engine": config.get("voice_engine", "gpt_sovits")}
 
 
 @router.post("/voice/reference")
@@ -1496,6 +1595,49 @@ async def companion_voice_reference(payload: VoiceReferenceRequest):
 
 class VoiceProfileExportRequest(BaseModel):
     profile_id: str = Field(default="", max_length=80)
+
+
+@router.post("/voice/profiles/{profile_id}/weights/{kind}")
+async def companion_voice_weight_import(profile_id: str, kind: str, request: Request,
+                                        filename: str = Query(..., min_length=1, max_length=200)):
+    from ..voice_weight_import import WeightTooLarge, WeightUpload
+
+    async def complete_io(action, *args, **kwargs):
+        # A cancelled HTTP task cannot interrupt a file write running in a thread.
+        # Finish that bounded operation before closing or removing its owned file.
+        pending = asyncio.create_task(asyncio.to_thread(action, *args, **kwargs))
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            value = await pending
+            if action is WeightUpload:
+                await asyncio.to_thread(value.close)
+            raise
+
+    upload = None
+    try:
+        if request.headers.get("content-type", "").split(";", 1)[0].strip() != "application/octet-stream":
+            raise ValueError("请以文件流上传 GPT 或 SoVITS 权重。")
+        length = request.headers.get("content-length")
+        upload = await complete_io(
+            WeightUpload, profile_id=profile_id, kind=kind, filename=filename,
+            root=settings.companion_dir, load_config=companion_service.load_config,
+            save_config=companion_service.save_config,
+            content_length=int(length) if length is not None else None,
+        )
+        async for chunk in request.stream():
+            await complete_io(upload.write, chunk)
+        imported = await complete_io(upload.commit)
+    except WeightTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        if upload is not None:
+            await asyncio.to_thread(upload.close)
+    result = await asyncio.to_thread(_status_payload)
+    result["weight_import"] = imported
+    return result
 
 
 @router.post("/voice/profiles/export")
@@ -1591,19 +1733,83 @@ async def companion_voice_audio(payload: SpeechRequest):
 
 @router.post("/voice/stream")
 async def companion_voice_stream(payload: SpeechRequest):
+    if payload.speech_stream:
+        try:
+            stream = call_speech_stream.get(payload.response_id, payload.call_session_id)
+            if not companion_service.supports_call_speech_stream(stream.model_id, config=stream.runtime_config, language=payload.language):
+                stream.abort("通话音色已变化")
+                raise call_session_service.CallSessionConflict("通话音色已变化，请重新开始语音回复。")
+            stream.claim()
+        except call_session_service.CallSessionConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        def synthesize(text, cancelled):
+            return companion_service.iter_speech_wav_stream(
+                text, context=payload.context, emotion=payload.emotion,
+                model_id=stream.model_id, language=payload.language,
+                cancel_event=cancelled,
+                config_snapshot=stream.runtime_config,
+            )
+
+        return StreamingResponse(
+            call_speech_stream.audio_chunks(stream, synthesize),
+            media_type="audio/wav",
+            headers={"Cache-Control": "no-store", "X-Mio-Streaming": "1"},
+        )
     emotion = payload.emotion or str(
         companion_service.speech_emotion_info(payload.text, payload.context)["id"]
     )
     if not companion_service.clean_speech_text(payload.text):
         raise HTTPException(status_code=400, detail="这条消息没有可朗读的正文。")
-    return StreamingResponse(
-        companion_service.iter_speech_wav_stream(
+    # The message button now consumes this response incrementally. A disconnected
+    # reader must also cancel its owned native inference, including before PCM.
+    cancelled = threading.Event()
+    native_stream = await asyncio.to_thread(
+        companion_service.supports_call_speech_stream, payload.model_id, language=payload.language,
+    )
+    iterator = companion_service.iter_speech_wav_stream(
             payload.text,
             context=payload.context,
             emotion=emotion,
             model_id=payload.model_id,
             language=payload.language,
-        ),
+            cancel_event=cancelled if native_stream else None,
+        )
+
+    def pull():
+        try:
+            chunk = next(iterator, None)
+            if cancelled.is_set():
+                close = getattr(iterator, "close", None)
+                if close:
+                    close()
+                return None
+            return chunk
+        except InterruptedError:
+            if cancelled.is_set():
+                return None
+            raise
+
+    async def chunks():
+        try:
+            while not cancelled.is_set():
+                chunk = await asyncio.to_thread(pull)
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            cancelled.set()
+            close = getattr(iterator, "close", None)
+            if close:
+                try:
+                    close()
+                except ValueError:
+                    # A cancelled to_thread pull still owns the generator until
+                    # its HTTP cancellation watcher returns. It closes it above.
+                    pass
+
+    return StreamingResponse(
+        chunks(),
         media_type="audio/wav",
         headers={
             "Cache-Control": "no-store",
@@ -1611,6 +1817,92 @@ async def companion_voice_stream(payload: SpeechRequest):
             "X-Mio-Emotion": emotion,
             "X-Mio-Streaming": "1",
         },
+    )
+
+
+@router.post("/local-vision/describe/audio")
+async def companion_local_vision_description_audio(payload: LocalVisionDescriptionRequest, request: Request):
+    """Describe an explicitly supplied image locally; never capture a screen here."""
+    from .. import local_voice_engines, aniflive_tts_service
+    from ..screen_frame_processor import process_frame
+
+    if not payload.question.strip():
+        raise HTTPException(status_code=400, detail="请填写描述问题。")
+    config = await asyncio.to_thread(companion_service.load_config)
+    if config.get("voice_engine") != "aniflive":
+        raise HTTPException(status_code=409, detail="请先在语音设置中选择AnifLive。")
+    try:
+        attachment = await asyncio.to_thread(image_attachment_from_data_url, payload.image_data_url, "local-description")
+        frame = await asyncio.to_thread(process_frame, attachment.content, max_width=1536, max_height=864, jpeg_quality=88)
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=f"图片无效：{exc}") from exc
+
+    cancelled = threading.Event()
+    async def disconnected():
+        while not cancelled.is_set():
+            if await request.is_disconnected():
+                cancelled.set()
+                return
+            await asyncio.sleep(.05)
+
+    watcher = asyncio.create_task(disconnected())
+    audio = None
+    try:
+        # This uses the normal manager: it validates the selected installation,
+        # never adopts an external service, and retains a shared owned runtime.
+        await asyncio.to_thread(companion_service.start_voice_service)
+        deadline = time.monotonic() + 185
+        while True:
+            if cancelled.is_set():
+                raise HTTPException(status_code=499, detail="图片描述请求已取消。")
+            state = await asyncio.to_thread(local_voice_engines.manager.status, "aniflive", config)
+            if state.get("managed_last_error"):
+                raise OSError(state["managed_last_error"])
+            if not state.get("managed_available"):
+                raise OSError(state.get("managed_install_error") or "AnifLive尚未安装。")
+            if state.get("managed_running") and not state.get("service_loading"):
+                health = await asyncio.to_thread(aniflive_tts_service.runtime_status, config)
+                if health.get("service_running"):
+                    break
+            if time.monotonic() >= deadline:
+                raise TimeoutError("等待AnifLive模型就绪超时。")
+            await asyncio.sleep(.1)
+        current = await asyncio.to_thread(companion_service.load_config)
+        if current.get("voice_engine") != "aniflive" or current.get("aniflive_url") != config.get("aniflive_url"):
+            raise HTTPException(status_code=409, detail="语音引擎已变化，请重新发起图片描述。")
+        audio = local_vision_speech_stream.iter_description_pcm(
+            prompt=payload.question, image=frame.content, config=config,
+            language=payload.language, cancel_event=cancelled,
+        )
+        # Preflight the first real PCM chunk so initial failures return an HTTP
+        # error; subsequent failures abort the stream instead of ending cleanly.
+        first = await anext(audio)
+    except BaseException as exc:
+        cancelled.set()
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+        if audio is not None:
+            await audio.aclose()
+        if isinstance(exc, (ValueError, RuntimeError, OSError)):
+            raise HTTPException(status_code=503, detail=f"本地图片描述语音失败：{exc}") from exc
+        raise
+
+    async def chunks():
+        try:
+            yield first
+            async for pcm in audio:
+                yield pcm
+        finally:
+            cancelled.set()
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+            await audio.aclose()
+
+    return StreamingResponse(
+        chunks(), media_type="application/octet-stream",
+        headers={"Cache-Control": "no-store", "X-TTS-Sample-Rate": "32000",
+                 "X-TTS-Channels": "1", "X-TTS-Sample-Format": "s16le",
+                 "X-Mio-Streaming": "1", "X-Mio-Experimental": "1"},
     )
 
 
@@ -1709,6 +2001,7 @@ async def companion_window_capture():
 
 @router.post("/game/start")
 async def companion_game_start(payload: WindowObservationRequest):
+    start_ticket = companion_runtime.begin_observation_start()
     try:
         await asyncio.to_thread(local_vision_service.unload_model)
         status = companion_service.game_observer.status()
@@ -1717,7 +2010,10 @@ async def companion_game_start(payload: WindowObservationRequest):
             interval_ms=payload.interval_ms,
             capture_only=payload.capture_only,
             hwnd=int(status.get("hwnd") or 0),
+            start_ticket=start_ticket,
         )
+    except companion_runtime.ObservationStartCancelled as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         screen_observation_service.set_capture_only(False)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1725,6 +2021,7 @@ async def companion_game_start(payload: WindowObservationRequest):
 
 @router.post("/window/start")
 async def companion_window_start(payload: WindowObservationRequest):
+    start_ticket = companion_runtime.begin_observation_start()
     try:
         status = companion_service.window_observer.status()
         return await asyncio.to_thread(
@@ -1732,7 +2029,10 @@ async def companion_window_start(payload: WindowObservationRequest):
             interval_ms=payload.interval_ms,
             capture_only=payload.capture_only,
             hwnd=int(status.get("hwnd") or 0),
+            start_ticket=start_ticket,
         )
+    except companion_runtime.ObservationStartCancelled as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         screen_observation_service.set_capture_only(False)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1759,16 +2059,27 @@ async def companion_game_preview():
 
 @router.post("/game/analyze")
 async def companion_game_analyze():
+    ticket = companion_runtime.observation_ticket()
     status = companion_service.game_observer.status()
     if status.get("mode") != "window" or not status.get("hwnd"):
         raise HTTPException(status_code=400, detail="请先选择要观察的游戏窗口。")
     was_running = bool(status.get("running"))
     try:
+        with companion_runtime.observation_operation(ticket):
+            pass
         replied = await screen_observation_service.analyze_once(force=True)
+    except companion_runtime.ObservationStartCancelled as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     finally:
         if not was_running:
-            await asyncio.to_thread(companion_service.game_observer.stop)
-            await asyncio.to_thread(screen_observation_service.end_session)
+            def finish_analysis():
+                try:
+                    with companion_runtime.observation_operation(ticket):
+                        companion_service.game_observer.stop()
+                        screen_observation_service.end_session()
+                except companion_runtime.ObservationStartCancelled:
+                    pass  # A stop/new start owns the current observer state.
+            await asyncio.to_thread(finish_analysis)
     return {"replied": replied, "analysis": await asyncio.to_thread(screen_observation_service.status)}
 
 
@@ -1779,6 +2090,7 @@ async def companion_window_preview():
 
 @router.post("/screen/start")
 async def companion_screen_start(payload: ScreenObservationRequest):
+    start_ticket = companion_runtime.begin_observation_start()
     try:
         if not payload.capture_only:
             route = str(companion_service.load_config().get("screen_vision_route") or "local")
@@ -1791,7 +2103,10 @@ async def companion_screen_start(payload: ScreenObservationRequest):
             interval_ms=payload.interval_ms,
             capture_only=payload.capture_only,
             screen_scope=payload.scope,
+            start_ticket=start_ticket,
         )
+    except companion_runtime.ObservationStartCancelled as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError, RuntimeError, OSError) as exc:
         screen_observation_service.set_capture_only(False)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1807,6 +2122,8 @@ async def companion_screen_capture(payload: ScreenObservationRequest):
 
 @router.post("/screen/analyze")
 async def companion_screen_analyze(payload: ScreenObservationRequest):
+    ticket = companion_runtime.observation_ticket()
+    setup_started = False
     was_running = bool(companion_service.window_observer.status().get("running"))
     previous_capture_only = bool(
         (await asyncio.to_thread(screen_observation_service.status)).get("capture_only")
@@ -1820,17 +2137,33 @@ async def companion_screen_analyze(payload: ScreenObservationRequest):
                 await local_vision_service.ensure_ready()
             else:
                 await asyncio.to_thread(local_vision_service.unload_model)
-        await asyncio.to_thread(screen_observation_service.set_capture_only, payload.capture_only)
-        await asyncio.to_thread(companion_service.window_observer.select_screen, payload.scope)
+        def prepare_analysis():
+            nonlocal setup_started
+            with companion_runtime.observation_operation(ticket):
+                setup_started = True
+                screen_observation_service.set_capture_only(payload.capture_only)
+                companion_service.window_observer.select_screen(payload.scope)
+        await asyncio.to_thread(prepare_analysis)
+        with companion_runtime.observation_operation(ticket):
+            pass
         replied = await screen_observation_service.analyze_once(force=True)
+    except companion_runtime.ObservationStartCancelled as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError, RuntimeError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
-        if not was_running:
-            await asyncio.to_thread(companion_service.window_observer.stop)
-            await asyncio.to_thread(screen_observation_service.end_session)
-        else:
-            await asyncio.to_thread(screen_observation_service.set_capture_only, previous_capture_only)
+        if setup_started:
+            def finish_analysis():
+                try:
+                    with companion_runtime.observation_operation(ticket):
+                        if not was_running:
+                            companion_service.window_observer.stop()
+                            screen_observation_service.end_session()
+                        else:
+                            screen_observation_service.set_capture_only(previous_capture_only)
+                except companion_runtime.ObservationStartCancelled:
+                    pass  # Never restore old state after stop or a newer start.
+            await asyncio.to_thread(finish_analysis)
     return {"replied": replied, "analysis": await asyncio.to_thread(screen_observation_service.status)}
 
 

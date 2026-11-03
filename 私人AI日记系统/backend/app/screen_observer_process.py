@@ -35,6 +35,8 @@ class ScreenObserverProcess:
         self._desired_hwnd = 0
         self._desired_interval_ms = 1000
         self._desired_running = False
+        self._watch_mode = "single"
+        self._watch_pace = "normal"
         self._has_selection = False
         self._last_error = ""
         self._restart_count = 0
@@ -68,6 +70,9 @@ class ScreenObserverProcess:
             title = "已选择窗口" if self._desired_hwnd else ""
         return {
             "running": False,
+            "watch": {"mode": self._watch_mode, "pace": self._watch_pace,
+                      "gap_seconds": 0,
+                      "buffered_frames": 0, "selected_frames": 0, "skipped_frames": 0, "sheets": 0},
             "mode": self._desired_mode,
             "screen_scope": self._desired_scope,
             "hwnd": self._desired_hwnd or None,
@@ -198,6 +203,7 @@ class ScreenObserverProcess:
         return response.get("result")
 
     def _restore_state_locked(self) -> None:
+        self._send_locked("configure_watch", {"mode": self._watch_mode, "pace": self._watch_pace})
         if not self._has_selection:
             return
         try:
@@ -273,6 +279,17 @@ class ScreenObserverProcess:
                         raise RuntimeError(f"屏幕观察器不可用：{exc}") from exc
             raise RuntimeError("屏幕观察器不可用")
 
+    def configure_watch(self, mode: str = "single", pace: str = "normal") -> dict[str, Any]:
+        if mode not in {"single", "adaptive"} or pace not in {"calm", "normal", "dense"}:
+            raise ValueError("不支持的观察模式或节奏。")
+        with self._request_lock:
+            if self._process is not None and self._process.poll() is None:
+                result = dict(self._send_locked("configure_watch", {"mode": mode, "pace": pace}))
+            else:
+                result = {"mode": mode, "pace": pace, "buffered_frames": 0}
+            self._watch_mode, self._watch_pace = mode, pace
+            return result
+
     def list_windows(self) -> list[dict[str, Any]]:
         result = self._request("list_windows")
         return list(result or [])
@@ -341,8 +358,8 @@ class ScreenObserverProcess:
                 self._cached_preview = bytes(content)
             return self._cached_preview
 
-    def claim_analysis_frame(self, after_frame_id: int = 0) -> dict[str, Any] | None:
-        result = self._request("claim_analysis_frame", {"after_frame_id": int(after_frame_id)})
+    def claim_analysis_frame(self, after_frame_id: int = 0, *, force: bool = False) -> dict[str, Any] | None:
+        result = self._request("claim_analysis_frame", {"after_frame_id": int(after_frame_id), "force": bool(force)})
         if not result:
             return None
         return dict(result)
@@ -378,6 +395,8 @@ def _worker_result(observer: Any, command: str, payload: dict[str, Any]) -> Any:
         return observer.select(int(payload.get("hwnd") or 0))
     if command == "select_screen":
         return observer.select_screen(str(payload.get("scope") or "primary"))
+    if command == "configure_watch":
+        return observer.configure_watch(str(payload.get("mode") or "single"), str(payload.get("pace") or "normal"))
     if command == "capture":
         return observer.capture()
     if command == "start":
@@ -390,7 +409,9 @@ def _worker_result(observer: Any, command: str, payload: dict[str, Any]) -> Any:
         content = observer.take_preview()
         return {"content": content} if content else None
     if command == "claim_analysis_frame":
-        frame = observer.claim_analysis_frame(int(payload.get("after_frame_id") or 0))
+        after_frame_id = int(payload.get("after_frame_id") or 0)
+        frame = (observer.claim_analysis_frame(after_frame_id, force=True)
+                 if payload.get("force") else observer.claim_analysis_frame(after_frame_id))
         if frame is None:
             return None
         return dict(frame)

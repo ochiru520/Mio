@@ -214,6 +214,7 @@ def decide_behavior(
     minimum_priority: float,
     event_is_new: bool = True,
     force: bool = False,
+    playback_managed: bool = False,
 ) -> BehaviorDecision:
     event_type = observation.event_type
     repeat_count = int((state.get("event_counts") or {}).get(event_type) or 1)
@@ -265,7 +266,7 @@ def decide_behavior(
         return BehaviorDecision(False, priority, emotion, "相同事件刚刚已经回应过", repeat_count)
 
     required_cooldown = max(3.0, cooldown_seconds * cooldown_multiplier)
-    if seconds_since_last_speech < required_cooldown and not repeated_milestone:
+    if not playback_managed and seconds_since_last_speech < required_cooldown and not repeated_milestone:
         return BehaviorDecision(False, priority, emotion, "仍在回应冷却时间内", repeat_count)
     reason = f"{event_type} 事件达到回应阈值"
     if repeated_milestone:
